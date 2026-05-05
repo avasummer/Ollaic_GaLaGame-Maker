@@ -4,7 +4,7 @@ import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import {
   Sparkles, Save, Play, Settings, Image, ArrowLeft, Send,
-  Upload, Download, FileText, FolderOpen, FilePlus, Check, Loader2, SlidersHorizontal,
+  Upload, Download, FileText, FolderOpen, FilePlus, Check, Loader2, SlidersHorizontal, Users,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { NodePanel } from './NodePanel';
@@ -13,6 +13,7 @@ import { DetailPanel } from './DetailPanel';
 import { AiSettingsDialog } from './AiSettingsDialog';
 import { PreviewOverlay } from './PreviewOverlay';
 import { AppSettingsDialog } from './AppSettingsDialog';
+import { CharacterPanel } from './CharacterPanel';
 import type { WebGalNode, WebGalCommandType } from '../lib/webgal-types';
 import {
   parseScene, serializeScene, saveScene, loadScene,
@@ -20,6 +21,7 @@ import {
   type ProjectInfo,
 } from '../lib/webgal-ipc';
 import { aiChatStream, type AiChatMessage } from '../lib/ai-ipc';
+import { listCharacterNames } from '../lib/character-ipc';
 
 interface AiMessage {
   id: string;
@@ -73,6 +75,8 @@ export function StoryEditor() {
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
+  const [rightTab, setRightTab] = useState<'ai' | 'characters'>('ai');
+  const [characterNames, setCharacterNames] = useState<string[]>([]);
   const aiCancelRef = useRef<(() => void) | null>(null);
   const aiStreamingIdRef = useRef<string | null>(null);
   const aiMessagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -112,6 +116,14 @@ export function StoryEditor() {
           // Stored path no longer valid — fall back to demo
           const parsed = await parseScene(DEMO_SCRIPT);
           setNodes(parsed);
+        }
+
+        // Load character names for autocomplete
+        try {
+          const refs = await listCharacterNames(storedPath);
+          setCharacterNames(refs.map(r => r.name));
+        } catch {
+          setCharacterNames([]);
         }
       } else {
         // No project path — just load demo script
@@ -287,6 +299,14 @@ export function StoryEditor() {
         // empty scene
         setNodes([]);
         setScriptSource('');
+      }
+
+      // Load character names for autocomplete
+      try {
+        const refs = await listCharacterNames(selected);
+        setCharacterNames(refs.map(r => r.name));
+      } catch {
+        setCharacterNames([]);
       }
     } catch (e) {
       console.error('Open project failed:', e);
@@ -573,6 +593,19 @@ export function StoryEditor() {
                 <Image className="w-3.5 h-3.5" />
                 <span>素材库</span>
               </button>
+              {projectPath && (
+                <button
+                  onClick={() => setRightTab(prev => prev === 'characters' ? 'ai' : 'characters')}
+                  className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 text-sm ${
+                    rightTab === 'characters'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-secondary hover:bg-secondary/70'
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>人物</span>
+                </button>
+              )}
               <button
                 onClick={() => setAiSettingsOpen(true)}
                 className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
@@ -644,6 +677,7 @@ export function StoryEditor() {
                 onUpdateNode={(updates) => updateNode(selectedNode.id, updates)}
                 onDeleteNode={() => deleteNode(selectedNode.id)}
                 onClose={() => setSelectedNode(null)}
+                characterNames={characterNames}
               />
             )}
           </div>
@@ -679,8 +713,47 @@ export function StoryEditor() {
             />
           )}
 
-          {/* Right Panel - AI Chat */}
+          {/* Right Panel - Tabbed: AI Chat / Characters */}
           <div className="w-80 border-l border-border bg-card/30 backdrop-blur-sm flex flex-col">
+            {/* Tabs */}
+            <div className="flex border-b border-border">
+              <button
+                onClick={() => setRightTab('ai')}
+                className={`flex-1 py-2.5 text-xs font-medium transition-all border-b-2 ${
+                  rightTab === 'ai'
+                    ? 'border-primary text-primary bg-primary/5'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                }`}
+                style={{ fontFamily: 'var(--font-mono)' }}
+              >
+                <span className="flex items-center justify-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  AI 助手
+                </span>
+              </button>
+              <button
+                onClick={() => setRightTab('characters')}
+                className={`flex-1 py-2.5 text-xs font-medium transition-all border-b-2 ${
+                  rightTab === 'characters'
+                    ? 'border-primary text-primary bg-primary/5'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                }`}
+                style={{ fontFamily: 'var(--font-mono)' }}
+              >
+                <span className="flex items-center justify-center gap-1.5">
+                  <Users className="w-3.5 h-3.5" />
+                  人物
+                </span>
+              </button>
+            </div>
+
+            {rightTab === 'characters' && projectPath ? (
+              <CharacterPanel
+                projectPath={projectPath}
+                onClose={() => setRightTab('ai')}
+              />
+            ) : (
+              <>
             <div className="p-4 border-b border-border flex items-center gap-3">
               <div className="p-2 rounded-full bg-primary/20">
                 <Sparkles className="w-4 h-4 text-primary" />
@@ -782,6 +855,8 @@ export function StoryEditor() {
                 </button>
               )}
             </div>
+              </>
+            )}
           </div>
         </div>
 

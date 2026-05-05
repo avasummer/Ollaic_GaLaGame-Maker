@@ -2,6 +2,7 @@
 
 mod ai;
 mod assets;
+mod characters;
 mod webgal;
 
 fn main() {
@@ -31,6 +32,14 @@ fn main() {
             assets::commands::import_asset,
             assets::commands::delete_asset,
             assets::commands::rename_asset,
+            // Characters
+            characters::commands::list_characters,
+            characters::commands::get_character,
+            characters::commands::create_character,
+            characters::commands::update_character,
+            characters::commands::delete_character,
+            characters::commands::list_character_names,
+            characters::commands::save_characters,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

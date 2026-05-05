@@ -7,6 +7,7 @@ interface DetailPanelProps {
   onUpdateNode: (updates: Partial<WebGalNode>) => void;
   onDeleteNode: () => void;
   onClose: () => void;
+  characterNames?: string[];
 }
 
 const typeOptions: { value: WebGalCommandType; label: string }[] = [
@@ -38,7 +39,7 @@ const typeOptions: { value: WebGalCommandType; label: string }[] = [
 const inputClass = 'w-full px-3 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm';
 const labelClass = 'block text-xs uppercase tracking-widest text-muted-foreground mb-1.5';
 
-export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: DetailPanelProps) {
+export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose, characterNames }: DetailPanelProps) {
   return (
     <div className="w-80 border-r border-border bg-card/30 backdrop-blur-sm flex flex-col overflow-hidden">
       {/* Header */}
@@ -145,8 +146,16 @@ function renderTypeFields(
               onChange={(e) => onUpdate({ character: e.target.value })}
               className={inputClass}
               placeholder="留空则继承上一句角色"
+              list="character-suggestions"
               aria-label="角色名"
             />
+            {characterNames && characterNames.length > 0 && (
+              <datalist id="character-suggestions">
+                {characterNames.map(name => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+            )}
           </div>
           <div>
             <div className="flex items-center justify-between mb-1.5">
