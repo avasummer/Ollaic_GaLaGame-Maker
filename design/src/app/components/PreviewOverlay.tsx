@@ -452,6 +452,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
               key={idx}
               onClick={(e) => { e.stopPropagation(); handleChoice(c); }}
               className="px-8 py-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 text-white hover:bg-white/20 transition-all hover:scale-105 min-w-[280px] text-lg"
+              aria-label={`选择: ${c.text}`}
             >
               {c.text}
             </button>
@@ -487,6 +488,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
           <button
             onClick={onClose}
             className="px-6 py-2 rounded-lg bg-white/10 border border-white/20 text-white/80 hover:bg-white/20 transition-all"
+            aria-label="返回编辑器"
           >
             返回编辑器
           </button>
@@ -497,6 +499,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       <button
         onClick={onClose}
         className="absolute top-4 right-4 p-2 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 text-white/60 hover:text-white hover:bg-black/60 transition-colors z-30"
+        aria-label="关闭preview"
       >
         <X className="w-5 h-5" />
       </button>

@@ -85,6 +85,7 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
           <button
             onClick={onClose}
             className="p-1.5 rounded-md hover:bg-secondary/50 transition-colors"
+            aria-label="关闭"
           >
             <X className="w-4 h-4" />
           </button>
@@ -103,6 +104,7 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
               <button
                 onClick={handlePickDir}
                 className="px-3 py-2 rounded-md bg-secondary hover:bg-secondary/70 transition-colors border border-border"
+                aria-label="选择目录"
               >
                 <FolderOpen className="w-4 h-4" />
               </button>
@@ -121,6 +123,7 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
               value={settings.autoSaveInterval}
               onChange={(e) => update({ autoSaveInterval: Number(e.target.value) })}
               className="w-full px-3 py-2 bg-input-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              aria-label="自动保存间隔"
             >
               <option value={0}>禁用自动保存</option>
               <option value={15}>15 秒</option>
@@ -140,6 +143,7 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
               onChange={(e) => update({ language: e.target.value as 'zh-CN' | 'en' })}
               disabled
               className="w-full px-3 py-2 bg-input-background border border-border rounded-md text-sm focus:outline-none opacity-50 cursor-not-allowed"
+              aria-label="界面语言"
             >
               <option value="zh-CN">简体中文</option>
               <option value="en">English</option>
@@ -156,6 +160,7 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
               value={settings.theme}
               disabled
               className="w-full px-3 py-2 bg-input-background border border-border rounded-md text-sm focus:outline-none opacity-50 cursor-not-allowed"
+              aria-label="主题"
             >
               <option value="dark">深邃暖调（当前）</option>
               <option value="light">浅色模式</option>

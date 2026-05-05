@@ -51,7 +51,7 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: Detai
             {commandLabels[node.type]}
           </div>
         </div>
-        <button onClick={onClose} className="p-1.5 rounded-md hover:bg-secondary/50 transition-colors">
+        <button onClick={onClose} className="p-1.5 rounded-md hover:bg-secondary/50 transition-colors" aria-label="关闭">
           <X className="w-4 h-4 text-muted-foreground" />
         </button>
       </div>
@@ -65,6 +65,7 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: Detai
             value={node.type}
             onChange={(e) => onUpdateNode({ type: e.target.value as WebGalCommandType })}
             className={inputClass}
+            aria-label="指令类型"
           >
             {typeOptions.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -98,6 +99,7 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: Detai
               className={inputClass}
               placeholder="例: score>10"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label="条件"
             />
           </div>
         </div>
@@ -118,6 +120,7 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: Detai
         <button
           onClick={onDeleteNode}
           className="w-full px-4 py-2 bg-destructive/10 text-destructive rounded-md hover:bg-destructive/20 transition-colors text-sm"
+          aria-label="删除指令"
         >
           删除指令
         </button>
@@ -142,12 +145,13 @@ function renderTypeFields(
               onChange={(e) => onUpdate({ character: e.target.value })}
               className={inputClass}
               placeholder="留空则继承上一句角色"
+              aria-label="角色名"
             />
           </div>
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className={labelClass} style={{ fontFamily: 'var(--font-mono)', marginBottom: 0 }}>对话内容</label>
-              <button className="p-1 hover:bg-primary/10 rounded transition-colors group">
+              <button className="p-1 hover:bg-primary/10 rounded transition-colors group" aria-label="AI 生成对话">
                 <Sparkles className="w-3 h-3 text-muted-foreground group-hover:text-primary transition-colors" />
               </button>
             </div>
@@ -157,6 +161,7 @@ function renderTypeFields(
               className={`${inputClass} h-24 resize-none`}
               placeholder="输入对话内容..."
               style={{ fontFamily: 'var(--font-body)' }}
+              aria-label="对话内容"
             />
           </div>
           <div>
@@ -168,6 +173,7 @@ function renderTypeFields(
               className={inputClass}
               placeholder="例: v1.wav"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label="语音文件"
             />
           </div>
         </>
@@ -183,6 +189,7 @@ function renderTypeFields(
             className={`${inputClass} h-24 resize-none`}
             placeholder="输入旁白文本..."
             style={{ fontFamily: 'var(--font-body)' }}
+            aria-label="旁白内容"
           />
         </div>
       );
@@ -199,6 +206,7 @@ function renderTypeFields(
             className={`${inputClass} h-28 resize-none`}
             placeholder="第一行&#10;第二行&#10;第三行"
             style={{ fontFamily: 'var(--font-body)' }}
+            aria-label="黑屏文字"
           />
         </div>
       );
@@ -217,6 +225,7 @@ function renderTypeFields(
             className={inputClass}
             placeholder="例: bg.webp 或 none"
             style={{ fontFamily: 'var(--font-mono)' }}
+            aria-label="背景图片"
           />
           <p className="text-[10px] text-muted-foreground mt-1">放在 game/background/ 目录下</p>
         </div>
@@ -234,6 +243,7 @@ function renderTypeFields(
               className={inputClass}
               placeholder="例: stand.webp 或 none"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label="立绘文件"
             />
             <p className="text-[10px] text-muted-foreground mt-1">放在 game/figure/ 目录下</p>
           </div>
@@ -243,6 +253,7 @@ function renderTypeFields(
               value={node.figurePosition || 'center'}
               onChange={(e) => onUpdate({ figurePosition: e.target.value as 'left' | 'center' | 'right' })}
               className={inputClass}
+              aria-label="立绘位置"
             >
               <option value="left">左侧</option>
               <option value="center">居中</option>
@@ -258,6 +269,7 @@ function renderTypeFields(
               className={inputClass}
               placeholder="可选，用于精确定位"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label="自定义 ID"
             />
           </div>
         </>
@@ -274,6 +286,7 @@ function renderTypeFields(
             className={inputClass}
             placeholder="例: miniavatar.webp 或 none"
             style={{ fontFamily: 'var(--font-mono)' }}
+            aria-label="小头像文件"
           />
         </div>
       );
@@ -292,6 +305,7 @@ function renderTypeFields(
             className={inputClass}
             placeholder="例: Chapter-2.txt"
             style={{ fontFamily: 'var(--font-mono)' }}
+            aria-label="目标场景文件"
           />
           <p className="text-[10px] text-muted-foreground mt-1">
             {node.type === 'callScene' ? 'callScene 执行完后会返回当前场景' : 'changeScene 会永久切换'}
@@ -320,6 +334,7 @@ function renderTypeFields(
               className={inputClass}
               placeholder={node.type === 'bgm' ? '例: bgm.mp3 或 none' : '例: effect.mp3'}
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label={node.type === 'bgm' ? '音乐文件' : node.type === 'playEffect' ? '音效文件' : '视频文件'}
             />
           </div>
           <div>
@@ -332,6 +347,7 @@ function renderTypeFields(
               onChange={(e) => onUpdate({ volume: e.target.value ? parseInt(e.target.value, 10) : undefined })}
               className={inputClass}
               placeholder="默认 100"
+              aria-label="音量"
             />
           </div>
         </>
@@ -351,6 +367,7 @@ function renderTypeFields(
             className={inputClass}
             placeholder="例: branch_a"
             style={{ fontFamily: 'var(--font-mono)' }}
+            aria-label="标签名称"
           />
         </div>
       );
@@ -367,6 +384,7 @@ function renderTypeFields(
               className={inputClass}
               placeholder="例: score"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label="变量名"
             />
           </div>
           <div>
@@ -378,6 +396,7 @@ function renderTypeFields(
               className={inputClass}
               placeholder="例: 1, true, 文本"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label="值"
             />
           </div>
         </>
@@ -395,6 +414,7 @@ function renderTypeFields(
               className={inputClass}
               placeholder="例: name"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label="存入变量"
             />
           </div>
           <div>
@@ -405,6 +425,7 @@ function renderTypeFields(
               onChange={(e) => onUpdate({ inputTitle: e.target.value })}
               className={inputClass}
               placeholder="例: 请输入你的名字"
+              aria-label="提示文字"
             />
           </div>
           <div>
@@ -415,6 +436,7 @@ function renderTypeFields(
               onChange={(e) => onUpdate({ inputButton: e.target.value })}
               className={inputClass}
               placeholder="例: 确认"
+              aria-label="按钮文字"
             />
           </div>
         </>
@@ -428,6 +450,7 @@ function renderTypeFields(
             value={node.content || 'hide'}
             onChange={(e) => onUpdate({ content: e.target.value })}
             className={inputClass}
+            aria-label="操作"
           >
             <option value="hide">隐藏</option>
             <option value="show">显示</option>
@@ -447,6 +470,7 @@ function renderTypeFields(
               className={inputClass}
               placeholder="例: enter-from-left"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label="动画名称"
             />
           </div>
           <div>
@@ -458,6 +482,7 @@ function renderTypeFields(
               className={inputClass}
               placeholder="例: fig-left"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label="动画目标"
             />
           </div>
         </>
@@ -473,6 +498,7 @@ function renderTypeFields(
             className={`${inputClass} h-24 resize-none`}
             placeholder='例: {"position":{"x":100,"y":0}}'
             style={{ fontFamily: 'var(--font-mono)' }}
+            aria-label="变换 JSON"
           />
         </div>
       );
@@ -491,6 +517,7 @@ function renderTypeFields(
               onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
               className={inputClass}
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label={node.type === 'unlockCg' ? 'CG 文件' : 'BGM 文件'}
             />
           </div>
           <div>
@@ -501,6 +528,7 @@ function renderTypeFields(
               onChange={(e) => onUpdate({ displayName: e.target.value || undefined })}
               className={inputClass}
               placeholder="在鉴赏中显示的名称"
+              aria-label="显示名称"
             />
           </div>
         </>
@@ -515,6 +543,7 @@ function renderTypeFields(
             onChange={(e) => onUpdate({ content: e.target.value })}
             className={`${inputClass} h-24 resize-none`}
             placeholder="写下备注..."
+            aria-label="注释内容"
           />
         </div>
       );
@@ -527,6 +556,7 @@ function renderTypeFields(
             value={node.content}
             onChange={(e) => onUpdate({ content: e.target.value })}
             className={`${inputClass} h-24 resize-none`}
+            aria-label="内容"
           />
         </div>
       );
@@ -558,6 +588,7 @@ function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Part
         <button
           onClick={add}
           className="px-2 py-0.5 text-xs bg-primary/10 hover:bg-primary/20 text-primary rounded transition-colors flex items-center gap-1"
+          aria-label="添加选项"
         >
           <Plus className="w-3 h-3" />
           添加
@@ -574,6 +605,7 @@ function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Part
               <button
                 onClick={() => remove(idx)}
                 className="p-0.5 hover:bg-destructive/10 rounded transition-colors group"
+                aria-label={`Delete option ${idx + 1}`}
               >
                 <Trash2 className="w-3 h-3 text-muted-foreground group-hover:text-destructive transition-colors" />
               </button>
@@ -584,6 +616,7 @@ function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Part
               onChange={(e) => update(idx, 'text', e.target.value)}
               className="w-full px-2 py-1 mb-1.5 bg-background border border-border/50 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
               placeholder="选项文本"
+              aria-label={`Option ${idx + 1} text`}
             />
             <input
               type="text"
@@ -592,6 +625,7 @@ function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Part
               className="w-full px-2 py-1 bg-background border border-border/50 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
               placeholder="目标场景文件 (例: scene2.txt)"
               style={{ fontFamily: 'var(--font-mono)' }}
+              aria-label={`Option ${idx + 1} target scene`}
             />
           </div>
         ))}

@@ -247,11 +247,13 @@ export function ProjectHome() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 bg-secondary/30 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
+                aria-label="搜索项目"
               />
             </div>
             <button
               onClick={handleOpenProject}
               className="px-5 py-2.5 rounded-lg bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 font-medium border border-border"
+              aria-label="打开现有 WebGAL 项目"
             >
               <FolderOpen className="w-5 h-5" />
               <span>打开项目</span>
@@ -265,6 +267,7 @@ export function ProjectHome() {
                 setCreateError('');
               }}
               className="px-6 py-2.5 rounded-lg bg-primary text-primary-foreground flex items-center gap-2 hover:opacity-90 transition-all hover:shadow-[0_0_20px_rgba(212,165,116,0.4)] font-medium"
+              aria-label="创建新项目"
             >
               <Plus className="w-5 h-5" />
               <span>创建新项目</span>
@@ -280,6 +283,7 @@ export function ProjectHome() {
             <button
               onClick={() => !isCreating && setIsModalOpen(false)}
               className="absolute top-6 right-6 p-2 rounded-full hover:bg-secondary/50 transition-colors text-muted-foreground"
+              aria-label="关闭模态框"
             >
               <X className="w-5 h-5" />
             </button>
@@ -312,6 +316,7 @@ export function ProjectHome() {
                     onChange={(e) => setProjectName(e.target.value)}
                     className="w-full px-4 py-3 bg-secondary/30 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
                     placeholder="例: 我的故事"
+                    aria-label="项目名称"
                   />
                 </div>
 
@@ -325,6 +330,7 @@ export function ProjectHome() {
                     onChange={(e) => setProjectDesc(e.target.value)}
                     className="w-full h-20 px-4 py-3 bg-secondary/30 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none transition-all"
                     placeholder="简单描述你的故事..."
+                    aria-label="项目简介"
                   />
                 </div>
 
@@ -340,6 +346,7 @@ export function ProjectHome() {
                     <button
                       onClick={handlePickDir}
                       className="px-4 py-3 rounded-xl bg-secondary hover:bg-secondary/70 transition-colors border border-border"
+                      aria-label="浏览文件夹"
                     >
                       <FolderOpen className="w-4 h-4" />
                     </button>
@@ -380,6 +387,7 @@ export function ProjectHome() {
                   onClick={handleCreateProject}
                   disabled={!projectName.trim() || !selectedDir || isCreating}
                   className="w-full py-4 rounded-2xl bg-primary text-primary-foreground font-bold text-lg flex items-center justify-center gap-2 hover:opacity-90 transition-all disabled:opacity-50 disabled:grayscale"
+                  aria-label="创建项目"
                 >
                   {isCreating ? (
                     <>
@@ -411,6 +419,7 @@ export function ProjectHome() {
                     ? 'bg-primary/10 text-primary border border-primary/20'
                     : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'
                 }`}
+                aria-label="View all projects"
               >
                 <Folder className="w-5 h-5" />
                 <span className="font-medium">全部项目</span>
@@ -423,6 +432,7 @@ export function ProjectHome() {
                     ? 'bg-primary/10 text-primary border border-primary/20'
                     : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'
                 }`}
+                aria-label="View favorite projects"
               >
                 <Star className="w-5 h-5" />
                 <span className="font-medium">我的收藏</span>
@@ -435,6 +445,7 @@ export function ProjectHome() {
                     ? 'bg-primary/10 text-primary border border-primary/20'
                     : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'
                 }`}
+                aria-label="View recently edited projects"
               >
                 <Clock className="w-5 h-5" />
                 <span className="font-medium">最近编辑</span>
@@ -446,6 +457,7 @@ export function ProjectHome() {
                     ? 'bg-primary/10 text-primary border border-primary/20'
                     : 'hover:bg-secondary/50 text-muted-foreground hover:text-foreground'
                 }`}
+                aria-label="View projects in trash"
               >
                 <Trash2 className="w-5 h-5" />
                 <span className="font-medium">回收站</span>
@@ -478,6 +490,7 @@ export function ProjectHome() {
                   className={`p-2 rounded-md transition-all ${
                     viewMode === 'grid' ? 'bg-primary text-primary-foreground shadow-sm' : 'hover:bg-secondary text-muted-foreground'
                   }`}
+                  aria-label="Switch to grid view"
                 >
                   <Grid3x3 className="w-4 h-4" />
                 </button>
@@ -486,6 +499,7 @@ export function ProjectHome() {
                   className={`p-2 rounded-md transition-all ${
                     viewMode === 'list' ? 'bg-primary text-primary-foreground shadow-sm' : 'hover:bg-secondary text-muted-foreground'
                   }`}
+                  aria-label="Switch to list view"
                 >
                   <ListIcon className="w-4 h-4" />
                 </button>
@@ -503,6 +517,7 @@ export function ProjectHome() {
                     <button
                       onClick={() => setSearchQuery('')}
                       className="mt-4 text-primary hover:underline text-sm"
+                      aria-label="Clear search content"
                     >
                       清除搜索内容
                     </button>
@@ -515,6 +530,7 @@ export function ProjectHome() {
                       <button
                         onClick={handleOpenProject}
                         className="px-4 py-2 rounded-lg bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 text-sm border border-border"
+                        aria-label="Open existing WebGAL project"
                       >
                         <FolderOpen className="w-4 h-4" />
                         打开项目
@@ -528,6 +544,7 @@ export function ProjectHome() {
                           setCreateError('');
                         }}
                         className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center gap-2 text-sm"
+                        aria-label="Create new project"
                       >
                         <Plus className="w-4 h-4" />
                         创建新项目
@@ -567,14 +584,14 @@ export function ProjectHome() {
                             <button
                               onClick={(e) => restoreProject(project.id, e)}
                               className="p-2 rounded-full bg-black/40 text-white hover:bg-green-600 transition-colors backdrop-blur-md"
-                              title="还原"
+                            aria-label="还原此项目"
                             >
                               <Edit className="w-4 h-4" />
                             </button>
                             <button
                               onClick={(e) => permanentlyDeleteProject(project.id, e)}
                               className="p-2 rounded-full bg-black/40 text-white hover:bg-destructive transition-colors backdrop-blur-md"
-                              title="永久删除"
+                              aria-label="永久删除此项目"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -586,12 +603,14 @@ export function ProjectHome() {
                               className={`p-2 rounded-full backdrop-blur-md transition-colors ${
                                 project.isFavorite ? 'bg-primary text-primary-foreground' : 'bg-black/40 text-white hover:bg-black/60'
                               }`}
+                              aria-label={project.isFavorite ? '取消收藏此项目' : '收藏此项目'}
                             >
                               <Star className={`w-4 h-4 ${project.isFavorite ? 'fill-current' : ''}`} />
                             </button>
                             <button
                               onClick={(e) => deleteProject(project.id, e)}
                               className="p-2 rounded-full bg-black/40 text-white hover:bg-destructive transition-colors backdrop-blur-md"
+                              aria-label="删除此项目"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -687,14 +706,14 @@ export function ProjectHome() {
                           <button
                             onClick={(e) => restoreProject(project.id, e)}
                             className="p-2 rounded-lg hover:bg-green-600/20 text-muted-foreground hover:text-green-500 transition-colors"
-                            title="还原"
+                          aria-label="还原此项目"
                           >
                             <Edit className="w-4 h-4" />
                           </button>
                           <button
                             onClick={(e) => permanentlyDeleteProject(project.id, e)}
                             className="p-2 rounded-lg hover:bg-secondary text-muted-foreground hover:text-destructive transition-colors"
-                            title="永久删除"
+                            aria-label="永久删除此项目"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -704,12 +723,14 @@ export function ProjectHome() {
                           <button
                             onClick={(e) => toggleFavorite(project.id, e)}
                             className="p-2 rounded-lg hover:bg-secondary text-muted-foreground hover:text-primary transition-colors"
+                            aria-label={project.isFavorite ? '取消收藏此项目' : '收藏此项目'}
                           >
                             <Star className={`w-4 h-4 ${project.isFavorite ? 'fill-current' : ''}`} />
                           </button>
                           <button
                             onClick={(e) => deleteProject(project.id, e)}
                             className="p-2 rounded-lg hover:bg-secondary text-muted-foreground hover:text-destructive transition-colors"
+                            aria-label="删除此项目"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>

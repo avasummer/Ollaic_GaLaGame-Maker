@@ -485,6 +485,7 @@ export function StoryEditor() {
               <button
                 onClick={() => navigate('/')}
                 className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
+                aria-label="返回主页"
               >
                 <ArrowLeft className="w-5 h-5" />
               </button>
@@ -506,6 +507,7 @@ export function StoryEditor() {
                     onChange={(e) => handleSwitchScene(e.target.value)}
                     className="px-2 py-1 text-sm bg-secondary border border-border rounded-md"
                     style={{ fontFamily: 'var(--font-mono)' }}
+                    aria-label="选择场景"
                   >
                     {projectInfo.scenes.map((s) => (
                       <option key={s} value={s}>{s}</option>
@@ -515,6 +517,7 @@ export function StoryEditor() {
                     onClick={handleNewScene}
                     className="p-1.5 rounded-md hover:bg-secondary/50 transition-colors"
                     title="新建场景"
+                    aria-label="新建场景"
                   >
                     <FilePlus className="w-4 h-4 text-muted-foreground" />
                   </button>
@@ -531,6 +534,7 @@ export function StoryEditor() {
                 onClick={handleOpenProject}
                 className="px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 text-sm"
                 title="打开 WebGAL 项目文件夹"
+                aria-label="打开 WebGAL 项目文件夹"
               >
                 <FolderOpen className="w-3.5 h-3.5" />
                 <span>打开项目</span>
@@ -538,6 +542,7 @@ export function StoryEditor() {
               <button
                 onClick={handleImport}
                 className="px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 text-sm"
+                aria-label="导入场景文件"
               >
                 <Upload className="w-3.5 h-3.5" />
                 <span>导入</span>
@@ -545,6 +550,7 @@ export function StoryEditor() {
               <button
                 onClick={handleExport}
                 className="px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 text-sm"
+                aria-label="导出场景文件"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>导出</span>
@@ -554,6 +560,7 @@ export function StoryEditor() {
                 className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 text-sm ${
                   showScript ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/70'
                 }`}
+                aria-label="切换脚本编辑器"
               >
                 <FileText className="w-3.5 h-3.5" />
                 <span>脚本</span>
@@ -562,6 +569,7 @@ export function StoryEditor() {
               <button
                 onClick={() => navigate(`/editor/${projectId}/assets`)}
                 className="px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 text-sm"
+                aria-label="打开素材库"
               >
                 <Image className="w-3.5 h-3.5" />
                 <span>素材库</span>
@@ -570,6 +578,7 @@ export function StoryEditor() {
                 onClick={() => setAiSettingsOpen(true)}
                 className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
                 title="AI 设置"
+                aria-label="AI 设置"
               >
                 <Settings className="w-4 h-4" />
               </button>
@@ -577,6 +586,7 @@ export function StoryEditor() {
                 onClick={() => setAppSettingsOpen(true)}
                 className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
                 title="编辑器设置"
+                aria-label="编辑器设置"
               >
                 <SlidersHorizontal className="w-4 h-4" />
               </button>
@@ -584,6 +594,7 @@ export function StoryEditor() {
                 onClick={() => setPreviewOpen(true)}
                 className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
                 title="预览场景"
+                aria-label="预览场景"
               >
                 <Play className="w-4 h-4" />
               </button>
@@ -658,6 +669,7 @@ export function StoryEditor() {
                 className="flex-1 p-4 bg-transparent resize-none focus:outline-none text-sm leading-relaxed"
                 style={{ fontFamily: 'var(--font-mono)' }}
                 spellCheck={false}
+                aria-label="WebGAL 脚本编辑"
               />
             </div>
           ) : (
@@ -752,6 +764,7 @@ export function StoryEditor() {
                 disabled={aiBusy}
                 className="w-full h-20 bg-input-background border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none disabled:opacity-60"
                 placeholder={aiBusy ? '正在生成中…' : '输入你的创作想法...'}
+                aria-label="AI 创作输入框"
               />
               {aiBusy ? (
                 <button

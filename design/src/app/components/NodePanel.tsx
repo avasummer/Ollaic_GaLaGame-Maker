@@ -118,6 +118,7 @@ export function NodePanel({ nodes, selectedNode, onSelectNode, onAddNode }: Node
               <button
                 onClick={() => setExpandedCat(expandedCat === catKey ? null : catKey)}
                 className="w-full flex items-center justify-between px-2 py-1.5 rounded text-xs hover:bg-secondary/50 transition-colors"
+                aria-label={`${expandedCat === catKey ? '收起' : '展开'} ${categoryLabels[catKey]}`}
               >
                 <span className="font-medium">{categoryLabels[catKey]}</span>
                 {expandedCat === catKey
@@ -134,6 +135,7 @@ export function NodePanel({ nodes, selectedNode, onSelectNode, onAddNode }: Node
                         key={type}
                         onClick={() => onAddNode(type)}
                         className={`p-1.5 rounded border border-border transition-all flex items-center gap-1.5 group text-xs ${categoryColors[catKey]}`}
+                        aria-label={`添加 ${commandLabels[type]}`}
                       >
                         <Icon className="w-3 h-3 text-muted-foreground group-hover:text-foreground transition-colors shrink-0" />
                         <span className="truncate">{commandLabels[type]}</span>

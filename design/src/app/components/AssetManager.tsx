@@ -243,6 +243,7 @@ export function AssetManager() {
             <button
               onClick={() => navigate(`/editor/${projectId}`)}
               className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
+              aria-label="返回编辑器"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
@@ -306,6 +307,7 @@ export function AssetManager() {
                         ? 'bg-primary/20 text-primary border border-primary/30'
                         : 'hover:bg-secondary/50 text-foreground'
                     }`}
+                    aria-label={`筛选${label}`}
                   >
                     <Icon className="w-4 h-4" />
                     <span>{label}</span>
@@ -325,6 +327,7 @@ export function AssetManager() {
                 <button
                   onClick={() => alert('文件夹浏览即将推出')}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-secondary/50 transition-colors"
+                  aria-label="浏览所有文件夹"
                 >
                   <FolderOpen className="w-4 h-4" />
                   <span>所有文件夹</span>
@@ -332,6 +335,7 @@ export function AssetManager() {
                 <button
                   onClick={() => alert('标签管理即将推出')}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-secondary/50 transition-colors"
+                  aria-label="管理素材标签"
                 >
                   <Tag className="w-4 h-4" />
                   <span>标签管理</span>
@@ -339,6 +343,7 @@ export function AssetManager() {
                 <button
                   onClick={() => alert('筛选器即将推出')}
                   className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-secondary/50 transition-colors"
+                  aria-label="使用筛选器筛选素材"
                 >
                   <Filter className="w-4 h-4" />
                   <span>筛选器</span>
@@ -371,6 +376,7 @@ export function AssetManager() {
                     className={`p-2 rounded transition-colors ${
                       viewMode === 'grid' ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
                     }`}
+                    aria-label="切换为网格视图"
                   >
                     <Grid3x3 className="w-4 h-4" />
                   </button>
@@ -379,6 +385,7 @@ export function AssetManager() {
                     className={`p-2 rounded transition-colors ${
                       viewMode === 'list' ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
                     }`}
+                    aria-label="切换为列表视图"
                   >
                     <List className="w-4 h-4" />
                   </button>
@@ -445,6 +452,7 @@ export function AssetManager() {
                                 <button
                                   onClick={(e) => { e.stopPropagation(); handlePlayToggle(asset.path); }}
                                   className="p-2 rounded-full bg-primary/90 hover:bg-primary transition-colors"
+                                  aria-label="Toggle audio playback"
                                 >
                                   {playingAudio === asset.path ? (
                                     <Pause className="w-3 h-3 text-primary-foreground" />
@@ -456,6 +464,7 @@ export function AssetManager() {
                               <button
                                 onClick={(e) => { e.stopPropagation(); handleDownload(asset); }}
                                 className="p-2 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-sm transition-colors"
+                                aria-label="Download asset"
                               >
                                 <Download className="w-3 h-3" />
                               </button>
@@ -513,6 +522,7 @@ export function AssetManager() {
                             <button
                               onClick={(e) => { e.stopPropagation(); handlePlayToggle(asset.path); }}
                               className="p-2 rounded-full hover:bg-secondary transition-colors"
+                              aria-label="Toggle audio playback"
                             >
                               {playingAudio === asset.path ? (
                                 <Pause className="w-4 h-4" />
@@ -590,8 +600,7 @@ export function AssetManager() {
                     <div className="flex flex-wrap gap-2">
                       <button
                         onClick={() => alert('标签管理即将推出')}
-                        className="px-3 py-1 rounded-full bg-secondary hover:bg-secondary/70 text-sm border border-border transition-colors flex items-center gap-1"
-                      >
+                        className="px-3 py-1 rounded-full bg-secondary hover:bg-secondary/70 text-sm border border-border transition-colors flex items-center gap-1"                        aria-label="Add tags to asset"                      >
                         <Plus className="w-3 h-3" />
                         添加标签
                       </button>
@@ -603,13 +612,15 @@ export function AssetManager() {
                   <button
                     onClick={handleRename}
                     className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2"
+                    aria-label="Rename asset"
                   >
                     <Edit3 className="w-4 h-4" />
                     重命名
                   </button>
                   <button
-                    onClick={handleDownload}
+                    onClick={() => handleDownload()}
                     className="w-full px-4 py-2 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center justify-center gap-2"
+                    aria-label="Copy asset file path"
                   >
                     <Copy className="w-4 h-4" />
                     复制路径
@@ -617,6 +628,7 @@ export function AssetManager() {
                   <button
                     onClick={handleDelete}
                     className="w-full px-4 py-2 rounded-md bg-destructive/20 text-destructive hover:bg-destructive/30 transition-colors flex items-center justify-center gap-2"
+                    aria-label="Delete asset"
                   >
                     <Trash2 className="w-4 h-4" />
                     删除素材
