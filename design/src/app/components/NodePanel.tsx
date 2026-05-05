@@ -109,7 +109,7 @@ export function NodePanel({ nodes, selectedNode, onSelectNode, onAddNode }: Node
     <div className="w-64 border-r border-border bg-card/30 backdrop-blur-sm flex flex-col">
       {/* Add Node - categorized */}
       <div className="p-3 border-b border-border">
-        <h3 className="text-xs uppercase tracking-widest text-muted-foreground mb-2" style={{ fontFamily: 'var(--font-mono)' }}>
+        <h3 className="text-xs uppercase tracking-widest text-muted-foreground mb-2 font-mono-family">
           添加指令
         </h3>
         <div className="space-y-1">
@@ -171,7 +171,7 @@ export function NodePanel({ nodes, selectedNode, onSelectNode, onAddNode }: Node
               <div className="flex items-start gap-2">
                 <Icon className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${color}`} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5" style={{ fontFamily: 'var(--font-mono)' }}>
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5 font-mono-family">
                     {commandLabels[node.type]}
                   </div>
                   <div className="text-xs text-foreground/80 truncate">
@@ -184,8 +184,8 @@ export function NodePanel({ nodes, selectedNode, onSelectNode, onAddNode }: Node
         })}
       </div>
 
-      <div className="p-3 border-t border-border">
-        <div className="text-xs text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+        <div className="p-3 border-t border-border">
+        <div className="text-xs text-muted-foreground font-mono-family">
           共 {nodes.length} 条指令
         </div>
       </div>

@@ -192,8 +192,9 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       }
 
       case 'setVar': {
-        if (node.varName) {
-          setVars(prev => ({ ...prev, [node.varName]: node.varValue || '' }));
+        const varName = typeof node.varName === 'string' ? node.varName.trim() : '';
+        if (varName) {
+          setVars(prev => ({ ...prev, [varName]: node.varValue || '' }));
         }
         break;
       }
@@ -387,9 +388,8 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-[60] bg-black select-none"
+      className="fixed inset-0 z-[60] bg-black select-none font-body-family"
       onClick={handleClick}
-      style={{ fontFamily: 'var(--font-body)' }}
     >
       {/* Background */}
       {bg && (
@@ -409,7 +409,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
         <img
           key={fig.id}
           src={assetUrl(projectPath, 'figure', fig.asset)}
-          className={`absolute bottom-[15%] max-h-[70%] max-w-[35%] object-contain transition-all duration-500 ${figurePosClass(fig.pos)}`}
+          className={`absolute bottom-[15%] max-h-[70%] max-w-[35%] object-contain transition-all duration-500 ${figurePosClass(fig.position)}`}
           alt=""
           onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
         />
@@ -435,8 +435,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       {introLines && (
         <div className="absolute inset-0 bg-black flex items-center justify-center z-10">
           <p
-            className="text-white/90 text-2xl text-center px-12 transition-opacity duration-500 animate-in fade-in"
-            style={{ fontFamily: 'var(--font-display)' }}
+            className="text-white/90 text-2xl text-center px-12 transition-opacity duration-500 animate-in fade-in font-display-family"
           >
             {introLines[introIndex]}
           </p>
@@ -465,7 +464,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
         <div className="absolute bottom-0 left-0 right-0 p-6 z-10">
           <div className="max-w-4xl mx-auto bg-black/70 backdrop-blur-md rounded-xl border border-white/10 p-6">
             {textbox.speaker && (
-              <div className="text-primary text-sm mb-2" style={{ fontFamily: 'var(--font-display)' }}>
+              <div className="text-primary text-sm mb-2 font-display-family">
                 {textbox.speaker}
               </div>
             )}
@@ -482,7 +481,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       {/* Ended screen */}
       {ended && (
         <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20">
-          <p className="text-white/60 text-2xl mb-4" style={{ fontFamily: 'var(--font-display)' }}>
+          <p className="text-white/60 text-2xl mb-4 font-display-family">
             预览结束
           </p>
           <button

@@ -490,11 +490,11 @@ export function StoryEditor() {
                 <ArrowLeft className="w-5 h-5" />
               </button>
               <div className="h-6 w-px bg-border" />
-              <h1 className="text-2xl tracking-tight" style={{ fontFamily: 'var(--font-display)' }}>
+              <h1 className="text-2xl tracking-tight font-display-family">
                 故事编织室
               </h1>
               <div className="h-6 w-px bg-border" />
-              <span className="text-sm text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+              <span className="text-sm text-muted-foreground font-mono-family">
                 {gameName}
               </span>
 
@@ -505,8 +505,7 @@ export function StoryEditor() {
                   <select
                     value={currentSceneName}
                     onChange={(e) => handleSwitchScene(e.target.value)}
-                    className="px-2 py-1 text-sm bg-secondary border border-border rounded-md"
-                    style={{ fontFamily: 'var(--font-mono)' }}
+                    className="px-2 py-1 text-sm bg-secondary border border-border rounded-md font-mono-family"
                     aria-label="选择场景"
                   >
                     {projectInfo.scenes.map((s) => (
@@ -653,7 +652,7 @@ export function StoryEditor() {
           {showScript ? (
             <div className="flex-1 flex flex-col bg-background/50">
               <div className="p-3 border-b border-border flex items-center justify-between">
-                <span className="text-sm text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+                <span className="text-sm text-muted-foreground font-mono-family">
                   WebGAL 脚本编辑器 — {currentSceneName}
                 </span>
                 <button
@@ -666,8 +665,7 @@ export function StoryEditor() {
               <textarea
                 value={scriptSource}
                 onChange={(e) => setScriptSource(e.target.value)}
-                className="flex-1 p-4 bg-transparent resize-none focus:outline-none text-sm leading-relaxed"
-                style={{ fontFamily: 'var(--font-mono)' }}
+                className="flex-1 p-4 bg-transparent resize-none focus:outline-none text-sm leading-relaxed font-mono-family"
                 spellCheck={false}
                 aria-label="WebGAL 脚本编辑"
               />
@@ -687,7 +685,7 @@ export function StoryEditor() {
               <div className="p-2 rounded-full bg-primary/20">
                 <Sparkles className="w-4 h-4 text-primary" />
               </div>
-              <h3 className="text-sm uppercase tracking-widest text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+              <h3 className="text-sm uppercase tracking-widest text-muted-foreground font-mono-family">
                 AI 创作助手
               </h3>
             </div>
@@ -727,8 +725,7 @@ export function StoryEditor() {
                         msg.role === 'user'
                           ? 'bg-primary text-primary-foreground'
                           : 'bg-secondary border border-border'
-                      }`}
-                      style={{ fontFamily: msg.role === 'assistant' ? 'var(--font-mono)' : 'var(--font-body)' }}
+                      } ${msg.role === 'assistant' ? 'font-mono-family' : 'font-body-family'}`}
                     >
                       {msg.content || (isStreaming ? '正在思考…' : '')}
                       {isStreaming && msg.content && <span className="inline-block w-2 h-3 ml-1 bg-current align-middle animate-pulse" />}

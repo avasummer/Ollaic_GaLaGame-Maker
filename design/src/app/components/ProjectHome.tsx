@@ -229,10 +229,10 @@ export function ProjectHome() {
               <Layout className="w-8 h-8" />
             </div>
             <div>
-              <h1 className="text-3xl font-medium tracking-tight" style={{ fontFamily: 'var(--font-display)' }}>
+              <h1 className="text-3xl font-medium tracking-tight font-display-family">
                 创作中心
               </h1>
-              <p className="text-sm text-muted-foreground mt-1" style={{ fontFamily: 'var(--font-mono)' }}>
+              <p className="text-sm text-muted-foreground mt-1 font-mono-family">
                 管理你的所有故事织卷
               </p>
             </div>
@@ -294,7 +294,7 @@ export function ProjectHome() {
                   <Sparkles className="w-6 h-6" />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-medium" style={{ fontFamily: 'var(--font-display)' }}>
+                  <h2 className="text-2xl font-medium font-display-family">
                     创建新项目
                   </h2>
                   <p className="text-sm text-muted-foreground mt-1">
@@ -340,9 +340,9 @@ export function ProjectHome() {
                     存放位置
                   </label>
                   <div className="flex gap-2">
-                    <div className="flex-1 px-4 py-3 bg-secondary/30 border border-border rounded-xl text-sm truncate" style={{ fontFamily: 'var(--font-mono)' }}>
-                      {selectedDir || '请选择文件夹...'}
-                    </div>
+                    <div className="flex-1 px-4 py-3 bg-secondary/30 border border-border rounded-xl text-sm truncate font-mono-family">
+                        {selectedDir || '请选择文件夹...'}
+                      </div>
                     <button
                       onClick={handlePickDir}
                       className="px-4 py-3 rounded-xl bg-secondary hover:bg-secondary/70 transition-colors border border-border"
@@ -351,8 +351,8 @@ export function ProjectHome() {
                       <FolderOpen className="w-4 h-4" />
                     </button>
                   </div>
-                  {selectedDir && (
-                    <p className="text-xs text-muted-foreground mt-2" style={{ fontFamily: 'var(--font-mono)' }}>
+                    {selectedDir && (
+                    <p className="text-xs text-muted-foreground mt-2 font-mono-family">
                       将创建: {selectedDir}/{projectName || '...'}/game/
                     </p>
                   )}
@@ -363,7 +363,7 @@ export function ProjectHome() {
                   <div className="text-xs uppercase tracking-widest text-muted-foreground mb-2 font-bold">
                     目录结构预览
                   </div>
-                  <pre className="text-xs text-muted-foreground leading-relaxed" style={{ fontFamily: 'var(--font-mono)' }}>
+                  <pre className="text-xs text-muted-foreground leading-relaxed font-mono-family">
 {`game/
 ├── scene/        场景脚本 (.txt)
 ├── background/   背景图片
@@ -479,7 +479,7 @@ export function ProjectHome() {
           {/* Project List */}
           <main className="flex-1">
             <div className="flex items-center justify-between mb-8">
-              <h2 className="text-xl font-medium flex items-center gap-2" style={{ fontFamily: 'var(--font-display)' }}>
+              <h2 className="text-xl font-medium flex items-center gap-2 font-display-family">
                 项目列表
                 <span className="text-sm font-normal text-muted-foreground ml-2">({filteredProjects.length})</span>
               </h2>
@@ -638,7 +638,7 @@ export function ProjectHome() {
                       <p className="text-sm text-muted-foreground line-clamp-2 mb-4 leading-relaxed">
                         {project.description}
                       </p>
-                      <div className="text-[10px] text-muted-foreground truncate mb-3" style={{ fontFamily: 'var(--font-mono)' }}>
+                      <div className="text-[10px] text-muted-foreground truncate mb-3 font-mono-family">
                         {project.path}
                       </div>
                       <div className="flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/50 pt-4">
@@ -684,7 +684,7 @@ export function ProjectHome() {
                         {project.isFavorite && <Star className="w-4 h-4 text-primary fill-current" />}
                       </div>
                       <p className="text-sm text-muted-foreground truncate">{project.description}</p>
-                      <p className="text-[10px] text-muted-foreground/60 truncate mt-1" style={{ fontFamily: 'var(--font-mono)' }}>
+                      <p className="text-[10px] text-muted-foreground/60 truncate mt-1 font-mono-family">
                         {project.path}
                       </p>
                     </div>

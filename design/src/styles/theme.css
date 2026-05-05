@@ -45,6 +45,12 @@
   --sidebar-ring: #d4a574;
 }
 
+/* Flow canvas grid background used by FlowCanvas component */
+.flow-grid {
+  background-image: linear-gradient(rgba(212, 165, 116, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(212, 165, 116, 0.05) 1px, transparent 1px);
+  background-size: 30px 30px;
+}
+
 .dark {
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);

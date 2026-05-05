@@ -93,7 +93,7 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="w-[560px] max-h-[85vh] flex flex-col bg-card border border-border rounded-lg shadow-2xl">
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <h2 className="text-lg" style={{ fontFamily: 'var(--font-display)' }}>
+          <h2 className="text-lg font-display-family">
             AI 设置
           </h2>
           <button
@@ -184,8 +184,7 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
                   value={config.system_prompt}
                   onChange={(e) => update({ system_prompt: e.target.value })}
                   rows={8}
-                  className="w-full px-3 py-2 bg-input-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-y leading-relaxed"
-                  style={{ fontFamily: 'var(--font-mono)' }}
+                  className="w-full px-3 py-2 bg-input-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-y leading-relaxed font-mono-family"
                   aria-label="系统提示词"
                 />
               </Field>
@@ -235,8 +234,8 @@ function Field({
 }) {
   return (
     <div>
-      <div className="flex items-center justify-between mb-1.5">
-        <label className="text-xs uppercase tracking-widest text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+        <div className="flex items-center justify-between mb-1.5">
+        <label className="text-xs uppercase tracking-widest text-muted-foreground font-mono-family">
           {label}
         </label>
         {action}

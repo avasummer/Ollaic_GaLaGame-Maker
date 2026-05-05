@@ -265,16 +265,7 @@ export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode }: 
   return (
     <div className="flex-1 relative overflow-hidden bg-background/50">
       {/* Grid */}
-      <div
-        className="absolute inset-0 opacity-30"
-        style={{
-          backgroundImage: `
-            linear-gradient(rgba(212, 165, 116, 0.05) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(212, 165, 116, 0.05) 1px, transparent 1px)
-          `,
-          backgroundSize: '30px 30px',
-        }}
-      />
+      <div className="absolute inset-0 opacity-30 flow-grid" />
       <div className="absolute top-0 left-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl" />
       <div className="absolute bottom-0 right-0 w-96 h-96 bg-accent/5 rounded-full blur-3xl" />
 
@@ -283,8 +274,7 @@ export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode }: 
         <div className="relative min-w-[2000px] min-h-[1500px] p-8">
           <svg
             ref={svgRef}
-            className="absolute inset-0 pointer-events-none"
-            style={{ width: '100%', height: '100%' }}
+            className="absolute inset-0 pointer-events-none w-full h-full"
           />
 
           {nodes.map((node) => {
@@ -323,7 +313,7 @@ export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode }: 
                       <Icon className="w-4 h-4" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-[10px] uppercase tracking-widest text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+                      <div className="text-[10px] uppercase tracking-widest text-muted-foreground font-mono-family">
                         {commandLabels[node.type]}
                       </div>
                     </div>
@@ -334,7 +324,7 @@ export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode }: 
                     )}
                   </div>
 
-                  <p className="text-sm text-foreground/80 line-clamp-2" style={{ fontFamily: 'var(--font-body)' }}>
+                  <p className="text-sm text-foreground/80 line-clamp-2 font-body-family">
                     {getNodeSummary(node) || '(空)'}
                   </p>
 
@@ -349,9 +339,9 @@ export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode }: 
                   )}
 
                   {node.next && (
-                    <div className="mt-1.5 text-[10px] text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
-                      -next
-                    </div>
+                    <div className="mt-1.5 text-[10px] text-muted-foreground font-mono-family">
+                        -next
+                      </div>
                   )}
 
                   {/* Connection points */}
@@ -366,7 +356,7 @@ export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode }: 
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center">
                 <div className="text-5xl mb-4 opacity-20">📖</div>
-                <p className="text-lg text-muted-foreground mb-2" style={{ fontFamily: 'var(--font-display)' }}>
+                <p className="text-lg text-muted-foreground mb-2 font-display-family">
                   开始编织你的故事
                 </p>
                 <p className="text-sm text-muted-foreground">
@@ -380,7 +370,7 @@ export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode }: 
 
       {/* Mini Map */}
       <div className="absolute bottom-4 right-4 w-44 h-28 bg-card/80 backdrop-blur-sm border border-border rounded-lg p-2">
-        <div className="text-[10px] text-muted-foreground mb-1" style={{ fontFamily: 'var(--font-mono)' }}>
+        <div className="text-[10px] text-muted-foreground mb-1 font-mono-family">
           画布总览
         </div>
         <div className="relative w-full h-full bg-background/50 rounded">

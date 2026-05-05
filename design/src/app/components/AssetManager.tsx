@@ -248,11 +248,11 @@ export function AssetManager() {
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div className="h-6 w-px bg-border" />
-            <h1 className="text-3xl tracking-tight" style={{ fontFamily: 'var(--font-display)' }}>
+            <h1 className="text-3xl tracking-tight font-display-family">
               素材库
             </h1>
             {projectPath && (
-              <span className="text-xs text-muted-foreground truncate max-w-xs" style={{ fontFamily: 'var(--font-mono)' }}>
+              <span className="text-xs text-muted-foreground truncate max-w-xs font-mono-family">
                 {projectPath}
               </span>
             )}
@@ -294,7 +294,7 @@ export function AssetManager() {
           {/* Left Sidebar */}
           <aside className="w-64 border-r border-border bg-card/30 flex flex-col">
             <div className="p-4 border-b border-border">
-              <h2 className="text-sm uppercase tracking-wide text-muted-foreground mb-3" style={{ fontFamily: 'var(--font-mono)' }}>
+              <h2 className="text-sm uppercase tracking-wide text-muted-foreground mb-3 font-mono-family">
                 素材类型
               </h2>
               <div className="space-y-1">
@@ -320,7 +320,7 @@ export function AssetManager() {
             </div>
 
             <div className="p-4">
-              <h3 className="text-sm uppercase tracking-wide text-muted-foreground mb-3" style={{ fontFamily: 'var(--font-mono)' }}>
+              <h3 className="text-sm uppercase tracking-wide text-muted-foreground mb-3 font-mono-family">
                 快捷操作
               </h3>
               <div className="space-y-1">
@@ -563,10 +563,10 @@ export function AssetManager() {
                       </div>
                     )}
                   </div>
-                  <h2 className="text-xl mb-2" style={{ fontFamily: 'var(--font-display)' }}>
+                  <h2 className="text-xl mb-2 font-display-family">
                     {selectedAsset.name}
                   </h2>
-                  <p className="text-xs text-muted-foreground truncate" style={{ fontFamily: 'var(--font-mono)' }}>
+                  <p className="text-xs text-muted-foreground truncate font-mono-family">
                     {selectedAsset.path}
                   </p>
                 </div>

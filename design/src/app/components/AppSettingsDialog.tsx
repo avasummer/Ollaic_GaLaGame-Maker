@@ -79,7 +79,7 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="w-[520px] max-h-[85vh] flex flex-col bg-card border border-border rounded-lg shadow-2xl">
         <div className="flex items-center justify-between p-4 border-b border-border">
-          <h2 className="text-lg" style={{ fontFamily: 'var(--font-display)' }}>
+          <h2 className="text-lg font-display-family">
             编辑器设置
           </h2>
           <button
@@ -94,11 +94,11 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* Default project directory */}
           <div>
-            <label className="block text-xs uppercase tracking-widest text-muted-foreground mb-1.5" style={{ fontFamily: 'var(--font-mono)' }}>
+            <label className="block text-xs uppercase tracking-widest text-muted-foreground mb-1.5 font-mono-family">
               默认项目目录
             </label>
             <div className="flex gap-2">
-              <div className="flex-1 px-3 py-2 bg-input-background border border-border rounded-md text-sm truncate" style={{ fontFamily: 'var(--font-mono)' }}>
+              <div className="flex-1 px-3 py-2 bg-input-background border border-border rounded-md text-sm truncate font-mono-family">
                 {settings.defaultProjectDir || '（未设置）'}
               </div>
               <button
@@ -116,7 +116,7 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
 
           {/* Auto-save interval */}
           <div>
-            <label className="block text-xs uppercase tracking-widest text-muted-foreground mb-1.5" style={{ fontFamily: 'var(--font-mono)' }}>
+            <label className="block text-xs uppercase tracking-widest text-muted-foreground mb-1.5 font-mono-family">
               自动保存间隔
             </label>
             <select
@@ -135,7 +135,7 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
 
           {/* Language */}
           <div>
-            <label className="block text-xs uppercase tracking-widest text-muted-foreground mb-1.5" style={{ fontFamily: 'var(--font-mono)' }}>
+            <label className="block text-xs uppercase tracking-widest text-muted-foreground mb-1.5 font-mono-family">
               界面语言
             </label>
             <select
@@ -153,7 +153,7 @@ export function AppSettingsDialog({ open, onClose, onOpenAiSettings }: Props) {
 
           {/* Theme */}
           <div>
-            <label className="block text-xs uppercase tracking-widest text-muted-foreground mb-1.5" style={{ fontFamily: 'var(--font-mono)' }}>
+            <label className="block text-xs uppercase tracking-widest text-muted-foreground mb-1.5 font-mono-family">
               主题
             </label>
             <select

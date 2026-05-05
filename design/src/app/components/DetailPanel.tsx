@@ -44,10 +44,10 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: Detai
       {/* Header */}
       <div className="p-4 border-b border-border flex items-center justify-between">
         <div>
-          <h3 className="text-xs uppercase tracking-widest text-muted-foreground mb-1" style={{ fontFamily: 'var(--font-mono)' }}>
+          <h3 className="text-xs uppercase tracking-widest text-muted-foreground mb-1 font-mono-family">
             指令编辑
           </h3>
-          <div className="text-base font-medium" style={{ fontFamily: 'var(--font-display)' }}>
+          <div className="text-base font-medium font-display-family">
             {commandLabels[node.type]}
           </div>
         </div>
@@ -60,11 +60,11 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: Detai
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* Type selector */}
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>指令类型</label>
+          <label className={`${labelClass} font-mono-family`}>指令类型</label>
           <select
             value={node.type}
             onChange={(e) => onUpdateNode({ type: e.target.value as WebGalCommandType })}
-            className={inputClass}
+            className={`${inputClass} font-mono-family`}
             aria-label="指令类型"
           >
             {typeOptions.map(opt => (
@@ -78,7 +78,7 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: Detai
 
         {/* Common flags */}
         <div className="pt-3 border-t border-border space-y-3">
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>通用选项</label>
+          <label className={`${labelClass} font-mono-family`}>通用选项</label>
 
           <label className="flex items-center gap-2 text-sm cursor-pointer">
             <input
@@ -91,14 +91,14 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: Detai
           </label>
 
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>条件 (-when)</label>
+            <label className={`${labelClass} font-mono-family`}>条件 (-when)</label>
             <input
               type="text"
               value={node.when || ''}
               onChange={(e) => onUpdateNode({ when: e.target.value || undefined })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="例: score>10"
-              style={{ fontFamily: 'var(--font-mono)' }}
+              
               aria-label="条件"
             />
           </div>
@@ -106,10 +106,10 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose }: Detai
 
         {/* Raw content preview */}
         <div className="pt-3 border-t border-border">
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>
+          <label className={`${labelClass} font-mono-family`}>
             节点 ID
           </label>
-          <div className="text-xs text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+          <div className="text-xs text-muted-foreground font-mono-family">
             {node.id}
           </div>
         </div>
@@ -138,7 +138,7 @@ function renderTypeFields(
       return (
         <>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>角色名</label>
+            <label className={`${labelClass} font-mono-family`}>角色名</label>
             <input
               type="text"
               value={node.character || ''}
@@ -150,7 +150,7 @@ function renderTypeFields(
           </div>
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className={labelClass} style={{ fontFamily: 'var(--font-mono)', marginBottom: 0 }}>对话内容</label>
+              <label className={`${labelClass} font-mono-family mb-0`}>对话内容</label>
               <button className="p-1 hover:bg-primary/10 rounded transition-colors group" aria-label="AI 生成对话">
                 <Sparkles className="w-3 h-3 text-muted-foreground group-hover:text-primary transition-colors" />
               </button>
@@ -158,21 +158,19 @@ function renderTypeFields(
             <textarea
               value={node.content}
               onChange={(e) => onUpdate({ content: e.target.value })}
-              className={`${inputClass} h-24 resize-none`}
+              className={`${inputClass} h-24 resize-none font-body-family`}
               placeholder="输入对话内容..."
-              style={{ fontFamily: 'var(--font-body)' }}
               aria-label="对话内容"
             />
           </div>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>语音文件</label>
+            <label className={`${labelClass} font-mono-family`}>语音文件</label>
             <input
               type="text"
               value={node.voice || ''}
               onChange={(e) => onUpdate({ voice: e.target.value || undefined })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="例: v1.wav"
-              style={{ fontFamily: 'var(--font-mono)' }}
               aria-label="语音文件"
             />
           </div>
@@ -182,13 +180,12 @@ function renderTypeFields(
     case 'narrator':
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>旁白内容</label>
+          <label className={`${labelClass} font-mono-family`}>旁白内容</label>
           <textarea
             value={node.content}
             onChange={(e) => onUpdate({ content: e.target.value })}
-            className={`${inputClass} h-24 resize-none`}
+            className={`${inputClass} h-24 resize-none font-body-family`}
             placeholder="输入旁白文本..."
-            style={{ fontFamily: 'var(--font-body)' }}
             aria-label="旁白内容"
           />
         </div>
@@ -197,15 +194,14 @@ function renderTypeFields(
     case 'intro':
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>
+          <label className={`${labelClass} font-mono-family`}>
             黑屏文字（每行用回车分隔）
           </label>
           <textarea
             value={(node.introLines || []).join('\n')}
             onChange={(e) => onUpdate({ introLines: e.target.value.split('\n'), content: e.target.value.split('\n').join('|') })}
-            className={`${inputClass} h-28 resize-none`}
+            className={`${inputClass} h-28 resize-none font-body-family`}
             placeholder="第一行&#10;第二行&#10;第三行"
-            style={{ fontFamily: 'var(--font-body)' }}
             aria-label="黑屏文字"
           />
         </div>
@@ -217,14 +213,13 @@ function renderTypeFields(
     case 'changeBg':
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>背景图片</label>
+          <label className={`${labelClass} font-mono-family`}>背景图片</label>
           <input
             type="text"
             value={node.asset || node.content}
             onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-            className={inputClass}
+            className={`${inputClass} font-mono-family`}
             placeholder="例: bg.webp 或 none"
-            style={{ fontFamily: 'var(--font-mono)' }}
             aria-label="背景图片"
           />
           <p className="text-[10px] text-muted-foreground mt-1">放在 game/background/ 目录下</p>
@@ -235,20 +230,19 @@ function renderTypeFields(
       return (
         <>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>立绘文件</label>
+            <label className={`${labelClass} font-mono-family`}>立绘文件</label>
             <input
               type="text"
               value={node.asset || node.content}
               onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="例: stand.webp 或 none"
-              style={{ fontFamily: 'var(--font-mono)' }}
               aria-label="立绘文件"
             />
             <p className="text-[10px] text-muted-foreground mt-1">放在 game/figure/ 目录下</p>
           </div>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>位置</label>
+            <label className={`${labelClass} font-mono-family`}>位置</label>
             <select
               value={node.figurePosition || 'center'}
               onChange={(e) => onUpdate({ figurePosition: e.target.value as 'left' | 'center' | 'right' })}
@@ -261,14 +255,13 @@ function renderTypeFields(
             </select>
           </div>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>自定义 ID</label>
+            <label className={`${labelClass} font-mono-family`}>自定义 ID</label>
             <input
               type="text"
               value={node.figureId || ''}
               onChange={(e) => onUpdate({ figureId: e.target.value || undefined })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="可选，用于精确定位"
-              style={{ fontFamily: 'var(--font-mono)' }}
               aria-label="自定义 ID"
             />
           </div>
@@ -278,14 +271,13 @@ function renderTypeFields(
     case 'miniAvatar':
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>小头像文件</label>
+          <label className={`${labelClass} font-mono-family`}>小头像文件</label>
           <input
             type="text"
             value={node.asset || node.content}
             onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-            className={inputClass}
+            className={`${inputClass} font-mono-family`}
             placeholder="例: miniavatar.webp 或 none"
-            style={{ fontFamily: 'var(--font-mono)' }}
             aria-label="小头像文件"
           />
         </div>
@@ -295,16 +287,15 @@ function renderTypeFields(
     case 'callScene':
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>
+          <label className={`${labelClass} font-mono-family`}>
             目标场景文件
           </label>
           <input
             type="text"
             value={node.targetScene || node.content}
             onChange={(e) => onUpdate({ targetScene: e.target.value, content: e.target.value })}
-            className={inputClass}
+            className={`${inputClass} font-mono-family`}
             placeholder="例: Chapter-2.txt"
-            style={{ fontFamily: 'var(--font-mono)' }}
             aria-label="目标场景文件"
           />
           <p className="text-[10px] text-muted-foreground mt-1">
@@ -324,21 +315,20 @@ function renderTypeFields(
       return (
         <>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>
+            <label className={`${labelClass} font-mono-family`}>
               {node.type === 'bgm' ? '音乐文件' : node.type === 'playEffect' ? '音效文件' : '视频文件'}
             </label>
             <input
               type="text"
               value={node.asset || node.content}
               onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder={node.type === 'bgm' ? '例: bgm.mp3 或 none' : '例: effect.mp3'}
-              style={{ fontFamily: 'var(--font-mono)' }}
               aria-label={node.type === 'bgm' ? '音乐文件' : node.type === 'playEffect' ? '音效文件' : '视频文件'}
             />
           </div>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>音量 (0-100)</label>
+            <label className={`${labelClass} font-mono-family`}>音量 (0-100)</label>
             <input
               type="number"
               min={0}
@@ -357,16 +347,15 @@ function renderTypeFields(
     case 'jumpLabel':
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>
+          <label className={`${labelClass} font-mono-family`}>
             标签名称
           </label>
           <input
             type="text"
             value={node.labelName || node.content}
             onChange={(e) => onUpdate({ labelName: e.target.value, content: e.target.value })}
-            className={inputClass}
+            className={`${inputClass} font-mono-family`}
             placeholder="例: branch_a"
-            style={{ fontFamily: 'var(--font-mono)' }}
             aria-label="标签名称"
           />
         </div>
@@ -376,26 +365,24 @@ function renderTypeFields(
       return (
         <>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>变量名</label>
-            <input
-              type="text"
-              value={node.varName || ''}
-              onChange={(e) => onUpdate({ varName: e.target.value, content: `${e.target.value}=${node.varValue || ''}` })}
-              className={inputClass}
-              placeholder="例: score"
-              style={{ fontFamily: 'var(--font-mono)' }}
-              aria-label="变量名"
-            />
+              <label className={`${labelClass} font-mono-family`}>变量名</label>
+              <input
+                type="text"
+                value={node.varName || ''}
+                onChange={(e) => onUpdate({ varName: e.target.value, content: `${e.target.value}=${node.varValue || ''}` })}
+                className={`${inputClass} font-mono-family`}
+                placeholder="例: score"
+                aria-label="变量名"
+              />
           </div>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>值</label>
+            <label className={`${labelClass} font-mono-family`}>值</label>
             <input
               type="text"
               value={node.varValue || ''}
               onChange={(e) => onUpdate({ varValue: e.target.value, content: `${node.varName || ''}=${e.target.value}` })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="例: 1, true, 文本"
-              style={{ fontFamily: 'var(--font-mono)' }}
               aria-label="值"
             />
           </div>
@@ -406,35 +393,34 @@ function renderTypeFields(
       return (
         <>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>存入变量</label>
-            <input
-              type="text"
-              value={node.varName || node.content}
-              onChange={(e) => onUpdate({ varName: e.target.value, content: e.target.value })}
-              className={inputClass}
-              placeholder="例: name"
-              style={{ fontFamily: 'var(--font-mono)' }}
-              aria-label="存入变量"
-            />
+            <label className={`${labelClass} font-mono-family`}>存入变量</label>
+              <input
+                type="text"
+                value={node.varName || node.content}
+                onChange={(e) => onUpdate({ varName: e.target.value, content: e.target.value })}
+                className={`${inputClass} font-mono-family`}
+                placeholder="例: name"
+                aria-label="存入变量"
+              />
           </div>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>提示文字</label>
+            <label className={`${labelClass} font-mono-family`}>提示文字</label>
             <input
               type="text"
               value={node.inputTitle || ''}
               onChange={(e) => onUpdate({ inputTitle: e.target.value })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="例: 请输入你的名字"
               aria-label="提示文字"
             />
           </div>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>按钮文字</label>
+            <label className={`${labelClass} font-mono-family`}>按钮文字</label>
             <input
               type="text"
               value={node.inputButton || ''}
               onChange={(e) => onUpdate({ inputButton: e.target.value })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="例: 确认"
               aria-label="按钮文字"
             />
@@ -445,11 +431,11 @@ function renderTypeFields(
     case 'setTextbox':
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>操作</label>
+          <label className={`${labelClass} font-mono-family`}>操作</label>
           <select
             value={node.content || 'hide'}
             onChange={(e) => onUpdate({ content: e.target.value })}
-            className={inputClass}
+            className={`${inputClass} font-mono-family`}
             aria-label="操作"
           >
             <option value="hide">隐藏</option>
@@ -462,26 +448,24 @@ function renderTypeFields(
       return (
         <>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>动画名称</label>
+            <label className={`${labelClass} font-mono-family`}>动画名称</label>
             <input
               type="text"
               value={node.animationName || node.content}
               onChange={(e) => onUpdate({ animationName: e.target.value, content: e.target.value })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="例: enter-from-left"
-              style={{ fontFamily: 'var(--font-mono)' }}
               aria-label="动画名称"
             />
           </div>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>目标 (-target)</label>
+            <label className={`${labelClass} font-mono-family`}>目标 (-target)</label>
             <input
               type="text"
               value={node.animationTarget || ''}
               onChange={(e) => onUpdate({ animationTarget: e.target.value || undefined })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="例: fig-left"
-              style={{ fontFamily: 'var(--font-mono)' }}
               aria-label="动画目标"
             />
           </div>
@@ -491,13 +475,12 @@ function renderTypeFields(
     case 'setTransform':
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>变换 JSON</label>
+          <label className={`${labelClass} font-mono-family`}>变换 JSON</label>
           <textarea
             value={node.content}
             onChange={(e) => onUpdate({ content: e.target.value })}
-            className={`${inputClass} h-24 resize-none`}
+            className={`${inputClass} h-24 resize-none font-mono-family`}
             placeholder='例: {"position":{"x":100,"y":0}}'
-            style={{ fontFamily: 'var(--font-mono)' }}
             aria-label="变换 JSON"
           />
         </div>
@@ -508,25 +491,24 @@ function renderTypeFields(
       return (
         <>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>
+            <label className={`${labelClass} font-mono-family`}>
               {node.type === 'unlockCg' ? 'CG 文件' : 'BGM 文件'}
             </label>
             <input
               type="text"
               value={node.asset || node.content}
               onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-              className={inputClass}
-              style={{ fontFamily: 'var(--font-mono)' }}
+              className={`${inputClass} font-mono-family`}
               aria-label={node.type === 'unlockCg' ? 'CG 文件' : 'BGM 文件'}
             />
           </div>
           <div>
-            <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>显示名称</label>
+            <label className={`${labelClass} font-mono-family`}>显示名称</label>
             <input
               type="text"
               value={node.displayName || ''}
               onChange={(e) => onUpdate({ displayName: e.target.value || undefined })}
-              className={inputClass}
+              className={`${inputClass} font-mono-family`}
               placeholder="在鉴赏中显示的名称"
               aria-label="显示名称"
             />
@@ -537,7 +519,7 @@ function renderTypeFields(
     case 'comment':
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>注释内容</label>
+          <label className={`${labelClass} font-mono-family`}>注释内容</label>
           <textarea
             value={node.content}
             onChange={(e) => onUpdate({ content: e.target.value })}
@@ -551,7 +533,7 @@ function renderTypeFields(
     default:
       return (
         <div>
-          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>内容</label>
+          <label className={`${labelClass} font-mono-family`}>内容</label>
           <textarea
             value={node.content}
             onChange={(e) => onUpdate({ content: e.target.value })}
@@ -584,7 +566,7 @@ function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Part
   return (
     <div>
       <div className="flex items-center justify-between mb-1.5">
-        <label className={labelClass} style={{ fontFamily: 'var(--font-mono)', marginBottom: 0 }}>选项分支</label>
+        <label className={`${labelClass} font-mono-family mb-0`}>选项分支</label>
         <button
           onClick={add}
           className="px-2 py-0.5 text-xs bg-primary/10 hover:bg-primary/20 text-primary rounded transition-colors flex items-center gap-1"
@@ -599,7 +581,7 @@ function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Part
         {choices.map((choice, idx) => (
           <div key={idx} className="p-2.5 bg-input-background border border-border rounded-md">
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[10px] text-muted-foreground" style={{ fontFamily: 'var(--font-mono)' }}>
+              <span className="text-[10px] text-muted-foreground font-mono-family">
                 选项 {idx + 1}
               </span>
               <button
@@ -622,9 +604,8 @@ function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Part
               type="text"
               value={choice.target}
               onChange={(e) => update(idx, 'target', e.target.value)}
-              className="w-full px-2 py-1 bg-background border border-border/50 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+              className="w-full px-2 py-1 bg-background border border-border/50 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono-family"
               placeholder="目标场景文件 (例: scene2.txt)"
-              style={{ fontFamily: 'var(--font-mono)' }}
               aria-label={`Option ${idx + 1} target scene`}
             />
           </div>
