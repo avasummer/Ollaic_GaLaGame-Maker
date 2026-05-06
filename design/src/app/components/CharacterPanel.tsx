@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus, Trash2, ChevronDown, ChevronRight, Users, X,
   Image as ImageIcon, Music, Palette,
@@ -49,6 +49,8 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [isNew, setIsNew] = useState(false);
+  const savingRef = useRef(false);    // synchronous guard against double-save
+  const savedIds = useRef(new Set<string>()); // track temp IDs already submitted
 
   // Load on mount
   useEffect(() => {
@@ -80,12 +82,17 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
   }, [characters.length]);
 
   const handleSave = useCallback(async (ch: Character) => {
-    if (!ch.name.trim()) return; // require at least a name
+    if (!ch.name.trim()) return;
+    if (savingRef.current) return;   // block double-click
+    // Block re-submit of temp ids already sent to server
+    if (ch.id.startsWith('tmp_') && savedIds.current.has(ch.id)) return;
+
+    savingRef.current = true;
+    if (ch.id.startsWith('tmp_')) savedIds.current.add(ch.id);
     setSavingId(ch.id);
     setError(null);
     try {
       if (ch.id.startsWith('tmp_')) {
-        // Create on server
         const saved = await createCharacter(projectPath, ch);
         setCharacters(prev => prev.map(c => c.id === ch.id ? saved : c));
         if (expandedId === ch.id) setExpandedId(saved.id);
@@ -96,13 +103,14 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
       }
     } catch (e) {
       setError(String(e));
+      if (ch.id.startsWith('tmp_')) savedIds.current.delete(ch.id);
     } finally {
+      savingRef.current = false;
       setSavingId(null);
     }
   }, [projectPath, expandedId]);
 
   const handleDelete = useCallback(async (id: string) => {
-    if (!confirm('确定删除此角色？')) return;
     setError(null);
     try {
       if (!id.startsWith('tmp_')) {
@@ -110,6 +118,7 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
       }
       setCharacters(prev => prev.filter(c => c.id !== id));
       if (expandedId === id) setExpandedId(null);
+      setIsNew(false);
     } catch (e) {
       setError(String(e));
     }

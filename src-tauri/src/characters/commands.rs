@@ -68,9 +68,8 @@ pub fn get_character(project_path: String, id: String) -> Result<Character, Stri
 pub fn create_character(project_path: String, character: Character) -> Result<Character, String> {
     let mut doc = load_doc(&project_path)?;
     let mut new_char = character;
-    if new_char.id.is_empty() {
-        new_char.id = make_id();
-    }
+    // Always assign a server-generated id so temp frontend ids never leak into storage.
+    new_char.id = make_id();
     doc.characters.push(new_char.clone());
     save_doc(&project_path, &doc)?;
     Ok(new_char)
