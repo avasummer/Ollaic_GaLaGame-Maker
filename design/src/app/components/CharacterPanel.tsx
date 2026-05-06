@@ -125,9 +125,8 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
   const handleDelete = useCallback(async (id: string) => {
     setError(null);
     try {
-      if (!id.startsWith('tmp_')) {
-        await deleteCharacter(projectPath, id);
-      }
+      // Always call backend to remove from disk (some legacy entries have tmp_ ids)
+      await deleteCharacter(projectPath, id);
       setCharacters(prev => prev.filter(c => c.id !== id));
       if (expandedId === id) setExpandedId(null);
       setIsNew(false);

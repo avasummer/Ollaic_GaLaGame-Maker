@@ -46,11 +46,20 @@ fn make_id() -> String {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-/// List all characters in the project.
+/// List all characters in the project, deduplicated by id (keeps the last,
+/// most complete entry).
 #[tauri::command]
 pub fn list_characters(project_path: String) -> Result<Vec<Character>, String> {
     let doc = load_doc(&project_path)?;
-    Ok(doc.characters)
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped: Vec<Character> = Vec::new();
+    for ch in doc.characters.into_iter().rev() {
+        if seen.insert(ch.id.clone()) {
+            deduped.push(ch);
+        }
+    }
+    deduped.reverse();
+    Ok(deduped)
 }
 
 /// Get a single character by id.
