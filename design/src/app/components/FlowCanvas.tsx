@@ -11,6 +11,7 @@ interface FlowCanvasProps {
   selectedNode: WebGalNode | null;
   onSelectNode: (node: WebGalNode) => void;
   onUpdateNode: (id: string, updates: Partial<WebGalNode>) => void;
+  characterColors?: Record<string, string>;
 }
 
 const commandIcons: Partial<Record<WebGalCommandType, typeof MessageCircle>> = {
@@ -112,7 +113,7 @@ function getNodeSummary(node: WebGalNode): string {
   }
 }
 
-export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode }: FlowCanvasProps) {
+export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode, characterColors }: FlowCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -318,7 +319,16 @@ export function FlowCanvas({ nodes, selectedNode, onSelectNode, onUpdateNode }: 
                       </div>
                     </div>
                     {node.character && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/20 text-accent shrink-0">
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 flex items-center gap-1 bg-accent/20 text-accent"
+                        style={characterColors?.[node.character] ? {
+                          backgroundColor: `${characterColors[node.character]}20`,
+                          color: characterColors[node.character],
+                        } : undefined}
+                      >
+                        {characterColors?.[node.character] && (
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: characterColors[node.character] }} />
+                        )}
                         {node.character}
                       </span>
                     )}

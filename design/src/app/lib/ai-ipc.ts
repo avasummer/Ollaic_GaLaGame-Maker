@@ -58,6 +58,7 @@ export interface StreamHandlers {
 export async function aiChatStream(
   messages: AiChatMessage[],
   handlers: StreamHandlers,
+  characterContext?: string,
 ): Promise<{ requestId: string; cancel: () => void }> {
   const requestId =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -94,7 +95,7 @@ export async function aiChatStream(
   });
 
   try {
-    await invoke<void>('ai_chat_stream', { requestId, messages });
+    await invoke<void>('ai_chat_stream', { requestId, messages, characterContext });
   } catch (err) {
     stop();
     handlers.onError?.(String(err));

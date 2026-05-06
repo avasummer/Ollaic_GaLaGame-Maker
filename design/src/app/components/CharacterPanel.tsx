@@ -24,6 +24,11 @@ function emptyCharacter(): Character {
     aliases: [],
     description: '',
     personality: '',
+    stance: '',
+    keywords: [],
+    dialogueStyle: '',
+    gender: '',
+    age: '',
     sprites: [],
     defaultVoice: undefined,
     voiceTimbre: undefined,
@@ -308,9 +313,17 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
                   <div className="text-sm font-medium truncate">
                     {ch.name || '(未命名)'}
                   </div>
-                  {ch.personality && !isExpanded && (
-                    <div className="text-[10px] text-muted-foreground truncate mt-0.5">
-                      {ch.personality}
+                  {!isExpanded && (
+                    <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                      {ch.gender && (
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-secondary/50 text-muted-foreground">{ch.gender}</span>
+                      )}
+                      {ch.age && (
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-secondary/50 text-muted-foreground">{ch.age}</span>
+                      )}
+                      {ch.stance && (
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-primary/10 text-primary">{ch.stance}</span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -374,6 +387,77 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
                       onChange={(e) => handleUpdate(ch.id, { personality: e.target.value })}
                       className={inputClass}
                       placeholder="例: 温柔、内向、善良"
+                    />
+                  </div>
+
+                  {/* Gender + Age */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>性别</label>
+                      <select
+                        value={ch.gender}
+                        onChange={(e) => handleUpdate(ch.id, { gender: e.target.value })}
+                        className={inputClass}
+                      >
+                        <option value="">未设置</option>
+                        <option value="男">男</option>
+                        <option value="女">女</option>
+                        <option value="其他">其他</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>年龄</label>
+                      <input
+                        type="text"
+                        value={ch.age}
+                        onChange={(e) => handleUpdate(ch.id, { age: e.target.value })}
+                        className={inputClass}
+                        placeholder="例: 17 / 高中生"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Stance */}
+                  <div>
+                    <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>立场</label>
+                    <select
+                      value={ch.stance}
+                      onChange={(e) => handleUpdate(ch.id, { stance: e.target.value })}
+                      className={inputClass}
+                    >
+                      <option value="">未设置</option>
+                      <option value="正义">正义</option>
+                      <option value="混乱善良">混乱善良</option>
+                      <option value="中立">中立</option>
+                      <option value="混乱邪恶">混乱邪恶</option>
+                      <option value="反派">反派</option>
+                    </select>
+                  </div>
+
+                  {/* Keywords */}
+                  <div>
+                    <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>
+                      关键词（逗号分隔）
+                    </label>
+                    <input
+                      type="text"
+                      value={ch.keywords.join(', ')}
+                      onChange={(e) => handleUpdate(ch.id, {
+                        keywords: e.target.value.split(',').map(s => s.trim()).filter(Boolean),
+                      })}
+                      className={inputClass}
+                      placeholder="例: 学生, 傲娇, 学生会"
+                    />
+                  </div>
+
+                  {/* Dialogue style */}
+                  <div>
+                    <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>角色口吻 / 对话风格</label>
+                    <textarea
+                      value={ch.dialogueStyle}
+                      onChange={(e) => handleUpdate(ch.id, { dialogueStyle: e.target.value })}
+                      className={`${inputClass} h-14 resize-none`}
+                      placeholder="例: 使用敬语、自称'私'、句尾加'ですわ'..."
                     />
                   </div>
 
@@ -531,6 +615,38 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
                         );
                       })}
                     </div>
+
+                    {/* Reverse relations (read-only) */}
+                    {(() => {
+                      const incoming = characters
+                        .filter(c => c.id !== ch.id && c.relations.some(r => r.targetId === ch.id))
+                        .map(c => ({
+                          source: c,
+                          rels: c.relations.filter(r => r.targetId === ch.id),
+                        }));
+                      if (incoming.length === 0) return null;
+                      return (
+                        <div className="pt-2 border-t border-border">
+                          <label className={labelClass} style={{ fontFamily: 'var(--font-mono)' }}>
+                            反向关系（来自其他角色）
+                          </label>
+                          <div className="space-y-1">
+                            {incoming.map(({ source, rels }) =>
+                              rels.map((rel, ri) => (
+                                <div key={`${source.id}-${ri}`} className="text-[10px] px-2 py-1 rounded bg-secondary/30 text-muted-foreground flex items-center gap-1">
+                                  <span
+                                    className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                                    style={{ backgroundColor: source.colorTheme || pickColor(characters.indexOf(source)) }}
+                                  />
+                                  <span className="font-medium">{source.name}</span>
+                                  <span>→ {rel.relationType || '(未命名关系)'}</span>
+                                </div>
+                              )),
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Notes */}

@@ -19,6 +19,11 @@ export interface Character {
   aliases: string[];       // nicknames / alternative names
   description: string;     // backstory / role description
   personality: string;     // personality traits
+  stance: string;          // moral/faction stance: "正义", "混沌", "中立", "邪恶"
+  keywords: string[];      // searchable tags: ["学生", "傲娇", "学生会"]
+  dialogueStyle: string;   // character voice / speech style guide for AI
+  gender: string;          // "男", "女", "其他"
+  age: string;             // age group or specific age
   sprites: CharacterSprite[];
   defaultVoice?: string;   // default voice file path
   voiceTimbre?: string;    // TTS voice type (for future)

@@ -75,7 +75,7 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose, charact
         </div>
 
         {/* Type-specific fields */}
-        {renderTypeFields(node, onUpdateNode)}
+        {renderTypeFields(node, onUpdateNode, characterNames)}
 
         {/* Common flags */}
         <div className="pt-3 border-t border-border space-y-3">
@@ -133,6 +133,7 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose, charact
 function renderTypeFields(
   node: WebGalNode,
   onUpdate: (updates: Partial<WebGalNode>) => void,
+  characterNames?: string[],
 ) {
   switch (node.type) {
     case 'dialogue':

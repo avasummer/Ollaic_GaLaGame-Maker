@@ -42,6 +42,7 @@ pub async fn ai_chat_stream(
     app: AppHandle,
     request_id: String,
     messages: Vec<AiMessageInput>,
+    character_context: Option<String>,
 ) -> Result<(), String> {
     let cfg = config::load_config();
 
@@ -54,8 +55,21 @@ pub async fn ai_chat_stream(
 
     let mut chat_messages: Vec<ChatMessage> = Vec::new();
     let sys = cfg.system_prompt.trim();
-    if !sys.is_empty() {
-        chat_messages.push(ChatMessage::system(sys));
+    let mut sys_text = if !sys.is_empty() { sys.to_string() } else { String::new() };
+
+    // Append character profiles as project-specific context
+    if let Some(ref ctx) = character_context {
+        if !ctx.is_empty() {
+            if !sys_text.is_empty() {
+                sys_text.push_str("\n\n");
+            }
+            sys_text.push_str("## 当前项目的角色设定\n");
+            sys_text.push_str(ctx);
+        }
+    }
+
+    if !sys_text.is_empty() {
+        chat_messages.push(ChatMessage::system(&sys_text));
     }
     for m in messages {
         let msg = match m.role.as_str() {

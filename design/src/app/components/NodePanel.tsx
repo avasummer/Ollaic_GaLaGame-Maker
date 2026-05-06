@@ -11,6 +11,7 @@ interface NodePanelProps {
   selectedNode: WebGalNode | null;
   onSelectNode: (node: WebGalNode) => void;
   onAddNode: (type: WebGalCommandType) => void;
+  characterColors?: Record<string, string>;
 }
 
 const commandIcons: Partial<Record<WebGalCommandType, typeof MessageCircle>> = {
@@ -102,7 +103,7 @@ function getNodeSummary(node: WebGalNode): string {
   }
 }
 
-export function NodePanel({ nodes, selectedNode, onSelectNode, onAddNode }: NodePanelProps) {
+export function NodePanel({ nodes, selectedNode, onSelectNode, onAddNode, characterColors }: NodePanelProps) {
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
   return (
@@ -170,6 +171,12 @@ export function NodePanel({ nodes, selectedNode, onSelectNode, onAddNode }: Node
             >
               <div className="flex items-start gap-2">
                 <Icon className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${color}`} />
+                {node.type === 'dialogue' && node.character && characterColors?.[node.character] && (
+                  <span
+                    className="w-2 h-2 rounded-full mt-1 shrink-0"
+                    style={{ backgroundColor: characterColors[node.character] }}
+                  />
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5 font-mono-family">
                     {commandLabels[node.type]}

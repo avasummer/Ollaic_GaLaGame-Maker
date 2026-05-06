@@ -39,6 +39,21 @@ pub struct Character {
     /// Personality traits.
     #[serde(default)]
     pub personality: String,
+    /// Moral / faction stance: e.g. "正义", "混沌", "中立", "邪恶".
+    #[serde(default)]
+    pub stance: String,
+    /// Searchable keywords / tags (e.g. ["学生", "学生会", "傲娇"]).
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    /// Dialogue style guide for character voice consistency (AI use).
+    #[serde(default)]
+    pub dialogue_style: String,
+    /// Gender: e.g. "男", "女", "其他".
+    #[serde(default)]
+    pub gender: String,
+    /// Age group or specific age as free text.
+    #[serde(default)]
+    pub age: String,
     /// Emotion → figure file mappings.
     #[serde(default)]
     pub sprites: Vec<CharacterSprite>,

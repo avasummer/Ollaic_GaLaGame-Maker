@@ -21,7 +21,8 @@ import {
   type ProjectInfo,
 } from '../lib/webgal-ipc';
 import { aiChatStream, type AiChatMessage } from '../lib/ai-ipc';
-import { listCharacterNames } from '../lib/character-ipc';
+import { listCharacterNames, listCharacters } from '../lib/character-ipc';
+import type { Character } from '../lib/character-types';
 
 interface AiMessage {
   id: string;
@@ -77,6 +78,31 @@ export function StoryEditor() {
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [rightTab, setRightTab] = useState<'ai' | 'characters'>('ai');
   const [characterNames, setCharacterNames] = useState<string[]>([]);
+  const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
+  const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
+
+  // Build character context for AI system prompt
+  const buildCharacterContext = useCallback((chars: Character[]): string => {
+    if (chars.length === 0) return '';
+    return chars.map(c => {
+      const parts: string[] = [];
+      parts.push(`- ${c.name}`);
+      if (c.aliases.length > 0) parts.push(`  别名: ${c.aliases.join(', ')}`);
+      if (c.gender) parts.push(`  性别: ${c.gender}`);
+      if (c.age) parts.push(`  年龄: ${c.age}`);
+      if (c.personality) parts.push(`  性格: ${c.personality}`);
+      if (c.stance) parts.push(`  立场: ${c.stance}`);
+      if (c.keywords.length > 0) parts.push(`  关键词: ${c.keywords.join(', ')}`);
+      if (c.description) parts.push(`  简介: ${c.description}`);
+      if (c.dialogueStyle) parts.push(`  口吻风格: ${c.dialogueStyle}`);
+      if (c.relations.length > 0) {
+        const rels = c.relations.map(r => `${r.relationType}(→${r.targetId})`).join(', ');
+        if (rels) parts.push(`  关系: ${rels}`);
+      }
+      return parts.join('\n');
+    }).join('\n\n');
+  }, []);
+
   const aiCancelRef = useRef<(() => void) | null>(null);
   const aiStreamingIdRef = useRef<string | null>(null);
   const aiMessagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -121,9 +147,18 @@ export function StoryEditor() {
         // Load character names for autocomplete
         try {
           const refs = await listCharacterNames(storedPath);
+          const chars = await listCharacters(storedPath);
           setCharacterNames(refs.map(r => r.name));
+          const colors: Record<string, string> = {};
+          for (const c of chars) {
+            if (c.colorTheme) colors[c.name] = c.colorTheme;
+          }
+          setCharacterColors(colors);
+          setCharactersForAi(chars);
         } catch {
           setCharacterNames([]);
+          setCharacterColors({});
+          setCharactersForAi([]);
         }
       } else {
         // No project path — just load demo script
@@ -304,9 +339,18 @@ export function StoryEditor() {
       // Load character names for autocomplete
       try {
         const refs = await listCharacterNames(selected);
+        const chars = await listCharacters(selected);
         setCharacterNames(refs.map(r => r.name));
+        const colors: Record<string, string> = {};
+        for (const c of chars) {
+          if (c.colorTheme) colors[c.name] = c.colorTheme;
+        }
+        setCharacterColors(colors);
+        setCharactersForAi(chars);
       } catch {
         setCharacterNames([]);
+        setCharacterColors({});
+        setCharactersForAi([]);
       }
     } catch (e) {
       console.error('Open project failed:', e);
@@ -446,6 +490,7 @@ export function StoryEditor() {
     };
 
     try {
+      const charCtx = buildCharacterContext(charactersForAi);
       const { cancel } = await aiChatStream(buildAiPayload(aiMessages, text), {
         onChunk: appendChunk,
         onDone: () => {
@@ -466,13 +511,13 @@ export function StoryEditor() {
             ),
           );
         },
-      });
+      }, charCtx || undefined);
       aiCancelRef.current = cancel;
     } catch (e) {
       setAiBusy(false);
       setAiError(String(e));
     }
-  }, [aiBusy, aiMessages, buildAiPayload]);
+  }, [aiBusy, aiMessages, buildAiPayload, buildCharacterContext, charactersForAi]);
 
   const handleAiSend = () => { void sendAiPrompt(aiInput); };
 
@@ -669,6 +714,7 @@ export function StoryEditor() {
               selectedNode={selectedNode}
               onSelectNode={setSelectedNode}
               onAddNode={addNode}
+              characterColors={characterColors}
             />
 
             {selectedNode && (
@@ -710,6 +756,7 @@ export function StoryEditor() {
               selectedNode={selectedNode}
               onSelectNode={setSelectedNode}
               onUpdateNode={updateNode}
+              characterColors={characterColors}
             />
           )}
 
