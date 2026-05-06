@@ -49,6 +49,7 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [isNew, setIsNew] = useState(false);
+  const [recentlySavedId, setRecentlySavedId] = useState<string | null>(null);
   const savingRef = useRef(false);    // synchronous guard against double-save
   const savedIds = useRef(new Set<string>()); // track temp IDs already submitted
 
@@ -87,22 +88,33 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
     // Block re-submit of temp ids already sent to server
     if (ch.id.startsWith('tmp_') && savedIds.current.has(ch.id)) return;
 
+    console.log('[CharacterPanel] Saving character:', ch.id, ch.name);
     savingRef.current = true;
     if (ch.id.startsWith('tmp_')) savedIds.current.add(ch.id);
     setSavingId(ch.id);
     setError(null);
     try {
       if (ch.id.startsWith('tmp_')) {
+        console.log('[CharacterPanel] Creating new character on server...');
         const saved = await createCharacter(projectPath, ch);
+        console.log('[CharacterPanel] Created, server id:', saved.id);
         setCharacters(prev => prev.map(c => c.id === ch.id ? saved : c));
         if (expandedId === ch.id) setExpandedId(saved.id);
         setIsNew(false);
+        setRecentlySavedId(saved.id);
+        setTimeout(() => setRecentlySavedId(null), 1500);
       } else {
+        console.log('[CharacterPanel] Updating character on server...');
         const saved = await updateCharacter(projectPath, ch);
+        console.log('[CharacterPanel] Updated:', saved.id);
         setCharacters(prev => prev.map(c => c.id === ch.id ? saved : c));
+        setRecentlySavedId(saved.id);
+        setTimeout(() => setRecentlySavedId(null), 1500);
       }
     } catch (e) {
+      console.error('[CharacterPanel] Save failed:', e);
       setError(String(e));
+      setIsNew(false);
       if (ch.id.startsWith('tmp_')) savedIds.current.delete(ch.id);
     } finally {
       savingRef.current = false;
@@ -319,9 +331,12 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
                       type="text"
                       value={ch.name}
                       onChange={(e) => handleUpdate(ch.id, { name: e.target.value })}
-                      className={inputClass}
+                      className={`${inputClass} ${!ch.name.trim() ? 'border-destructive/50 focus:ring-destructive/50' : ''}`}
                       placeholder="例: 春日野 穹"
                     />
+                    {!ch.name.trim() && (
+                      <p className="text-[10px] text-destructive mt-0.5">请填写角色名后再保存</p>
+                    )}
                   </div>
 
                   {/* Aliases */}
@@ -535,9 +550,13 @@ export function CharacterPanel({ projectPath, onClose }: Props) {
                     <button
                       onClick={() => handleSave(ch)}
                       disabled={isActiveSaving || !ch.name.trim()}
-                      className="flex-1 px-3 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all text-xs font-medium disabled:opacity-50"
+                      className={`flex-1 px-3 py-2 rounded-md transition-all text-xs font-medium disabled:opacity-50 ${
+                        recentlySavedId === ch.id
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-primary text-primary-foreground hover:opacity-90'
+                      }`}
                     >
-                      {isActiveSaving ? '保存中...' : '保存'}
+                      {isActiveSaving ? '保存中...' : recentlySavedId === ch.id ? '已保存' : '保存'}
                     </button>
                     <button
                       onClick={() => handleDelete(ch.id)}
