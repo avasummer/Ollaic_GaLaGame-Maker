@@ -1,6 +1,7 @@
 import { Sparkles, Trash2, Plus, X } from 'lucide-react';
 import type { WebGalNode, WebGalCommandType } from '../lib/webgal-types';
 import { commandLabels } from '../lib/webgal-types';
+import { AssetPickerButton } from './AssetPicker';
 
 interface DetailPanelProps {
   node: WebGalNode;
@@ -8,6 +9,7 @@ interface DetailPanelProps {
   onDeleteNode: () => void;
   onClose: () => void;
   characterNames?: string[];
+  projectPath?: string;
 }
 
 const typeOptions: { value: WebGalCommandType; label: string }[] = [
@@ -39,7 +41,7 @@ const typeOptions: { value: WebGalCommandType; label: string }[] = [
 const inputClass = 'w-full px-3 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm';
 const labelClass = 'block text-xs uppercase tracking-widest text-muted-foreground mb-1.5';
 
-export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose, characterNames }: DetailPanelProps) {
+export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose, characterNames, projectPath }: DetailPanelProps) {
   return (
     <div className="w-80 border-r border-border bg-card/30 backdrop-blur-sm flex flex-col overflow-hidden">
       {/* Header */}
@@ -75,7 +77,7 @@ export function DetailPanel({ node, onUpdateNode, onDeleteNode, onClose, charact
         </div>
 
         {/* Type-specific fields */}
-        {renderTypeFields(node, onUpdateNode, characterNames)}
+        {renderTypeFields(node, onUpdateNode, characterNames, projectPath)}
 
         {/* Common flags */}
         <div className="pt-3 border-t border-border space-y-3">
@@ -134,6 +136,7 @@ function renderTypeFields(
   node: WebGalNode,
   onUpdate: (updates: Partial<WebGalNode>) => void,
   characterNames?: string[],
+  projectPath?: string,
 ) {
   switch (node.type) {
     case 'dialogue':
@@ -224,14 +227,24 @@ function renderTypeFields(
       return (
         <div>
           <label className={`${labelClass} font-mono-family`}>背景图片</label>
-          <input
-            type="text"
-            value={node.asset || node.content}
-            onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-            className={`${inputClass} font-mono-family`}
-            placeholder="例: bg.webp 或 none"
-            aria-label="背景图片"
-          />
+          <div className="flex gap-1">
+            <input
+              type="text"
+              value={node.asset || node.content}
+              onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
+              className={`${inputClass} flex-1 font-mono-family`}
+              placeholder="例: bg.webp 或 none"
+              aria-label="背景图片"
+            />
+            {projectPath && (
+              <AssetPickerButton
+                projectPath={projectPath}
+                category="background"
+                currentValue={node.asset || node.content}
+                onSelect={(name) => onUpdate({ asset: name, content: name })}
+              />
+            )}
+          </div>
           <p className="text-[10px] text-muted-foreground mt-1">放在 game/background/ 目录下</p>
         </div>
       );
@@ -241,14 +254,24 @@ function renderTypeFields(
         <>
           <div>
             <label className={`${labelClass} font-mono-family`}>立绘文件</label>
-            <input
-              type="text"
-              value={node.asset || node.content}
-              onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-              className={`${inputClass} font-mono-family`}
-              placeholder="例: stand.webp 或 none"
-              aria-label="立绘文件"
-            />
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={node.asset || node.content}
+                onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
+                className={`${inputClass} flex-1 font-mono-family`}
+                placeholder="例: stand.webp 或 none"
+                aria-label="立绘文件"
+              />
+              {projectPath && (
+                <AssetPickerButton
+                  projectPath={projectPath}
+                  category="figure"
+                  currentValue={node.asset || node.content}
+                  onSelect={(name) => onUpdate({ asset: name, content: name })}
+                />
+              )}
+            </div>
             <p className="text-[10px] text-muted-foreground mt-1">放在 game/figure/ 目录下</p>
           </div>
           <div>
@@ -282,14 +305,24 @@ function renderTypeFields(
       return (
         <div>
           <label className={`${labelClass} font-mono-family`}>小头像文件</label>
-          <input
-            type="text"
-            value={node.asset || node.content}
-            onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-            className={`${inputClass} font-mono-family`}
-            placeholder="例: miniavatar.webp 或 none"
-            aria-label="小头像文件"
-          />
+          <div className="flex gap-1">
+            <input
+              type="text"
+              value={node.asset || node.content}
+              onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
+              className={`${inputClass} flex-1 font-mono-family`}
+              placeholder="例: miniavatar.webp 或 none"
+              aria-label="小头像文件"
+            />
+            {projectPath && (
+              <AssetPickerButton
+                projectPath={projectPath}
+                category="figure"
+                currentValue={node.asset || node.content}
+                onSelect={(name) => onUpdate({ asset: name, content: name })}
+              />
+            )}
+          </div>
         </div>
       );
 
@@ -328,14 +361,24 @@ function renderTypeFields(
             <label className={`${labelClass} font-mono-family`}>
               {node.type === 'bgm' ? '音乐文件' : node.type === 'playEffect' ? '音效文件' : '视频文件'}
             </label>
-            <input
-              type="text"
-              value={node.asset || node.content}
-              onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-              className={`${inputClass} font-mono-family`}
-              placeholder={node.type === 'bgm' ? '例: bgm.mp3 或 none' : '例: effect.mp3'}
-              aria-label={node.type === 'bgm' ? '音乐文件' : node.type === 'playEffect' ? '音效文件' : '视频文件'}
-            />
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={node.asset || node.content}
+                onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
+                className={`${inputClass} flex-1 font-mono-family`}
+                placeholder={node.type === 'bgm' ? '例: bgm.mp3 或 none' : '例: effect.mp3'}
+                aria-label={node.type === 'bgm' ? '音乐文件' : node.type === 'playEffect' ? '音效文件' : '视频文件'}
+              />
+              {projectPath && (
+                <AssetPickerButton
+                  projectPath={projectPath}
+                  category={node.type === 'playEffect' ? 'sfx' : node.type === 'playVideo' ? 'video' : 'bgm'}
+                  currentValue={node.asset || node.content}
+                  onSelect={(name) => onUpdate({ asset: name, content: name })}
+                />
+              )}
+            </div>
           </div>
           <div>
             <label className={`${labelClass} font-mono-family`}>音量 (0-100)</label>

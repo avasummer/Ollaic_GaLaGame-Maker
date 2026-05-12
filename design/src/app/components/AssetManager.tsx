@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
@@ -39,7 +39,7 @@ type TabId = 'scene' | 'music' | 'character';
 function tabToCategories(tab: TabId): string[] {
   switch (tab) {
     case 'scene': return ['background'];
-    case 'music': return ['bgm', 'vocal'];
+    case 'music': return ['bgm', 'sfx', 'vocal'];
     case 'character': return ['figure'];
   }
 }
@@ -222,9 +222,24 @@ export function AssetManager() {
     }
   }, [selectedAsset]);
 
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
   const handlePlayToggle = useCallback((assetPath: string) => {
     setPlayingAudio(prev => prev === assetPath ? null : assetPath);
   }, []);
+
+  // Audio playback wiring
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playingAudio) {
+      audio.src = convertFileSrc(playingAudio);
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+      audio.src = '';
+    }
+  }, [playingAudio]);
 
   // Thumbnail URL
   const getThumbnail = (asset: AssetInfo): string | null => {
@@ -644,6 +659,12 @@ export function AssetManager() {
           </aside>
         </div>
       )}
+      <audio
+        ref={audioRef}
+        onEnded={() => setPlayingAudio(null)}
+        className="hidden"
+        aria-label="音频播放器"
+      />
     </div>
   );
 }

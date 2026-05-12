@@ -21,6 +21,7 @@ fn main() {
             webgal::project::save_config,
             webgal::project::get_scene_path,
             webgal::project::create_scene,
+            webgal::project::export_project,
             // AI
             ai::commands::get_ai_config,
             ai::commands::set_ai_config,

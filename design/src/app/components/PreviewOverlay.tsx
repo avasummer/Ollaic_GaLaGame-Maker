@@ -1,18 +1,28 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { X, ChevronDown, Volume2, Music } from 'lucide-react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import type { WebGalNode, ChoiceBranch } from '../lib/webgal-types';
 
 interface Props {
-  nodes: WebGalNode[];
+  /** Initial scene file to load, e.g. "start.txt" */
+  initialScene: string;
   projectPath: string;
   onClose: () => void;
+  /** Callback to load a scene by filename. PreviewOverlay calls this to follow scene transitions. */
+  onLoadScene: (sceneName: string) => Promise<WebGalNode[]>;
 }
 
 interface FigureState {
   asset: string;
   position: 'left' | 'center' | 'right';
-  id: string; // composite key for figure tracking
+  id: string;
+}
+
+/** Stack frame for callScene — remembers where to return. */
+interface SceneFrame {
+  nodes: WebGalNode[];
+  returnIdx: number;
+  sceneName: string;
 }
 
 function assetUrl(projectPath: string, category: string, name: string): string {
@@ -20,17 +30,24 @@ function assetUrl(projectPath: string, category: string, name: string): string {
   return convertFileSrc(`${projectPath}/game/${category}/${name}`);
 }
 
-export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
-  // --- labels map (build once) ---
-  const labelMap = useMemo(() => {
-    const map: Record<string, number> = {};
-    nodes.forEach((n, idx) => {
-      if (n.type === 'label' && n.labelName) {
-        map[n.labelName] = idx;
-      }
-    });
-    return map;
-  }, [nodes]);
+/** Resolve audio path: tries primary category first, then falls back to bgm. */
+function audioUrl(projectPath: string, categories: string[], name: string): string | null {
+  if (!name || name === 'none') return null;
+  for (const cat of categories) {
+    const url = assetUrl(projectPath, cat, name);
+    // We can't check existence from renderer, so return the first match.
+    return url;
+  }
+  return null;
+}
+
+export function PreviewOverlay({ initialScene, projectPath, onClose, onLoadScene }: Props) {
+  // --- scene execution state ---
+  const [nodes, setNodes] = useState<WebGalNode[]>([]);
+  const [sceneName, setSceneName] = useState(initialScene);
+  const [loaded, setLoaded] = useState(false);
+  const sceneStackRef = useRef<SceneFrame[]>([]);
+  const loadingRef = useRef(false);
 
   // --- rendering state ---
   const [bg, setBg] = useState<string | null>(null);
@@ -44,14 +61,46 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
   const [nodeIdx, setNodeIdx] = useState(0);
   const [ended, setEnded] = useState(false);
   const [bgmLabel, setBgmLabel] = useState<string | null>(null);
+  const [bgmSrc, setBgmSrc] = useState<string | null>(null);
   const [effectLabel, setEffectLabel] = useState<string | null>(null);
+  const [effectSrc, setEffectSrc] = useState<string | null>(null);
   const [waitingForClick, setWaitingForClick] = useState(false);
+
+  // Audio refs
+  const bgmAudioRef = useRef<HTMLAudioElement | null>(null);
+  const sfxAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // --- labels map for current nodes ---
+  const labelMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    nodes.forEach((n, idx) => {
+      if (n.type === 'label' && n.labelName) {
+        map[n.labelName] = idx;
+      }
+    });
+    return map;
+  }, [nodes]);
+
+  // --- Load initial scene ---
+  useEffect(() => {
+    let cancelled = false;
+    loadingRef.current = true;
+    onLoadScene(initialScene).then(loadedNodes => {
+      if (cancelled) return;
+      setNodes(loadedNodes);
+      setSceneName(initialScene);
+      setNodeIdx(0);
+      setEnded(false);
+      setLoaded(true);
+      loadingRef.current = false;
+    });
+    return () => { cancelled = true; };
+  }, [initialScene, onLoadScene]);
 
   // --- evaluate when condition ---
   const evalWhen = useCallback((when: string | undefined): boolean => {
     if (!when) return true;
     try {
-      // Simple expressions: varName == value, varName != value, varName > value, etc.
       const expr = when.trim();
       const ops = ['>=', '<=', '!=', '==', '>', '<'];
       for (const op of ops) {
@@ -77,9 +126,65 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
     return true;
   }, [vars]);
 
-  // --- process a single node ---
-  const processNode = useCallback((node: WebGalNode): 'continue' | 'wait' | 'end' => {
-    // Check when condition
+  // --- Load a new scene (for changeScene / callScene / choose targets) ---
+  const switchToScene = useCallback(async (target: string, pushReturn: boolean) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      const newNodes = await onLoadScene(target);
+
+      if (pushReturn) {
+        // callScene: push current position to stack
+        sceneStackRef.current.push({
+          nodes,
+          returnIdx: nodeIdx + 1, // resume AFTER the callScene command
+          sceneName,
+        });
+      } else {
+        // changeScene or choose-to-scene: clear the stack
+        sceneStackRef.current = [];
+      }
+
+      setNodes(newNodes);
+      setSceneName(target);
+      setNodeIdx(0);
+      setBg(null);
+      setFigures([]);
+      setTextbox(null);
+      setChoices(null);
+      setIntroLines(null);
+      setEnded(false);
+      setWaitingForClick(false);
+      // Note: vars, bgm are preserved across scene changes
+    } catch {
+      setTextbox({ text: `[无法加载场景: ${target}]` });
+      setWaitingForClick(true);
+    } finally {
+      loadingRef.current = false;
+    }
+  }, [nodes, nodeIdx, sceneName, onLoadScene]);
+
+  // --- Return from callScene ---
+  const returnFromCall = useCallback(() => {
+    const frame = sceneStackRef.current.pop();
+    if (!frame) {
+      setEnded(true);
+      return;
+    }
+    setNodes(frame.nodes);
+    setSceneName(frame.sceneName);
+    setNodeIdx(frame.returnIdx);
+    setChoices(null);
+    setWaitingForClick(false);
+    setBg(null);
+    setFigures([]);
+    setTextbox(null);
+    setIntroLines(null);
+    // Audio keeps playing (BGM is global)
+  }, []);
+
+  // --- Process a single node ---
+  const processNode = useCallback((node: WebGalNode): 'continue' | 'wait' | 'end' | 'switch' => {
     if (!evalWhen(node.when)) {
       return 'continue';
     }
@@ -114,25 +219,34 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
         break;
       }
 
-      case 'miniAvatar': {
-        // For now, miniAvatar changes the mini display but we don't render it in preview
+      case 'miniAvatar':
         break;
-      }
 
       case 'bgm': {
-        setBgmLabel(node.asset || node.content || null);
+        const name = node.asset || node.content;
+        if (!name || name === 'none') {
+          setBgmLabel(null);
+          setBgmSrc(null);
+        } else {
+          setBgmLabel(name);
+          const src = assetUrl(projectPath, 'bgm', name);
+          setBgmSrc(src);
+        }
         break;
       }
 
       case 'playEffect': {
-        setEffectLabel(node.asset || node.content || null);
-        // Auto-clear after 2s
-        setTimeout(() => setEffectLabel(null), 2000);
+        const name = node.asset || node.content;
+        if (name && name !== 'none') {
+          setEffectLabel(name);
+          // SFX from sfx/ directory, fallback to bgm/
+          const src = assetUrl(projectPath, 'sfx', name) || assetUrl(projectPath, 'bgm', name);
+          setEffectSrc(src);
+        }
         break;
       }
 
       case 'playVideo': {
-        // Can't play video in preview — show indicator
         setTextbox({ text: `[视频: ${node.asset || node.content || '(无名称)'}]` });
         setWaitingForClick(true);
         return 'wait';
@@ -175,17 +289,17 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
         break;
       }
 
-      case 'label': {
-        // labels are just reference points, no rendering
+      case 'label':
         break;
-      }
 
       case 'jumpLabel': {
         const target = node.labelName || node.content;
         if (target && labelMap[target] !== undefined) {
           setChoices(null);
           setWaitingForClick(false);
-          setNodeIdx(labelMap[target]);
+          const targetIdx = labelMap[target];
+          // Immediate jump — handled by advance / useEffect
+          queueMicrotask(() => setNodeIdx(targetIdx));
           return 'continue';
         }
         break;
@@ -200,7 +314,6 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       }
 
       case 'setTextbox': {
-        // content is typically "hide" or "show"
         if (node.content === 'hide') setTextboxVisible(false);
         else setTextboxVisible(true);
         break;
@@ -213,42 +326,52 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       }
 
       case 'setAnimation': {
-        // Show indicator
         setEffectLabel(`动画: ${node.animationName || node.content || ''}`);
         setTimeout(() => setEffectLabel(null), 2000);
         break;
       }
 
-      case 'setTransform': {
-        // Skip — no WebGL rendering in preview
+      case 'setTransform':
+        break;
+
+      case 'changeScene': {
+        const target = node.targetScene || node.content;
+        if (target) {
+          switchToScene(target, false);
+          return 'switch';
+        }
         break;
       }
 
-      case 'changeScene':
       case 'callScene': {
         const target = node.targetScene || node.content;
-        setTextbox({ text: `[切换场景: → ${target || '(未知)'}]` });
-        setWaitingForClick(true);
-        return 'wait';
+        if (target) {
+          switchToScene(target, true);
+          return 'switch';
+        }
+        break;
       }
 
       case 'end': {
+        // If we have a stack, return to caller; otherwise end the game
+        if (sceneStackRef.current.length > 0) {
+          queueMicrotask(() => returnFromCall());
+          return 'switch';
+        }
         setEnded(true);
         setWaitingForClick(false);
         return 'end';
       }
 
       case 'unlockCg':
-      case 'unlockBgm': {
-        // gallery unlocks — skip in preview
+      case 'unlockBgm':
         break;
-      }
     }
 
     return 'continue';
-  }, [evalWhen, labelMap]);
+  }, [evalWhen, labelMap, projectPath, switchToScene, returnFromCall]);
 
-  // --- advance to next node ---
+  // --- Advance to next node ---
   const advance = useCallback(() => {
     setChoices(null);
     setWaitingForClick(false);
@@ -259,7 +382,6 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       return;
     }
 
-    // Find next node via connections
     const nextIds = current.connections;
     let nextNode: WebGalNode | undefined;
     if (nextIds.length > 0) {
@@ -267,24 +389,60 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
     }
 
     if (!nextNode) {
+      // No connections in this scene — end or return from call
+      if (sceneStackRef.current.length > 0) {
+        returnFromCall();
+        return;
+      }
       setEnded(true);
       return;
     }
 
     const nextIdx = nodes.indexOf(nextNode);
     if (nextIdx === -1) {
+      if (sceneStackRef.current.length > 0) {
+        returnFromCall();
+        return;
+      }
       setEnded(true);
       return;
     }
 
     setNodeIdx(nextIdx);
-  }, [nodeIdx, nodes]);
+  }, [nodeIdx, nodes, returnFromCall]);
 
-  // --- click-to-continue ---
+  // --- Audio playback: BGM ---
+  useEffect(() => {
+    const audio = bgmAudioRef.current;
+    if (!audio) return;
+    if (bgmSrc) {
+      audio.src = bgmSrc;
+      audio.loop = true;
+      audio.volume = 0.6;
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+      audio.src = '';
+    }
+  }, [bgmSrc]);
+
+  // --- Audio playback: SFX ---
+  useEffect(() => {
+    const audio = sfxAudioRef.current;
+    if (!audio) return;
+    if (effectSrc) {
+      audio.src = effectSrc;
+      audio.loop = false;
+      audio.volume = 0.8;
+      audio.play().catch(() => {});
+      setEffectSrc(null); // one-shot, clear after play
+    }
+  }, [effectSrc]);
+
+  // --- Click to continue ---
   const handleClick = useCallback(() => {
-    if (ended || choices) return; // choices are handled separately
+    if (ended || choices) return;
 
-    // If in intro mode, advance intro lines
     if (introLines && introIndex < introLines.length - 1) {
       setIntroIndex(i => i + 1);
       return;
@@ -299,45 +457,42 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
     advance();
   }, [ended, choices, introLines, introIndex, advance]);
 
-  // --- choose handler ---
-  const handleChoice = useCallback((choice: ChoiceBranch) => {
+  // --- Choose handler ---
+  const handleChoice = useCallback(async (choice: ChoiceBranch) => {
     setChoices(null);
     setWaitingForClick(false);
 
     if (!choice.target) {
-      // No target — follow normal connection
       advance();
       return;
     }
 
-    // If target is a .txt file, show scene switch
+    // If target is a .txt file, switch to that scene
     if (choice.target.endsWith('.txt')) {
-      setTextbox({ text: `[切换场景: → ${choice.target}]` });
-      setWaitingForClick(true);
+      switchToScene(choice.target, false);
       return;
     }
 
-    // Try label jump
+    // Try label jump in current scene
     if (labelMap[choice.target] !== undefined) {
       setNodeIdx(labelMap[choice.target]);
       return;
     }
 
-    // Fallback: try to find a label node by matching
     const labelNode = nodes.find(n => n.type === 'label' && n.labelName === choice.target);
     if (labelNode) {
       setNodeIdx(nodes.indexOf(labelNode));
       return;
     }
 
-    // No match — show and advance
+    // No match
     setTextbox({ text: `[跳转: → ${choice.target}]` });
     setWaitingForClick(true);
-  }, [advance, labelMap, nodes]);
+  }, [advance, labelMap, nodes, switchToScene]);
 
-  // --- process current node on mount and after state changes ---
+  // --- Process current node ---
   useEffect(() => {
-    if (ended) return;
+    if (ended || !loaded) return;
     if (nodeIdx < 0 || nodeIdx >= nodes.length) {
       setEnded(true);
       return;
@@ -349,19 +504,17 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       return;
     }
 
-    // Don't auto-process if we're waiting for user interaction
     if (waitingForClick || choices) return;
 
     const result = processNode(node);
 
     if (result === 'continue') {
-      // Auto-advance (either -next or non-blocking command)
       advance();
     }
-    // 'wait' and 'end' are handled by setting states
-  }, [nodeIdx, ended, nodes, processNode, advance, waitingForClick, choices]);
+    // 'wait', 'end', 'switch' handled by state setters
+  }, [nodeIdx, ended, nodes, processNode, advance, waitingForClick, choices, loaded]);
 
-  // --- keyboard ---
+  // --- Keyboard ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -377,7 +530,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleClick, onClose]);
 
-  // --- build figure position class ---
+  // --- Figure position class ---
   const figurePosClass = (pos: string) => {
     switch (pos) {
       case 'left': return 'left-[8%]';
@@ -391,6 +544,10 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       className="fixed inset-0 z-[60] bg-black select-none font-body-family"
       onClick={handleClick}
     >
+      {/* Hidden audio elements */}
+      <audio ref={bgmAudioRef} />
+      <audio ref={sfxAudioRef} />
+
       {/* Background */}
       {bg && (
         <img
@@ -434,9 +591,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       {/* Intro overlay */}
       {introLines && (
         <div className="absolute inset-0 bg-black flex items-center justify-center z-10">
-          <p
-            className="text-white/90 text-2xl text-center px-12 transition-opacity duration-500 animate-in fade-in font-display-family"
-          >
+          <p className="text-white/90 text-2xl text-center px-12 transition-opacity duration-500 animate-in fade-in font-display-family">
             {introLines[introIndex]}
           </p>
         </div>
@@ -471,7 +626,6 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
             <p className="text-white/90 text-lg leading-relaxed">{textbox.text}</p>
           </div>
 
-          {/* Click indicator */}
           <div className="absolute bottom-3 right-6 animate-bounce">
             <ChevronDown className="w-5 h-5 text-white/40" />
           </div>
@@ -482,7 +636,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
       {ended && (
         <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20">
           <p className="text-white/60 text-2xl mb-4 font-display-family">
-            预览结束
+            游戏结束
           </p>
           <button
             onClick={onClose}
@@ -503,7 +657,7 @@ export function PreviewOverlay({ nodes, projectPath, onClose }: Props) {
         <X className="w-5 h-5" />
       </button>
 
-      {/* Hint text */}
+      {/* Hint */}
       {!ended && !choices && !introLines && (
         <div className="absolute top-4 left-4 text-white/20 text-xs z-10">
           点击或按空格键继续 · Esc 退出
