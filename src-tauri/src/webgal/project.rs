@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Manager};
 
 /// WebGAL game/ subdirectory structure.
 const GAME_DIRS: &[&str] = &[
@@ -78,7 +79,7 @@ fn serialize_config(config: &HashMap<String, String>) -> String {
 /// Initialize a new WebGAL project at `base_dir/name/`.
 /// Creates the full game/ directory structure and config.txt.
 #[tauri::command]
-pub fn init_project(base_dir: String, name: String) -> Result<ProjectInfo, String> {
+pub fn init_project(app: AppHandle, base_dir: String, name: String) -> Result<ProjectInfo, String> {
     let root = PathBuf::from(&base_dir).join(&name);
     let game = root.join("game");
 
@@ -110,6 +111,10 @@ pub fn init_project(base_dir: String, name: String) -> Result<ProjectInfo, Strin
     fs::write(&start_path, "; 在这里开始你的故事\n")
         .map_err(|e| format!("Failed to write start.txt: {}", e))?;
 
+    app.asset_protocol_scope()
+        .allow_directory(&game, true)
+        .map_err(|e| format!("Failed to allow asset directory {}: {}", game.display(), e))?;
+
     Ok(ProjectInfo {
         path: root.to_string_lossy().to_string(),
         config,
@@ -120,7 +125,7 @@ pub fn init_project(base_dir: String, name: String) -> Result<ProjectInfo, Strin
 /// Open an existing WebGAL project by its root directory path.
 /// Reads config.txt and lists scene files.
 #[tauri::command]
-pub fn open_project(path: String) -> Result<ProjectInfo, String> {
+pub fn open_project(app: AppHandle, path: String) -> Result<ProjectInfo, String> {
     let root = PathBuf::from(&path);
     let game = root.join("game");
 
@@ -143,6 +148,10 @@ pub fn open_project(path: String) -> Result<ProjectInfo, String> {
 
     // List scenes
     let scenes = list_txt_files(&game.join("scene"))?;
+
+    app.asset_protocol_scope()
+        .allow_directory(&game, true)
+        .map_err(|e| format!("Failed to allow asset directory {}: {}", game.display(), e))?;
 
     Ok(ProjectInfo {
         path: root.to_string_lossy().to_string(),
