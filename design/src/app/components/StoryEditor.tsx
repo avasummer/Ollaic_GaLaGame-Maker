@@ -112,43 +112,6 @@ export function StoryEditor() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const autoSaveRef = useRef<ReturnType<typeof setInterval>>();
 
-  // Undo / Redo
-  const [history, setHistory] = useState<WebGalNode[][]>([]);
-  const [historyIdx, setHistoryIdx] = useState(-1);
-
-  const pushHistory = useCallback((nodesSnapshot: WebGalNode[]) => {
-    setHistory(prev => {
-      const trimmed = prev.slice(0, historyIdx + 1);
-      const next = [...trimmed, nodesSnapshot];
-      if (next.length > 50) next.shift();
-      return next;
-    });
-    setHistoryIdx(prev => Math.min(prev + 1, 49));
-  }, [historyIdx]);
-
-  const undo = useCallback(() => {
-    if (historyIdx < 0) return;
-    const prevNodes = history[historyIdx];
-    setNodes(prevNodes);
-    syncScript(prevNodes);
-    setSelectedNode(null);
-    setDirty(true);
-    setSaveStatus('idle');
-    setHistoryIdx(i => i - 1);
-  }, [historyIdx, history, syncScript]);
-
-  const redo = useCallback(() => {
-    if (historyIdx >= history.length - 1) return;
-    const nextIdx = historyIdx + 1;
-    const nextNodes = history[nextIdx];
-    setNodes(nextNodes);
-    syncScript(nextNodes);
-    setSelectedNode(null);
-    setDirty(true);
-    setSaveStatus('idle');
-    setHistoryIdx(nextIdx);
-  }, [historyIdx, history, syncScript]);
-
   // Auto-save wiring
   const [autoSaveInterval, setAutoSaveInterval] = useState(30);
 
@@ -236,6 +199,43 @@ export function StoryEditor() {
     setDirty(true);
     setSaveStatus('idle');
   }, []);
+
+  // Undo / Redo
+  const [history, setHistory] = useState<WebGalNode[][]>([]);
+  const [historyIdx, setHistoryIdx] = useState(-1);
+
+  const pushHistory = useCallback((nodesSnapshot: WebGalNode[]) => {
+    setHistory(prev => {
+      const trimmed = prev.slice(0, historyIdx + 1);
+      const next = [...trimmed, nodesSnapshot];
+      if (next.length > 50) next.shift();
+      return next;
+    });
+    setHistoryIdx(prev => Math.min(prev + 1, 49));
+  }, [historyIdx]);
+
+  const undo = useCallback(() => {
+    if (historyIdx < 0) return;
+    const prevNodes = history[historyIdx];
+    setNodes(prevNodes);
+    syncScript(prevNodes);
+    setSelectedNode(null);
+    setDirty(true);
+    setSaveStatus('idle');
+    setHistoryIdx(i => i - 1);
+  }, [historyIdx, history, syncScript]);
+
+  const redo = useCallback(() => {
+    if (historyIdx >= history.length - 1) return;
+    const nextIdx = historyIdx + 1;
+    const nextNodes = history[nextIdx];
+    setNodes(nextNodes);
+    syncScript(nextNodes);
+    setSelectedNode(null);
+    setDirty(true);
+    setSaveStatus('idle');
+    setHistoryIdx(nextIdx);
+  }, [historyIdx, history, syncScript]);
 
   // Record history before mutation
   const recordHistory = useCallback((currentNodes: WebGalNode[]) => {
