@@ -16,6 +16,7 @@ fn category_to_dir(category: &str) -> Option<&'static str> {
         "scene" | "background" => Some("background"),
         "character" | "figure" => Some("figure"),
         "music" | "bgm" => Some("bgm"),
+        "sfx" => Some("sfx"),
         "vocal" => Some("vocal"),
         "video" => Some("video"),
         "animation" => Some("animation"),
@@ -92,7 +93,7 @@ pub fn list_assets(project_path: String, category: String) -> Result<Vec<AssetIn
 /// List assets across all subdirectories (used for "all" view).
 #[tauri::command]
 pub fn list_all_assets(project_path: String) -> Result<Vec<AssetInfo>, String> {
-    let dirs = ["background", "figure", "bgm", "vocal", "video", "animation", "tex"];
+    let dirs = ["background", "figure", "bgm", "sfx", "vocal", "video", "animation", "tex"];
     let mut all = Vec::new();
     for d in &dirs {
         let dir = PathBuf::from(&project_path).join("game").join(d);

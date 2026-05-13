@@ -5,6 +5,7 @@ import { HTML5Backend } from 'react-dnd-html5-backend';
 import {
   Sparkles, Save, Play, Settings, Image, ArrowLeft, Send,
   Upload, Download, FileText, FolderOpen, FilePlus, Check, Loader2, SlidersHorizontal, Users,
+  Undo2, Redo2, Package,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { NodePanel } from './NodePanel';
@@ -12,12 +13,13 @@ import { FlowCanvas } from './FlowCanvas';
 import { DetailPanel } from './DetailPanel';
 import { AiSettingsDialog } from './AiSettingsDialog';
 import { PreviewOverlay } from './PreviewOverlay';
-import { AppSettingsDialog } from './AppSettingsDialog';
+import { AppSettingsDialog, loadAppSettings } from './AppSettingsDialog';
 import { CharacterPanel } from './CharacterPanel';
 import type { WebGalNode, WebGalCommandType } from '../lib/webgal-types';
 import {
   parseScene, serializeScene, saveScene, loadScene,
   openProject, getScenePath, createScene,
+  exportProject,
   type ProjectInfo,
 } from '../lib/webgal-ipc';
 import { aiChatStream, type AiChatMessage } from '../lib/ai-ipc';
@@ -108,6 +110,15 @@ export function StoryEditor() {
   const aiMessagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const autoSaveRef = useRef<ReturnType<typeof setInterval>>();
+
+  // Auto-save wiring
+  const [autoSaveInterval, setAutoSaveInterval] = useState(30);
+
+  useEffect(() => {
+    const settings = loadAppSettings();
+    setAutoSaveInterval(settings.autoSaveInterval);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Initialization: try to load project from localStorage or URL params
@@ -189,21 +200,80 @@ export function StoryEditor() {
     setSaveStatus('idle');
   }, []);
 
+  // Undo / Redo
+  const [history, setHistory] = useState<WebGalNode[][]>([]);
+  const [historyIdx, setHistoryIdx] = useState(-1);
+
+  const pushHistory = useCallback((nodesSnapshot: WebGalNode[]) => {
+    setHistory(prev => {
+      const trimmed = prev.slice(0, historyIdx + 1);
+      const next = [...trimmed, nodesSnapshot];
+      if (next.length > 50) next.shift();
+      return next;
+    });
+    setHistoryIdx(prev => Math.min(prev + 1, 49));
+  }, [historyIdx]);
+
+  const undo = useCallback(() => {
+    if (historyIdx < 0) return;
+    const prevNodes = history[historyIdx];
+    setNodes(prevNodes);
+    syncScript(prevNodes);
+    setSelectedNode(null);
+    setDirty(true);
+    setSaveStatus('idle');
+    setHistoryIdx(i => i - 1);
+  }, [historyIdx, history, syncScript]);
+
+  const redo = useCallback(() => {
+    if (historyIdx >= history.length - 1) return;
+    const nextIdx = historyIdx + 1;
+    const nextNodes = history[nextIdx];
+    setNodes(nextNodes);
+    syncScript(nextNodes);
+    setSelectedNode(null);
+    setDirty(true);
+    setSaveStatus('idle');
+    setHistoryIdx(nextIdx);
+  }, [historyIdx, history, syncScript]);
+
+  // Record history before mutation
+  const recordHistory = useCallback((currentNodes: WebGalNode[]) => {
+    pushHistory(currentNodes);
+  }, [pushHistory]);
+
+  // Debounce timer for merging successive updateNode calls to the same node
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const pendingRecordRef = useRef<WebGalNode[] | null>(null);
+
   // ---------------------------------------------------------------------------
   // Node CRUD
   // ---------------------------------------------------------------------------
   const updateNode = useCallback((id: string, updates: Partial<WebGalNode>) => {
     setNodes(prev => {
+      // Record history (debounced: same-node updates within 500ms are merged)
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      if (!pendingRecordRef.current) {
+        pendingRecordRef.current = prev;
+      }
+      debounceTimerRef.current = setTimeout(() => {
+        if (pendingRecordRef.current) {
+          pushHistory(pendingRecordRef.current);
+          pendingRecordRef.current = null;
+        }
+      }, 500);
+
       const next = prev.map(n => n.id === id ? { ...n, ...updates } : n);
       syncScript(next);
       return next;
     });
     setSelectedNode(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
     markDirty();
-  }, [syncScript, markDirty]);
+  }, [syncScript, markDirty, pushHistory]);
 
   const deleteNode = useCallback((id: string) => {
     setNodes(prev => {
+      pushHistory(prev);
       const next = prev
         .filter(n => n.id !== id)
         .map(n => ({ ...n, connections: n.connections.filter(c => c !== id) }));
@@ -212,10 +282,11 @@ export function StoryEditor() {
     });
     setSelectedNode(null);
     markDirty();
-  }, [syncScript, markDirty]);
+  }, [syncScript, markDirty, pushHistory]);
 
   const addNode = useCallback((type: WebGalCommandType) => {
     setNodes(prev => {
+      pushHistory(prev);
       const id = Date.now().toString();
       const lastNode = prev[prev.length - 1];
       const newNode: WebGalNode = {
@@ -251,7 +322,7 @@ export function StoryEditor() {
       return updated;
     });
     markDirty();
-  }, [syncScript, markDirty]);
+  }, [syncScript, markDirty, pushHistory]);
 
   // ---------------------------------------------------------------------------
   // Save
@@ -300,6 +371,36 @@ export function StoryEditor() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [handleSave]);
+
+  // Undo/Redo shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [undo, redo]);
+
+  // Auto-save: periodic save when dirty
+  useEffect(() => {
+    if (autoSaveInterval <= 0 || !projectPath) return;
+    if (autoSaveRef.current) clearInterval(autoSaveRef.current);
+    autoSaveRef.current = setInterval(() => {
+      if (dirty) {
+        handleSave();
+      }
+    }, autoSaveInterval * 1000);
+    return () => {
+      if (autoSaveRef.current) clearInterval(autoSaveRef.current);
+    };
+  }, [autoSaveInterval, dirty, handleSave, projectPath]);
 
   // ---------------------------------------------------------------------------
   // Open project folder
@@ -441,6 +542,39 @@ export function StoryEditor() {
     setShowScript(false);
     markDirty();
   }, [scriptSource, markDirty]);
+
+  // Export project to runnable WebGAL package
+  const handleExportProject = useCallback(async () => {
+    if (!projectPath) return;
+    // Save current scene first
+    if (dirty) await handleSave();
+
+    const dest = await saveDialog({
+      title: '选择导出目录',
+      directory: true,
+    });
+    if (!dest) return;
+
+    try {
+      const result = await exportProject(projectPath, dest, false);
+      if (result.success) {
+        let msg = `导出成功！游戏已保存至 ${dest}`;
+        if (result.warnings.length > 0) {
+          msg += `\n\n警告:\n${result.warnings.join('\n')}`;
+        }
+        alert(msg);
+      }
+    } catch (e) {
+      alert(`导出失败: ${e}`);
+    }
+  }, [projectPath, dirty, handleSave]);
+
+  // Load a scene by name (for PreviewOverlay)
+  const handleLoadScene = useCallback(async (sceneName: string): Promise<WebGalNode[]> => {
+    if (!projectPath) return [];
+    const scenePath = await getScenePath(projectPath, sceneName);
+    return loadScene(scenePath);
+  }, [projectPath]);
 
   // ---------------------------------------------------------------------------
   // AI chat
@@ -667,13 +801,45 @@ export function StoryEditor() {
               >
                 <SlidersHorizontal className="w-4 h-4" />
               </button>
+              {/* Undo / Redo */}
+              <button
+                onClick={undo}
+                disabled={historyIdx < 0}
+                className="p-2 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-30"
+                title="撤销 (Ctrl+Z)"
+                aria-label="撤销"
+              >
+                <Undo2 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={redo}
+                disabled={historyIdx >= history.length - 1}
+                className="p-2 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-30"
+                title="重做 (Ctrl+Shift+Z)"
+                aria-label="重做"
+              >
+                <Redo2 className="w-4 h-4" />
+              </button>
+              <div className="h-6 w-px bg-border mx-1" />
+              {projectPath && (
+                <button
+                  onClick={handleExportProject}
+                  className="px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 text-sm"
+                  title="导出为 WebGAL 可运行包"
+                  aria-label="导出项目"
+                >
+                  <Package className="w-3.5 h-3.5" />
+                  <span>导出</span>
+                </button>
+              )}
               <button
                 onClick={() => setPreviewOpen(true)}
-                className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
-                title="预览场景"
-                aria-label="预览场景"
+                className="px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 text-sm"
+                title={projectPath ? '从头开始试玩游戏' : '预览当前场景'}
+                aria-label="预览游戏"
               >
-                <Play className="w-4 h-4" />
+                <Play className="w-3.5 h-3.5" />
+                <span>试玩</span>
               </button>
 
               {/* Save button with status */}
@@ -724,6 +890,7 @@ export function StoryEditor() {
                 onDeleteNode={() => deleteNode(selectedNode.id)}
                 onClose={() => setSelectedNode(null)}
                 characterNames={characterNames}
+                projectPath={projectPath || undefined}
               />
             )}
           </div>
@@ -920,9 +1087,10 @@ export function StoryEditor() {
 
         {previewOpen && projectPath && (
           <PreviewOverlay
-            nodes={nodes}
+            initialScene="start.txt"
             projectPath={projectPath}
             onClose={() => setPreviewOpen(false)}
+            onLoadScene={handleLoadScene}
           />
         )}
       </div>

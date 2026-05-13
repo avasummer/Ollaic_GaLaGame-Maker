@@ -69,3 +69,17 @@ export async function getScenePath(projectPath: string, sceneName: string): Prom
 export async function createScene(projectPath: string, sceneName: string): Promise<string> {
   return invoke<string>('create_scene', { projectPath, sceneName });
 }
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+export interface ExportResult {
+  success: boolean;
+  warnings: string[];
+}
+
+/** Export a WebGAL project to the given output directory. */
+export async function exportProject(projectPath: string, outputPath: string, asZip?: boolean): Promise<ExportResult> {
+  return invoke<ExportResult>('export_project', { projectPath, outputPath, asZip: asZip ?? false });
+}

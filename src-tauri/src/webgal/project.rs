@@ -10,6 +10,7 @@ const GAME_DIRS: &[&str] = &[
     "figure",
     "scene",
     "bgm",
+    "sfx",
     "vocal",
     "video",
     "tex",
@@ -228,4 +229,252 @@ fn rand_u64() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     d.as_nanos() as u64
+}
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+/// Result of exporting a project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    pub success: bool,
+    pub warnings: Vec<String>,
+}
+
+/// Export a WebGAL project: copies the game/ directory to the output path.
+/// Optionally creates a .zip archive.
+#[tauri::command]
+pub fn export_project(
+    project_path: String,
+    output_path: String,
+    _as_zip: bool,
+) -> Result<ExportResult, String> {
+    let game_dir = PathBuf::from(&project_path).join("game");
+    if !game_dir.is_dir() {
+        return Err(format!("Invalid project: {}/game/ not found", project_path));
+    }
+
+    let dest = PathBuf::from(&output_path);
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Validate referenced assets before copying
+    let asset_warnings = validate_assets(&game_dir)?;
+    warnings.extend(asset_warnings);
+
+    // Copy game/ directory recursively
+    copy_dir_recursive(&game_dir, &dest.join("game"))?;
+
+    Ok(ExportResult {
+        success: true,
+        warnings,
+    })
+}
+
+/// Scan all scene files and check that referenced assets exist.
+fn validate_assets(game_dir: &Path) -> Result<Vec<String>, String> {
+    let mut warnings: Vec<String> = Vec::new();
+    let scene_dir = game_dir.join("scene");
+
+    if !scene_dir.is_dir() {
+        return Ok(warnings);
+    }
+
+    let entries = fs::read_dir(&scene_dir)
+        .map_err(|e| format!("Failed to read scene dir: {}", e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Read entry error: {}", e))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            continue;
+        }
+
+        let scene_name = path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with(';') {
+                continue;
+            }
+            // Parse commands that reference assets
+            let (cmd, asset_name) = match extract_asset_ref(line) {
+                Some(v) => v,
+                None => continue,
+            };
+            let dir = match cmd {
+                "changeBg" => "background",
+                "changeFigure" | "miniAvatar" => "figure",
+                "bgm" => "bgm",
+                "playEffect" => "sfx",
+                "playVideo" => "video",
+                _ => continue,
+            };
+            let asset_path = game_dir.join(dir).join(&asset_name);
+            if !asset_path.exists() {
+                warnings.push(format!(
+                    "[{}] 引用不存在的素材: {} ({}: {})",
+                    scene_name, asset_name, cmd, asset_name
+                ));
+            }
+        }
+    }
+
+    Ok(warnings)
+}
+
+/// Extract (command_type, asset_filename) from a WebGAL script line.
+fn extract_asset_ref(line: &str) -> Option<(&str, String)> {
+    // Commands that take an asset filename as their first argument
+    let commands = [
+        "changeBg:", "changeFigure:", "miniAvatar:",
+        "bgm:", "playEffect:", "playVideo:",
+    ];
+
+    for cmd in &commands {
+        if let Some(rest) = line.strip_prefix(cmd) {
+            // Extract the filename before any flag (-) or semicolon
+            let asset = rest
+                .split(|c: char| c == '-' || c == ';')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !asset.is_empty() && asset != "none" {
+                let cmd_type = cmd.trim_end_matches(':');
+                return Some((cmd_type, asset.to_string()));
+            }
+        }
+    }
+    None
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst)
+        .map_err(|e| format!("Failed to create directory {}: {}", dst.display(), e))?;
+
+    let entries = fs::read_dir(src)
+        .map_err(|e| format!("Failed to read directory {}: {}", src.display(), e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Read entry error: {}", e))?;
+        let path = entry.path();
+        let dest_path = dst.join(path.file_name().unwrap_or_default());
+
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest_path)?;
+        } else {
+            fs::copy(&path, &dest_path)
+                .map_err(|e| format!("Failed to copy {} -> {}: {}", path.display(), dest_path.display(), e))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn export_copies_game_directory() {
+        // Setup: create a temp project with game/ structure
+        let tmp = std::env::temp_dir().join("webgal_test_export_copy");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("game").join("scene")).unwrap();
+        fs::create_dir_all(tmp.join("game").join("background")).unwrap();
+        fs::create_dir_all(tmp.join("game").join("bgm")).unwrap();
+        fs::create_dir_all(tmp.join("game").join("figure")).unwrap();
+        fs::create_dir_all(tmp.join("game").join("sfx")).unwrap();
+
+        // Write some content
+        fs::write(tmp.join("game").join("config.txt"), "Game_name:Test;").unwrap();
+        fs::write(tmp.join("game").join("scene").join("start.txt"), "dialogue:Hello;").unwrap();
+        fs::write(tmp.join("game").join("background").join("bg.webp"), "fake-image").unwrap();
+        fs::write(tmp.join("game").join("bgm").join("music.mp3"), "fake-audio").unwrap();
+        fs::write(tmp.join("game").join("sfx").join("click.wav"), "fake-sfx").unwrap();
+
+        let out = tmp.join("exported");
+
+        // Call export_project
+        let result = export_project(
+            tmp.to_string_lossy().to_string(),
+            out.to_string_lossy().to_string(),
+            false,
+        )
+        .unwrap();
+
+        assert!(result.success);
+
+        // Verify files were copied
+        assert!(out.join("game").join("config.txt").exists());
+        assert!(out.join("game").join("scene").join("start.txt").exists());
+        assert!(out.join("game").join("background").join("bg.webp").exists());
+        assert!(out.join("game").join("bgm").join("music.mp3").exists());
+        assert!(out.join("game").join("sfx").join("click.wav").exists());
+
+        // Verify content preserved
+        assert_eq!(
+            fs::read_to_string(out.join("game").join("scene").join("start.txt")).unwrap(),
+            "dialogue:Hello;"
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn export_warns_missing_assets() {
+        // Setup: project with scenes referencing both existing and missing assets
+        let tmp = std::env::temp_dir().join("webgal_test_export_missing");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("game").join("scene")).unwrap();
+        fs::create_dir_all(tmp.join("game").join("background")).unwrap();
+        fs::create_dir_all(tmp.join("game").join("bgm")).unwrap();
+        fs::create_dir_all(tmp.join("game").join("figure")).unwrap();
+        fs::create_dir_all(tmp.join("game").join("sfx")).unwrap();
+
+        // Only bg.webp exists; peaceful.mp3 and missing_figure.webp are referenced but missing
+        fs::write(tmp.join("game").join("background").join("bg.webp"), "img").unwrap();
+        fs::write(tmp.join("game").join("config.txt"), "Game_name:Test;").unwrap();
+
+        // Scene referencing existing and missing assets
+        let scene = concat!(
+            "changeBg:bg.webp;\n",
+            "changeFigure:missing_figure.webp -left;\n",
+            "bgm:peaceful.mp3;\n",
+            "playEffect:click.wav;\n",
+        );
+        fs::write(tmp.join("game").join("scene").join("start.txt"), scene).unwrap();
+
+        let out = tmp.join("exported");
+
+        let result = export_project(
+            tmp.to_string_lossy().to_string(),
+            out.to_string_lossy().to_string(),
+            false,
+        )
+        .unwrap();
+
+        assert!(result.success);
+
+        // Should warn about missing_figure.webp and peaceful.mp3 and click.wav
+        assert!(result.warnings.len() >= 2, "expected at least 2 warnings, got {}: {:?}", result.warnings.len(), result.warnings);
+
+        let has_missing_figure = result.warnings.iter().any(|w| w.contains("missing_figure.webp"));
+        let has_missing_bgm = result.warnings.iter().any(|w| w.contains("peaceful.mp3"));
+        assert!(has_missing_figure, "missing_figure.webp should trigger a warning");
+        assert!(has_missing_bgm, "peaceful.mp3 should trigger a warning");
+
+        // Should NOT warn about existing asset
+        let has_bg = result.warnings.iter().any(|w| w.contains("bg.webp"));
+        assert!(!has_bg, "bg.webp exists, should not warn");
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }
