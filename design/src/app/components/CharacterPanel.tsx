@@ -21,6 +21,20 @@ import {
 } from 'lucide-react';
 import type { Character, CharacterRelation, CharacterRef, CharacterSprite } from '../lib/character-types';
 import {
+  appendCharacterRelation,
+  appendCharacterSprite,
+  appendEmotionPreset,
+  characterColor,
+  createDraftCharacter,
+  patchCharacter as patchCharacterList,
+  referenceSpriteIndex,
+  removeCharacterRelation,
+  removeCharacterSprite,
+  updateCharacterRelation,
+  updateCharacterSprite,
+  withReferenceSprite,
+} from '../lib/character-editing';
+import {
   createCharacter,
   deleteCharacter,
   listCharacters,
@@ -45,8 +59,6 @@ type PersistOptions = {
 
 const inputClass = 'w-full px-2.5 py-1.5 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50 text-xs';
 const labelClass = 'block text-[10px] uppercase tracking-wider text-muted-foreground mb-1 font-mono-family';
-const colors = ['#D4A574', '#C9946A', '#7C9885', '#60A5FA', '#C084FC', '#FACC15', '#F472B6', '#34D399'];
-
 const spriteSuggestions = [
   { pose: '日常站姿', emotion: '微笑', prompt: 'standing pose, gentle smile, relaxed hands' },
   { pose: '对话半身', emotion: '认真', prompt: 'upper body, serious expression, looking at viewer' },
@@ -57,41 +69,6 @@ const commonEmotions = ['默认', '微笑', '悲伤', '惊讶', '愤怒', '害�
 
 interface SpriteUsage extends AssetUsage {
   assetName: string;
-}
-
-function pickColor(index: number): string {
-  return colors[index % colors.length];
-}
-
-function emptyCharacter(index: number): Character {
-  return {
-    id: `tmp_${Date.now()}`,
-    name: '',
-    aliases: [],
-    description: '',
-    personality: '',
-    consistencyPrompt: '',
-    stance: '',
-    keywords: [],
-    dialogueStyle: '',
-    gender: '',
-    age: '',
-    sprites: [],
-    defaultVoice: undefined,
-    voiceTimbre: undefined,
-    referenceImages: [],
-    relations: [],
-    colorTheme: pickColor(index),
-    notes: '',
-  };
-}
-
-function getReferenceSpriteIndex(ch: Character): number {
-  const explicit = ch.sprites.findIndex((sprite) => sprite.emotion === '主体参考');
-  if (explicit >= 0) return explicit;
-  const defaultIndex = ch.sprites.findIndex((sprite) => sprite.emotion === '默认' || sprite.emotion === 'default');
-  if (defaultIndex >= 0) return defaultIndex;
-  return ch.sprites.length > 0 ? 0 : -1;
 }
 
 export function CharacterPanel({
@@ -180,11 +157,11 @@ export function CharacterPanel({
   [characters]);
 
   const patchCharacter = useCallback((id: string, partial: Partial<Character>) => {
-    setCharacters((prev) => prev.map((c) => (c.id === id ? { ...c, ...partial } : c)));
+    setCharacters((prev) => patchCharacterList(prev, id, partial));
   }, []);
 
   const handleCreate = useCallback(() => {
-    const ch = emptyCharacter(characters.length);
+    const ch = createDraftCharacter(characters.length);
     setCharacters((prev) => [...prev, ch]);
     setSelectedId(ch.id);
     setMode('info');
@@ -248,27 +225,15 @@ export function CharacterPanel({
   }, [projectPath, selectedId]);
 
   const updateSprite = useCallback((charId: string, index: number, field: keyof CharacterSprite, value: string) => {
-    setCharacters((prev) => prev.map((c) => {
-      if (c.id !== charId) return c;
-      const sprites = [...c.sprites];
-      sprites[index] = { ...sprites[index], [field]: value };
-      return { ...c, sprites };
-    }));
+    setCharacters((prev) => updateCharacterSprite(prev, charId, index, field, value));
   }, []);
 
   const addSprite = useCallback((charId: string, emotion = '') => {
-    setCharacters((prev) => prev.map((c) =>
-      c.id === charId ? { ...c, sprites: [...c.sprites, { emotion, file: '' }] } : c,
-    ));
+    setCharacters((prev) => appendCharacterSprite(prev, charId, emotion));
   }, []);
 
   const addEmotionPreset = useCallback((charId: string, emotion: string) => {
-    if (!emotion.trim()) return;
-    setCharacters((prev) => prev.map((c) => {
-      if (c.id !== charId) return c;
-      if (c.sprites.some((sprite) => sprite.emotion === emotion.trim())) return c;
-      return { ...c, sprites: [...c.sprites, { emotion: emotion.trim(), file: '' }] };
-    }));
+    setCharacters((prev) => appendEmotionPreset(prev, charId, emotion));
   }, []);
 
   const setReferenceFile = useCallback(async (charId: string, filename: string) => {
@@ -279,21 +244,11 @@ export function CharacterPanel({
       : current;
     if (!base) return;
 
-    const sprites = [...base.sprites];
-    const refIndex = getReferenceSpriteIndex(base);
-    if (refIndex >= 0) {
-      sprites[refIndex] = { ...sprites[refIndex], emotion: '主体参考', file: filename };
-    } else {
-      sprites.unshift({ emotion: '主体参考', file: filename });
-    }
-
-    await persistCharacter({ ...base, sprites }, { showSavedBadge: false });
+    await persistCharacter(withReferenceSprite(base, filename), { showSavedBadge: false });
   }, [characters, ensurePersistedCharacter, persistCharacter]);
 
   const removeSprite = useCallback((charId: string, index: number) => {
-    setCharacters((prev) => prev.map((c) =>
-      c.id === charId ? { ...c, sprites: c.sprites.filter((_, i) => i !== index) } : c,
-    ));
+    setCharacters((prev) => removeCharacterSprite(prev, charId, index));
   }, []);
 
   const uploadReferenceImage = useCallback(async (charId: string) => {
@@ -337,33 +292,22 @@ export function CharacterPanel({
   }, [ensurePersistedCharacter, persistCharacter, projectPath]);
 
   const updateRelation = useCallback((charId: string, index: number, field: keyof CharacterRelation, value: string) => {
-    setCharacters((prev) => prev.map((c) => {
-      if (c.id !== charId) return c;
-      const relations = [...c.relations];
-      relations[index] = { ...relations[index], [field]: value };
-      return { ...c, relations };
-    }));
+    setCharacters((prev) => updateCharacterRelation(prev, charId, index, field, value));
   }, []);
 
   const addRelation = useCallback((charId: string) => {
-    setCharacters((prev) => prev.map((c) =>
-      c.id === charId
-        ? { ...c, relations: [...c.relations, { targetId: '', relationType: '', description: '' }] }
-        : c,
-    ));
+    setCharacters((prev) => appendCharacterRelation(prev, charId));
   }, []);
 
   const removeRelation = useCallback((charId: string, index: number) => {
-    setCharacters((prev) => prev.map((c) =>
-      c.id === charId ? { ...c, relations: c.relations.filter((_, i) => i !== index) } : c,
-    ));
+    setCharacters((prev) => removeCharacterRelation(prev, charId, index));
   }, []);
 
   const containerClass = embedded
     ? 'h-full flex flex-col overflow-hidden'
     : 'flex-1 flex flex-col overflow-hidden';
 
-  const referenceIndex = selected ? getReferenceSpriteIndex(selected) : -1;
+  const referenceIndex = selected ? referenceSpriteIndex(selected) : -1;
   const referenceSprite = selected && referenceIndex >= 0 ? selected.sprites[referenceIndex] : null;
   const variantSprites = selected
     ? selected.sprites
@@ -386,7 +330,7 @@ export function CharacterPanel({
       try {
         const rows = await Promise.all(
           filenames.map(async (filename) => {
-            const usages = await findAssetUsages(projectPath, filename);
+            const usages = await findAssetUsages(projectPath, filename, 'figure');
             return usages.map((usage) => ({ ...usage, assetName: filename }));
           }),
         );
@@ -527,8 +471,8 @@ export function CharacterPanel({
                 </div>
               ) : filtered.map((ch, index) => {
                 const active = ch.id === selectedId;
-                const sprite = ch.sprites[getReferenceSpriteIndex(ch)]?.file || ch.sprites[0]?.file;
-                const color = ch.colorTheme || pickColor(index);
+                const sprite = ch.sprites[referenceSpriteIndex(ch)]?.file || ch.sprites[0]?.file;
+                const color = ch.colorTheme || characterColor(index);
                 return (
                   <div
                     key={ch.id}
@@ -686,7 +630,7 @@ export function CharacterPanel({
                       <div className="flex items-center gap-2">
                         <input
                           type="color"
-                          value={selected.colorTheme || pickColor(characters.indexOf(selected))}
+                          value={selected.colorTheme || characterColor(characters.indexOf(selected))}
                           onChange={(e) => patchCharacter(selected.id, { colorTheme: e.target.value })}
                           className="w-9 h-8 rounded border border-border bg-transparent"
                         />

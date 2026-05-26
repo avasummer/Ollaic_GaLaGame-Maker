@@ -31,6 +31,13 @@ import {
 import { listCharacterNames, listCharacters } from '../lib/character-ipc';
 import type { Character } from '../lib/character-types';
 import {
+  appendGeneratedNodes,
+  insertSceneNode,
+  pasteSceneNode,
+  removeSceneNode,
+  reorderSceneNodes,
+} from '../lib/scene-editing';
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -54,23 +61,6 @@ interface AiMessage {
 }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-
-const TERMINAL_TYPES = new Set<WebGalCommandType>(['choose', 'changeScene', 'end', 'jumpLabel']);
-
-/** Rebuild visual `connections` purely from sequential order. */
-function rewireConnections(nodes: WebGalNode[]): WebGalNode[] {
-  return nodes.map((node, i) => {
-    const next = nodes[i + 1];
-    const connections = next && !TERMINAL_TYPES.has(node.type) ? [next.id] : [];
-    if (
-      connections.length === node.connections.length &&
-      connections.every((c, idx) => c === node.connections[idx])
-    ) {
-      return node;
-    }
-    return { ...node, connections };
-  });
-}
 
 const DEMO_SCRIPT = `; 序章 - 安静的午后
 changeBg:afternoon_park.webp -next;
@@ -97,6 +87,7 @@ export function StoryEditor() {
 
   // Editor state
   const [nodes, setNodes] = useState<WebGalNode[]>([]);
+  const nodesRef = useRef<WebGalNode[]>([]);
   const [selectedNode, setSelectedNode] = useState<WebGalNode | null>(null);
   const [clipboardNode, setClipboardNode] = useState<WebGalNode | null>(null);
   const [scriptSource, setScriptSource] = useState(DEMO_SCRIPT);
@@ -149,6 +140,10 @@ export function StoryEditor() {
 
   const [unsavedConfirmOpen, setUnsavedConfirmOpen] = useState(false);
   const pendingActionRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
 
   // In-memory draft cache: sceneName -> nodes snapshot for unsaved scenes
   const sceneDraftCache = useRef<Map<string, WebGalNode[]>>(new Map());
@@ -287,87 +282,93 @@ export function StoryEditor() {
     setSaveStatus('idle');
   }, []);
 
+  const commitEditedNodes = useCallback((nextNodes: WebGalNode[]) => {
+    nodesRef.current = nextNodes;
+    setNodes(nextNodes);
+    void syncScript(nextNodes);
+    markDirty();
+  }, [markDirty, syncScript]);
+
   // Undo / Redo
   const [history, setHistory] = useState<WebGalNode[][]>([]);
-  const [historyIdx, setHistoryIdx] = useState(-1);
+  const [redoHistory, setRedoHistory] = useState<WebGalNode[][]>([]);
 
   const pushHistory = useCallback((nodesSnapshot: WebGalNode[]) => {
     setHistory(prev => {
-      const trimmed = prev.slice(0, historyIdx + 1);
-      const next = [...trimmed, nodesSnapshot];
-      if (next.length > 50) next.shift();
-      return next;
+      const next = [...prev, nodesSnapshot];
+      return next.length > 50 ? next.slice(-50) : next;
     });
-    setHistoryIdx(prev => Math.min(prev + 1, 49));
-  }, [historyIdx]);
-
-  const undo = useCallback(() => {
-    if (historyIdx < 0) return;
-    const prevNodes = history[historyIdx];
-    setNodes(prevNodes);
-    syncScript(prevNodes);
-    setSelectedNode(null);
-    setDirty(true);
-    setSaveStatus('idle');
-    setHistoryIdx(i => i - 1);
-  }, [historyIdx, history, syncScript]);
-
-  const redo = useCallback(() => {
-    if (historyIdx >= history.length - 1) return;
-    const nextIdx = historyIdx + 1;
-    const nextNodes = history[nextIdx];
-    setNodes(nextNodes);
-    syncScript(nextNodes);
-    setSelectedNode(null);
-    setDirty(true);
-    setSaveStatus('idle');
-    setHistoryIdx(nextIdx);
-  }, [historyIdx, history, syncScript]);
-
-  // Record history before mutation
-  const recordHistory = useCallback((currentNodes: WebGalNode[]) => {
-    pushHistory(currentNodes);
-  }, [pushHistory]);
+    setRedoHistory([]);
+  }, []);
 
   // Debounce timer for merging successive updateNode calls to the same node
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const pendingRecordRef = useRef<WebGalNode[] | null>(null);
 
+  const flushPendingHistory = useCallback((): WebGalNode[] | null => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    const pending = pendingRecordRef.current;
+    if (!pending) return null;
+    pushHistory(pending);
+    pendingRecordRef.current = null;
+    return pending;
+  }, [pushHistory]);
+
+  const undo = useCallback(() => {
+    const current = nodesRef.current;
+    const pending = flushPendingHistory();
+    if (pending) {
+      setHistory(prev => prev.slice(0, -1));
+      setRedoHistory(prev => [...prev, current].slice(-50));
+      commitEditedNodes(pending);
+      setSelectedNode(null);
+      return;
+    }
+    const prevNodes = history[history.length - 1];
+    if (!prevNodes) return;
+    setHistory(prev => prev.slice(0, -1));
+    setRedoHistory(prev => [...prev, current].slice(-50));
+    commitEditedNodes(prevNodes);
+    setSelectedNode(null);
+  }, [commitEditedNodes, flushPendingHistory, history]);
+
+  const redo = useCallback(() => {
+    if (flushPendingHistory()) return;
+    const nextNodes = redoHistory[redoHistory.length - 1];
+    if (!nextNodes) return;
+    const current = nodesRef.current;
+    setRedoHistory(prev => prev.slice(0, -1));
+    setHistory(prev => [...prev, current].slice(-50));
+    commitEditedNodes(nextNodes);
+    setSelectedNode(null);
+  }, [commitEditedNodes, flushPendingHistory, redoHistory]);
+
   // ---------------------------------------------------------------------------
   // Node CRUD
   // ---------------------------------------------------------------------------
   const updateNode = useCallback((id: string, updates: Partial<WebGalNode>) => {
-    setNodes(prev => {
-      // Record history (debounced: same-node updates within 500ms are merged)
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      if (!pendingRecordRef.current) {
-        pendingRecordRef.current = prev;
+    const current = nodesRef.current;
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    if (!pendingRecordRef.current) pendingRecordRef.current = current;
+    debounceTimerRef.current = setTimeout(() => {
+      if (pendingRecordRef.current) {
+        pushHistory(pendingRecordRef.current);
+        pendingRecordRef.current = null;
       }
-      debounceTimerRef.current = setTimeout(() => {
-        if (pendingRecordRef.current) {
-          pushHistory(pendingRecordRef.current);
-          pendingRecordRef.current = null;
-        }
-      }, 500);
+    }, 500);
 
-      const next = prev.map(n => n.id === id ? { ...n, ...updates } : n);
-      syncScript(next);
-      return next;
-    });
+    const next = current.map(n => n.id === id ? { ...n, ...updates } : n);
+    commitEditedNodes(next);
     setSelectedNode(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
-    markDirty();
-  }, [syncScript, markDirty, pushHistory]);
+  }, [commitEditedNodes, pushHistory]);
 
   const deleteNode = useCallback((id: string) => {
-    setNodes(prev => {
-      pushHistory(prev);
-      const next = rewireConnections(prev.filter(n => n.id !== id));
-      syncScript(next);
-      return next;
-    });
+    const current = nodesRef.current;
+    flushPendingHistory();
+    pushHistory(current);
+    commitEditedNodes(removeSceneNode(current, id));
     setSelectedNode(null);
-    markDirty();
-  }, [syncScript, markDirty, pushHistory]);
+  }, [commitEditedNodes, flushPendingHistory, pushHistory]);
 
   const copyNode = useCallback((node: WebGalNode) => {
     setClipboardNode({ ...node });
@@ -380,68 +381,34 @@ export function StoryEditor() {
 
   const pasteNode = useCallback((atIndex: number) => {
     if (!clipboardNode) return;
-    const newId = Date.now().toString();
-    const newNode: WebGalNode = {
-      ...clipboardNode,
-      id: newId,
-      position: { x: 100, y: 60 + (atIndex + 1) * 110 },
-    };
-    setNodes(prev => {
-      pushHistory(prev);
-      const idx = atIndex + 1;
-      const updated = rewireConnections([...prev.slice(0, idx), newNode, ...prev.slice(idx)]);
-      syncScript(updated);
-      return updated;
-    });
-    markDirty();
-  }, [clipboardNode, pushHistory, syncScript, markDirty]);
+    const current = nodesRef.current;
+    flushPendingHistory();
+    pushHistory(current);
+    commitEditedNodes(pasteSceneNode(current, clipboardNode, atIndex, Date.now().toString()));
+  }, [clipboardNode, commitEditedNodes, flushPendingHistory, pushHistory]);
 
   const reorderNodes = useCallback((fromIndex: number, toIndex: number) => {
-    setNodes(prev => {
-      if (fromIndex === toIndex || fromIndex < 0 || fromIndex >= prev.length) return prev;
-      const clampedTo = Math.max(0, Math.min(toIndex, prev.length - 1));
-      pushHistory(prev);
-      const moved = [...prev];
-      const [node] = moved.splice(fromIndex, 1);
-      moved.splice(clampedTo, 0, node);
-      const next = rewireConnections(moved);
-      syncScript(next);
-      return next;
-    });
-    markDirty();
-  }, [syncScript, markDirty, pushHistory]);
+    const current = nodesRef.current;
+    const next = reorderSceneNodes(current, fromIndex, toIndex);
+    if (next === current) return;
+    flushPendingHistory();
+    pushHistory(current);
+    commitEditedNodes(next);
+  }, [commitEditedNodes, flushPendingHistory, pushHistory]);
 
   const insertNode = useCallback((type: WebGalCommandType, atIndex: number) => {
-    setNodes(prev => {
-      pushHistory(prev);
-      const idx = Math.max(0, Math.min(atIndex, prev.length));
-      const id = Date.now().toString();
-      const newNode: WebGalNode = {
-        id,
-        type,
-        content: '',
-        flags: [],
-        position: { x: 100, y: 60 + idx * 110 },
-        connections: [],
-      };
-      if (type === 'dialogue') newNode.character = '';
-      if (type === 'choose') newNode.choices = [{ text: '选项 1', target: '' }];
-      if (type === 'intro') newNode.introLines = [''];
-      if (type === 'setVar') { newNode.varName = ''; newNode.varValue = ''; }
-
-      const updated = rewireConnections([...prev.slice(0, idx), newNode, ...prev.slice(idx)]);
-      syncScript(updated);
-      const insertedNode = updated.find(n => n.id === id) ?? newNode;
-      setSelectedNode(insertedNode);
-      return updated;
-    });
-    markDirty();
-  }, [syncScript, markDirty, pushHistory]);
+    const current = nodesRef.current;
+    flushPendingHistory();
+    pushHistory(current);
+    const { nodes: updated, inserted } = insertSceneNode(current, type, atIndex, Date.now().toString());
+    commitEditedNodes(updated);
+    setSelectedNode(inserted);
+  }, [commitEditedNodes, flushPendingHistory, pushHistory]);
 
   // ---------------------------------------------------------------------------
   // Save
   // ---------------------------------------------------------------------------
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (): Promise<boolean> => {
     setSaveStatus('saving');
     try {
       if (projectPath) {
@@ -457,7 +424,7 @@ export function StoryEditor() {
         });
         if (!selected) {
           setSaveStatus('idle');
-          return;
+          return false;
         }
         await saveScene(selected, nodes);
       }
@@ -467,11 +434,13 @@ export function StoryEditor() {
       // Reset status after 2s
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => setSaveStatus('idle'), 2000);
+      return true;
     } catch (e) {
       console.error('Save failed:', e);
       setSaveStatus('error');
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       saveTimerRef.current = setTimeout(() => setSaveStatus('idle'), 3000);
+      return false;
     }
   }, [projectPath, currentSceneName, nodes]);
 
@@ -487,10 +456,11 @@ export function StoryEditor() {
 
   const handleUnsavedSaveAndLeave = useCallback(async () => {
     const action = pendingActionRef.current;
-    pendingActionRef.current = null;
-    setUnsavedConfirmOpen(false);
-    await handleSave();
-    action?.();
+    if (await handleSave()) {
+      pendingActionRef.current = null;
+      setUnsavedConfirmOpen(false);
+      action?.();
+    }
   }, [handleSave]);
 
   const handleUnsavedDiscard = useCallback(() => {
@@ -726,7 +696,7 @@ export function StoryEditor() {
   const handleExportProject = useCallback(async () => {
     if (!projectPath) return;
     // Save current scene first
-    if (dirty) await handleSave();
+    if (dirty && !(await handleSave())) return;
 
     const dest = await saveDialog({
       title: 'Select export directory',
@@ -843,35 +813,15 @@ export function StoryEditor() {
     try {
       const script = webGalJsonToScript(scene);
       const parsed = await parseScene(script);
-      setNodes((prev) => {
-        pushHistory(prev);
-        const lastNode = prev[prev.length - 1];
-        const startX = lastNode ? lastNode.position.x : 100;
-        const startY = lastNode ? lastNode.position.y + 130 : 60;
-        const imported = parsed.map((node, index) => ({
-          ...node,
-          id: `ai-${Date.now()}-${index}`,
-          position: { x: startX, y: startY + index * 110 },
-        }));
-        const next = [...prev, ...imported];
-        if (lastNode && imported.length > 0) {
-          const lastIndex = next.findIndex((node) => node.id === lastNode.id);
-          if (lastIndex >= 0) {
-            next[lastIndex] = {
-              ...next[lastIndex],
-              connections: [...next[lastIndex].connections, imported[0].id],
-            };
-          }
-        }
-        syncScript(next);
-        return next;
-      });
+      const current = nodesRef.current;
+      flushPendingHistory();
+      pushHistory(current);
+      commitEditedNodes(appendGeneratedNodes(current, parsed, `ai-${Date.now()}`));
       setShowScript(false);
-      markDirty();
     } catch (e) {
       setAiError(String(e));
     }
-  }, [markDirty, pushHistory, syncScript]);
+  }, [commitEditedNodes, flushPendingHistory, pushHistory]);
 
   const handleQuickAction = (text: string) => {
     if (aiBusy) return;
@@ -1015,7 +965,7 @@ export function StoryEditor() {
               {/* Undo / Redo */}
               <button
                 onClick={undo}
-                disabled={historyIdx < 0}
+                disabled={history.length === 0 && pendingRecordRef.current === null}
                 className="p-2 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-30"
                 title="撤销 (Ctrl+Z)"
                 aria-label="撤销"
@@ -1024,7 +974,7 @@ export function StoryEditor() {
               </button>
               <button
                 onClick={redo}
-                disabled={historyIdx >= history.length - 1}
+                disabled={redoHistory.length === 0}
                 className="p-2 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-30"
                 title="重做 (Ctrl+Shift+Z)"
                 aria-label="重做"

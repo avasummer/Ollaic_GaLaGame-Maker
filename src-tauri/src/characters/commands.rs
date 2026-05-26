@@ -33,6 +33,24 @@ fn save_doc(project_path: &str, doc: &CharactersDocument) -> Result<(), String> 
     fs::write(&path, json).map_err(|e| format!("Failed to write {}: {}", path.display(), e))
 }
 
+fn deduplicate_characters(characters: Vec<Character>) -> Vec<Character> {
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for character in characters.into_iter().rev() {
+        if seen.insert(character.id.clone()) {
+            deduped.push(character);
+        }
+    }
+    deduped.reverse();
+    deduped
+}
+
+fn load_canonical_doc(project_path: &str) -> Result<CharactersDocument, String> {
+    let mut doc = load_doc(project_path)?;
+    doc.characters = deduplicate_characters(doc.characters);
+    Ok(doc)
+}
+
 fn make_id() -> String {
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -48,22 +66,13 @@ fn make_id() -> String {
 /// most complete entry).
 #[tauri::command]
 pub fn list_characters(project_path: String) -> Result<Vec<Character>, String> {
-    let doc = load_doc(&project_path)?;
-    let mut seen = std::collections::HashSet::new();
-    let mut deduped: Vec<Character> = Vec::new();
-    for ch in doc.characters.into_iter().rev() {
-        if seen.insert(ch.id.clone()) {
-            deduped.push(ch);
-        }
-    }
-    deduped.reverse();
-    Ok(deduped)
+    Ok(load_canonical_doc(&project_path)?.characters)
 }
 
 /// Get a single character by id.
 #[tauri::command]
 pub fn get_character(project_path: String, id: String) -> Result<Character, String> {
-    let doc = load_doc(&project_path)?;
+    let doc = load_canonical_doc(&project_path)?;
     doc.characters
         .into_iter()
         .find(|c| c.id == id)
@@ -73,7 +82,7 @@ pub fn get_character(project_path: String, id: String) -> Result<Character, Stri
 /// Create a new character and persist.
 #[tauri::command]
 pub fn create_character(project_path: String, character: Character) -> Result<Character, String> {
-    let mut doc = load_doc(&project_path)?;
+    let mut doc = load_canonical_doc(&project_path)?;
     let mut new_char = character;
     // Always assign a server-generated id so temp frontend ids never leak into storage.
     new_char.id = make_id();
@@ -85,7 +94,7 @@ pub fn create_character(project_path: String, character: Character) -> Result<Ch
 /// Update an existing character by id.
 #[tauri::command]
 pub fn update_character(project_path: String, character: Character) -> Result<Character, String> {
-    let mut doc = load_doc(&project_path)?;
+    let mut doc = load_canonical_doc(&project_path)?;
     let idx = doc
         .characters
         .iter()
@@ -99,7 +108,7 @@ pub fn update_character(project_path: String, character: Character) -> Result<Ch
 /// Delete a character by id.
 #[tauri::command]
 pub fn delete_character(project_path: String, id: String) -> Result<(), String> {
-    let mut doc = load_doc(&project_path)?;
+    let mut doc = load_canonical_doc(&project_path)?;
     doc.characters.retain(|c| c.id != id);
     save_doc(&project_path, &doc)?;
     Ok(())
@@ -108,7 +117,7 @@ pub fn delete_character(project_path: String, id: String) -> Result<(), String> 
 /// Return a lightweight list of {id, name} pairs for dropdowns.
 #[tauri::command]
 pub fn list_character_names(project_path: String) -> Result<Vec<CharacterRef>, String> {
-    let doc = load_doc(&project_path)?;
+    let doc = load_canonical_doc(&project_path)?;
     Ok(doc
         .characters
         .into_iter()
@@ -124,7 +133,61 @@ pub fn list_character_names(project_path: String) -> Result<Vec<CharacterRef>, S
 pub fn save_characters(project_path: String, characters: Vec<Character>) -> Result<(), String> {
     let doc = CharactersDocument {
         version: 1,
-        characters,
+        characters: deduplicate_characters(characters),
     };
     save_doc(&project_path, &doc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn character(id: &str, name: &str) -> Character {
+        Character {
+            id: id.to_string(),
+            name: name.to_string(),
+            aliases: Vec::new(),
+            description: String::new(),
+            personality: String::new(),
+            consistency_prompt: None,
+            reference_images: Vec::new(),
+            stance: String::new(),
+            keywords: Vec::new(),
+            dialogue_style: String::new(),
+            gender: String::new(),
+            age: String::new(),
+            sprites: Vec::new(),
+            default_voice: None,
+            voice_timbre: None,
+            relations: Vec::new(),
+            color_theme: None,
+            notes: String::new(),
+        }
+    }
+
+    #[test]
+    fn all_character_reads_use_the_same_canonical_entries() {
+        let tmp = std::env::temp_dir().join("webgal_test_characters_canonical");
+        let _ = fs::remove_dir_all(&tmp);
+        save_doc(
+            tmp.to_str().unwrap(),
+            &CharactersDocument {
+                version: 1,
+                characters: vec![character("hero", "Old"), character("hero", "Current")],
+            },
+        )
+        .unwrap();
+
+        let project = tmp.to_string_lossy().to_string();
+        let listed = list_characters(project.clone()).unwrap();
+        let single = get_character(project.clone(), "hero".to_string()).unwrap();
+        let names = list_character_names(project).unwrap();
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "Current");
+        assert_eq!(single.name, "Current");
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].name, "Current");
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }

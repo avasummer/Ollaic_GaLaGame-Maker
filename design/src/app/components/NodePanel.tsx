@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import type { WebGalNode, WebGalCommandType } from '../lib/webgal-types';
 import { commandCategories, commandLabels, categoryLabels } from '../lib/webgal-types';
+import { isTerminalNode } from '../lib/scene-editing';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import {
   ContextMenu,
@@ -90,10 +91,6 @@ const categoryColors: Record<string, string> = {
   control: 'hover:border-yellow-400 hover:bg-yellow-400/10',
   effects: 'hover:border-primary hover:bg-primary/10',
 };
-
-const MINIMAP_TERMINAL = new Set<WebGalCommandType>([
-  'choose', 'changeScene', 'end', 'jumpLabel',
-]);
 
 /** Saturated background color for the minimap blocks (one swatch per type). */
 const miniBgClass: Partial<Record<WebGalCommandType, string>> = {
@@ -201,7 +198,7 @@ function FlowMinimap({ nodes, selectedNode, onSelect }: FlowMinimapProps) {
           <div className="flex flex-col items-center py-1">
             {nodes.map((node, i) => {
               const prev = i > 0 ? nodes[i - 1] : null;
-              const prevTerminal = prev ? MINIMAP_TERMINAL.has(prev.type) : false;
+              const prevTerminal = prev ? isTerminalNode(prev.type) : false;
               const isSelected = selectedNode?.id === node.id;
               const bg = miniBgClass[node.type] ?? 'bg-muted-foreground/40';
               const isChoose = node.type === 'choose';
