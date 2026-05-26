@@ -21,6 +21,7 @@ import {
 } from '../lib/story-agent';
 import { parseScene, serializeScene, saveScene, getScenePath } from '../lib/webgal-ipc';
 import type { WebGalNode } from '../lib/webgal-types';
+import { appendGeneratedNodes, reconnectSequentialNodes } from '../lib/scene-editing';
 import { useChatSession, type ChatMessage } from './useChatSession';
 
 export type AiPanelStatus =
@@ -369,17 +370,14 @@ export function useAiAgent(params: UseAiAgentParams) {
       const beforeNodes = nodes;
       const beforeContent = scriptSource;
       const replacingWholeScene = intent === 'edit';
-      const lastNode = beforeNodes[beforeNodes.length - 1];
-      const startX = lastNode ? lastNode.position.x : 100;
-      const startY = lastNode ? lastNode.position.y + 130 : 60;
       const imported = parsed.map((node, index) => ({
         ...node,
         id: `ai-${Date.now()}-${index}`,
-        position: replacingWholeScene
-          ? { x: 100, y: 60 + index * 110 }
-          : { x: startX, y: startY + index * 110 },
+        position: { x: 100, y: 60 + index * 110 },
       }));
-      const afterNodes = replacingWholeScene ? imported : (imported.length > 0 ? [...beforeNodes, ...imported] : beforeNodes);
+      const afterNodes = replacingWholeScene
+        ? reconnectSequentialNodes(imported)
+        : appendGeneratedNodes(beforeNodes, parsed, `ai-${Date.now()}`);
       const afterContent = await serializeScene(afterNodes);
       if (afterContent === beforeContent) {
         setStatus('error');

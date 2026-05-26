@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod parser;
 pub mod project;
+pub mod references;
 pub mod runtime_manager;
 pub mod runtime_server;
 pub mod serializer;

@@ -182,6 +182,8 @@ fn main() {
             assets::commands::delete_asset,
             assets::commands::rename_asset,
             assets::commands::find_asset_usages,
+            assets::commands::load_asset_metadata,
+            assets::commands::save_asset_metadata,
             // Characters
             characters::commands::list_characters,
             characters::commands::get_character,

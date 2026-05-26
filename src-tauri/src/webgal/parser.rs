@@ -122,6 +122,13 @@ fn has_flag(flags: &[Flag], key: &str) -> bool {
     flags.iter().any(|f| f.key == key)
 }
 
+fn is_voice_file_flag(key: &str) -> bool {
+    let lower = key.to_lowercase();
+    [".mp3", ".ogg", ".wav", ".flac", ".aac"]
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+}
+
 // ---------------------------------------------------------------------------
 // Single-line parser
 // ---------------------------------------------------------------------------
@@ -204,9 +211,10 @@ fn parse_line(line: &str, index: usize) -> Option<WebGalNode> {
     // Check for voice flag (e.g. -v1.wav)
     for f in &parsed.flags {
         let k = &f.key;
-        if (k.starts_with('v') || k.starts_with('V'))
+        if ((k.starts_with('v') || k.starts_with('V'))
             && k.len() > 1
-            && k.as_bytes()[1].is_ascii_digit()
+            && k.as_bytes()[1].is_ascii_digit())
+            || is_voice_file_flag(k)
         {
             node.voice = Some(match &f.value {
                 FlagValue::Str(s) => s.clone(),

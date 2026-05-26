@@ -5,7 +5,12 @@ import type { WebGalNode, WebGalCommandType } from '../lib/webgal-types';
 import { commandLabels } from '../lib/webgal-types';
 import { AssetPickerButton } from './AssetPicker';
 import type { Character } from '../lib/character-types';
-import { getAliasMap } from '../lib/asset-alias';
+import {
+  aliasesForCategory,
+  emptyAssetMetadata,
+  loadAssetMetadata,
+  type AssetMetadata,
+} from '../lib/asset-metadata';
 import { listScenes } from '../lib/webgal-ipc';
 import {
   Dialog,
@@ -67,7 +72,23 @@ export function DetailPanel({
   projectId,
   suggestedFigureCharacter,
 }: DetailPanelProps) {
-  const aliases = projectId ? getAliasMap(projectId) : {};
+  const [metadata, setMetadata] = useState<AssetMetadata>(() => emptyAssetMetadata());
+
+  useEffect(() => {
+    if (!projectPath) {
+      setMetadata(emptyAssetMetadata());
+      return;
+    }
+    let cancelled = false;
+    loadAssetMetadata(projectPath, projectId)
+      .then((next) => {
+        if (!cancelled) setMetadata(next);
+      })
+      .catch(() => {
+        if (!cancelled) setMetadata(emptyAssetMetadata());
+      });
+    return () => { cancelled = true; };
+  }, [projectId, projectPath]);
 
   return (
     <div className="flex-1 border-r border-border bg-card/50 backdrop-blur-sm flex flex-col overflow-hidden">
@@ -104,7 +125,7 @@ export function DetailPanel({
         </div>
 
         {/* Type-specific fields */}
-        {renderTypeFields(node, onUpdateNode, characterNames, projectPath, characters, projectId, aliases, suggestedFigureCharacter)}
+        {renderTypeFields(node, onUpdateNode, characterNames, projectPath, characters, metadata, suggestedFigureCharacter)}
 
         {/* Common flags */}
         <div className="pt-3 border-t border-border space-y-3">
@@ -165,10 +186,15 @@ function renderTypeFields(
   characterNames?: string[],
   projectPath?: string,
   characters: Character[] = [],
-  projectId?: string,
-  aliases: Record<string, string> = {},
+  metadata: AssetMetadata = emptyAssetMetadata(),
   suggestedFigureCharacter?: string,
 ) {
+  const backgroundAliases = aliasesForCategory(metadata, 'background');
+  const figureAliases = aliasesForCategory(metadata, 'figure');
+  const bgmAliases = aliasesForCategory(metadata, 'bgm');
+  const sfxAliases = aliasesForCategory(metadata, 'sfx');
+  const videoAliases = aliasesForCategory(metadata, 'video');
+
   switch (node.type) {
     case 'dialogue':
       return (
@@ -269,8 +295,8 @@ function renderTypeFields(
                 />
               </div>
               <div className="px-3 py-2 min-w-0">
-                <div className="truncate text-sm">{aliases[node.asset] || node.asset}</div>
-                {aliases[node.asset] && <div className="truncate text-[11px] text-muted-foreground font-mono-family">{node.asset}</div>}
+                <div className="truncate text-sm">{backgroundAliases[node.asset] || node.asset}</div>
+                {backgroundAliases[node.asset] && <div className="truncate text-[11px] text-muted-foreground font-mono-family">{node.asset}</div>}
               </div>
             </div>
           )}
@@ -288,7 +314,7 @@ function renderTypeFields(
                 projectPath={projectPath}
                 category="background"
                 currentValue={node.asset || node.content}
-                aliases={aliases}
+                aliases={backgroundAliases}
                 onSelect={(name) => onUpdate({ asset: name, content: name })}
               />
             )}
@@ -361,7 +387,7 @@ function renderTypeFields(
                 projectPath={projectPath}
                 category="figure"
                 currentValue={node.asset || node.content}
-                aliases={aliases}
+                aliases={figureAliases}
                 onSelect={(name) => onUpdate({ asset: name, content: name })}
               />
             )}
@@ -389,7 +415,7 @@ function renderTypeFields(
               <ScenePickerButton
                 projectPath={projectPath}
                 currentValue={node.targetScene || node.content}
-                aliases={aliases}
+                aliases={{}}
                 onSelect={(name) => onUpdate({ targetScene: name, content: name })}
               />
             )}
@@ -428,7 +454,13 @@ function renderTypeFields(
                   projectPath={projectPath}
                   category={node.type === 'playEffect' ? 'sfx' : node.type === 'playVideo' ? 'video' : 'bgm'}
                   currentValue={node.asset || node.content}
-                  aliases={aliases}
+                  aliases={
+                    node.type === 'playEffect'
+                      ? sfxAliases
+                      : node.type === 'playVideo'
+                        ? videoAliases
+                        : bgmAliases
+                  }
                   onSelect={(name) => onUpdate({ asset: name, content: name })}
                 />
               )}

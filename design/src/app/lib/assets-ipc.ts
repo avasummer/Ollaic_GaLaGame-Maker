@@ -15,6 +15,12 @@ export interface AssetUsage {
   command: string;
 }
 
+export interface AssetMetadata {
+  aliases: Record<string, string>;
+  tags: Record<string, string[]>;
+  references: Record<string, string[]>;
+}
+
 /** List media files in a project's asset subdirectory. */
 export async function listAssets(projectPath: string, category: string): Promise<AssetInfo[]> {
   return invoke<AssetInfo[]>('list_assets', { projectPath, category });
@@ -57,6 +63,20 @@ export async function renameAsset(
 export async function findAssetUsages(
   projectPath: string,
   filename: string,
+  category?: string,
 ): Promise<AssetUsage[]> {
-  return invoke<AssetUsage[]>('find_asset_usages', { projectPath, filename });
+  return invoke<AssetUsage[]>('find_asset_usages', { projectPath, filename, category: category ?? null });
+}
+
+/** Load editor-owned metadata stored with the project. */
+export async function loadProjectAssetMetadata(projectPath: string): Promise<AssetMetadata> {
+  return invoke<AssetMetadata>('load_asset_metadata', { projectPath });
+}
+
+/** Persist editor-owned metadata with the project. */
+export async function saveProjectAssetMetadata(
+  projectPath: string,
+  metadata: AssetMetadata,
+): Promise<void> {
+  return invoke<void>('save_asset_metadata', { projectPath, metadata });
 }

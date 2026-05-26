@@ -35,7 +35,19 @@ import {
   type AssetInfo,
   type AssetUsage,
 } from '../lib/assets-ipc';
-import { getAliasMap, setAlias as persistAssetAlias, removeAlias as removeAssetAlias } from '../lib/asset-alias';
+import {
+  assetMetadataEntry,
+  emptyAssetMetadata,
+  flushAssetMetadataSaves,
+  loadAssetMetadata,
+  referenceCategoryForAsset,
+  referenceFilePath,
+  saveAssetMetadata,
+  setAssetAlias,
+  setAssetReferences,
+  setAssetTags,
+  type AssetMetadata,
+} from '../lib/asset-metadata';
 import { listCharacters } from '../lib/character-ipc';
 import { CharacterPanel } from './CharacterPanel';
 
@@ -161,9 +173,8 @@ export function AssetManager() {
   const [audioMetadataErrors, setAudioMetadataErrors] = useState<Record<string, boolean>>({});
   const [audioProgress, setAudioProgress] = useState<Record<string, number>>({});
   const [assetUsages, setAssetUsages] = useState<AssetUsage[]>([]);
-  const [tagsByAsset, setTagsByAsset] = useState<Record<string, string[]>>({});
-  const [referencesByAsset, setReferencesByAsset] = useState<Record<string, string[]>>({});
-  const [aliasesByAsset, setAliasesByAsset] = useState<Record<string, string>>({});
+  const [metadata, setMetadata] = useState<AssetMetadata>(() => emptyAssetMetadata());
+  const metadataRef = useRef<AssetMetadata>(emptyAssetMetadata());
   const [referenceUploading, setReferenceUploading] = useState(false);
 
   // Real data state
@@ -173,6 +184,11 @@ export function AssetManager() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+
+  const applyMetadata = useCallback((metadata: AssetMetadata) => {
+    metadataRef.current = metadata;
+    setMetadata(metadata);
+  }, []);
 
   // Load project path
   useEffect(() => {
@@ -239,21 +255,28 @@ export function AssetManager() {
   }, [projectPath, figureLibraryRefreshToken]);
 
   useEffect(() => {
-    if (!projectId) return;
-    try {
-      setTagsByAsset(JSON.parse(localStorage.getItem(`asset-tags-${projectId}`) || '{}'));
-      setReferencesByAsset(JSON.parse(localStorage.getItem(`asset-references-${projectId}`) || '{}'));
-      setAliasesByAsset(getAliasMap(projectId));
-    } catch {
-      setTagsByAsset({});
-      setReferencesByAsset({});
-      setAliasesByAsset({});
-    }
-  }, [projectId]);
+    if (!projectPath) return;
+    let cancelled = false;
+    loadAssetMetadata(projectPath, projectId)
+      .then((next) => {
+        if (!cancelled) applyMetadata(next);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => { cancelled = true; };
+  }, [applyMetadata, projectId, projectPath]);
+
+  const aliasForAsset = (asset: Pick<AssetInfo, 'category' | 'name'>): string =>
+    assetMetadataEntry(metadata.aliases, asset.category, asset.name) ?? '';
+  const tagsForAsset = (asset: Pick<AssetInfo, 'category' | 'name'>): string[] =>
+    assetMetadataEntry(metadata.tags, asset.category, asset.name) ?? [];
+  const referencesForAsset = (asset: Pick<AssetInfo, 'category' | 'name'>): string[] =>
+    assetMetadataEntry(metadata.references, asset.category, asset.name) ?? [];
 
   const filteredAssets = assets.filter((a) => {
     const q = searchQuery.toLowerCase();
-    return a.name.toLowerCase().includes(q) || (aliasesByAsset[a.name] || '').toLowerCase().includes(q);
+    return a.name.toLowerCase().includes(q) || aliasForAsset(a).toLowerCase().includes(q);
   });
 
   // Tab counts from all assets
@@ -299,17 +322,23 @@ export function AssetManager() {
 
   const handleDelete = useCallback(async () => {
     if (!selectedAsset || !projectPath) return;
-    if (!confirm(`确定删除 "${selectedAsset.name}"？（不可恢复）`)) return;
 
     try {
+      const usages = await findAssetUsages(projectPath, selectedAsset.name, selectedAsset.category);
+      const usageWarning = usages.length > 0
+        ? `\n该素材仍被 ${usages.length} 处剧本引用，删除后这些引用将失效。`
+        : '';
+      if (!confirm(`确定删除 "${selectedAsset.name}"？（不可恢复）${usageWarning}`)) return;
+      await flushAssetMetadataSaves(projectPath);
       await deleteAsset(projectPath, selectedAsset.category, selectedAsset.name);
       setAssets(prev => prev.filter(a => a.path !== selectedAsset.path));
       setAllAssets(prev => prev.filter(a => a.path !== selectedAsset.path));
+      applyMetadata(await loadAssetMetadata(projectPath));
       setSelectedAsset(null);
     } catch (e) {
       setError(String(e));
     }
-  }, [selectedAsset, projectPath]);
+  }, [applyMetadata, selectedAsset, projectPath]);
 
   const handleRename = useCallback(async () => {
     if (!selectedAsset || !projectPath) return;
@@ -320,14 +349,16 @@ export function AssetManager() {
 
     const fullNewName = `${newName}.${ext}`;
     try {
+      await flushAssetMetadataSaves(projectPath);
       const info = await renameAsset(projectPath, selectedAsset.category, selectedAsset.name, fullNewName);
       setAssets(prev => prev.map(a => a.path === selectedAsset.path ? info : a));
       setAllAssets(prev => prev.map(a => a.path === selectedAsset.path ? info : a));
+      applyMetadata(await loadAssetMetadata(projectPath));
       setSelectedAsset(info);
     } catch (e) {
       setError(String(e));
     }
-  }, [selectedAsset, projectPath]);
+  }, [applyMetadata, selectedAsset, projectPath]);
 
   const handleDownload = useCallback(async (asset?: AssetInfo) => {
     const a = asset || selectedAsset;
@@ -386,30 +417,25 @@ export function AssetManager() {
     }
   }, [playingAudio]);
 
-  const persistTags = useCallback((next: Record<string, string[]>) => {
-    setTagsByAsset(next);
-    if (projectId) localStorage.setItem(`asset-tags-${projectId}`, JSON.stringify(next));
-  }, [projectId]);
+  const persistMetadata = useCallback((next: AssetMetadata) => {
+    applyMetadata(next);
+    if (!projectPath) return;
+    void saveAssetMetadata(projectPath, next).catch((e) => setError(String(e)));
+  }, [applyMetadata, projectPath]);
 
-  const toggleTag = useCallback((assetName: string, tag: string) => {
-    const current = tagsByAsset[assetName] ?? [];
+  const toggleTag = useCallback((asset: AssetInfo, tag: string) => {
+    const current = assetMetadataEntry(metadata.tags, asset.category, asset.name) ?? [];
     const nextTags = current.includes(tag)
       ? current.filter((item) => item !== tag)
       : [...current, tag];
-    persistTags({ ...tagsByAsset, [assetName]: nextTags });
-  }, [persistTags, tagsByAsset]);
-
-  const persistReferences = useCallback((next: Record<string, string[]>) => {
-    setReferencesByAsset(next);
-    if (projectId) localStorage.setItem(`asset-references-${projectId}`, JSON.stringify(next));
-  }, [projectId]);
+    persistMetadata(setAssetTags(metadata, asset.category, asset.name, nextTags));
+  }, [metadata, persistMetadata]);
 
   const handleReferenceUpload = useCallback(async () => {
     if (!selectedAsset || !projectPath) return;
-    const isAudioReference = activeTab === 'music';
-    const referenceCategory = isAudioReference
-      ? `reference/audio/${selectedAsset.name}`
-      : `reference/backgrounds/${selectedAsset.name}`;
+    const isAudioReference = selectedAsset.category !== 'background';
+    const referenceCategory = referenceCategoryForAsset(selectedAsset.category, selectedAsset.name);
+    if (!referenceCategory) return;
     const path = await openDialog({
       title: isAudioReference ? '上传参考音频' : '上传参考图',
       filters: [{
@@ -423,32 +449,47 @@ export function AssetManager() {
     setError(null);
     try {
       const info = await importAsset(Array.isArray(path) ? path[0] : path, projectPath, referenceCategory);
-      persistReferences({
-        ...referencesByAsset,
-        [selectedAsset.name]: [...(referencesByAsset[selectedAsset.name] ?? []), info.name],
-      });
+      const currentMetadata = metadataRef.current;
+      const current = assetMetadataEntry(
+        currentMetadata.references,
+        selectedAsset.category,
+        selectedAsset.name,
+      ) ?? [];
+      persistMetadata(setAssetReferences(
+        currentMetadata,
+        selectedAsset.category,
+        selectedAsset.name,
+        [...current, info.name],
+      ));
     } catch (e) {
       setError(String(e));
     } finally {
       setReferenceUploading(false);
     }
-  }, [activeTab, persistReferences, projectPath, referencesByAsset, selectedAsset]);
+  }, [persistMetadata, projectPath, selectedAsset]);
 
   const handleReferenceRemove = useCallback(async (filename: string) => {
     if (!selectedAsset || !projectPath) return;
-    const referenceCategory = activeTab === 'music'
-      ? `reference/audio/${selectedAsset.name}`
-      : `reference/backgrounds/${selectedAsset.name}`;
+    const referenceCategory = referenceCategoryForAsset(selectedAsset.category, selectedAsset.name);
+    if (!referenceCategory) return;
     try {
       await deleteAsset(projectPath, referenceCategory, filename);
     } catch {
       // Keep the local reference list clean even if the backing file was already gone.
     }
-    persistReferences({
-      ...referencesByAsset,
-      [selectedAsset.name]: (referencesByAsset[selectedAsset.name] ?? []).filter((name) => name !== filename),
-    });
-  }, [activeTab, persistReferences, projectPath, referencesByAsset, selectedAsset]);
+    const currentMetadata = metadataRef.current;
+    const current = assetMetadataEntry(
+      currentMetadata.references,
+      selectedAsset.category,
+      selectedAsset.name,
+    ) ?? [];
+    persistMetadata(setAssetReferences(
+      currentMetadata,
+      selectedAsset.category,
+      selectedAsset.name,
+      current.filter((name) => name !== filename),
+    ));
+  }, [persistMetadata, projectPath, selectedAsset]);
 
   // Keep the shared audio element in sync when playback is cleared externally.
   useEffect(() => {
@@ -470,7 +511,7 @@ export function AssetManager() {
     let cancelled = false;
     (async () => {
       try {
-        const usages = await findAssetUsages(projectPath, selectedAsset.name);
+        const usages = await findAssetUsages(projectPath, selectedAsset.name, selectedAsset.category);
         if (!cancelled) setAssetUsages(usages);
       } catch {
         if (!cancelled) setAssetUsages([]);
@@ -491,19 +532,8 @@ export function AssetManager() {
     return null;
   };
 
-  const handleAliasChange = (filename: string, alias: string) => {
-    if (!projectId) return;
-    if (alias.trim()) {
-      persistAssetAlias(projectId, filename, alias);
-      setAliasesByAsset(prev => ({ ...prev, [filename]: alias.trim() }));
-    } else {
-      removeAssetAlias(projectId, filename);
-      setAliasesByAsset(prev => {
-        const next = { ...prev };
-        delete next[filename];
-        return next;
-      });
-    }
+  const handleAliasChange = (asset: AssetInfo, alias: string) => {
+    persistMetadata(setAssetAlias(metadata, asset.category, asset.name, alias));
   };
 
   return (
@@ -793,8 +823,8 @@ export function AssetManager() {
                           </div>
                         </div>
                         <div className="p-3 bg-card border-t border-border">
-                          <h3 className="text-sm font-medium truncate mb-1">{aliasesByAsset[asset.name] || asset.name}</h3>
-                          {aliasesByAsset[asset.name] && (
+                          <h3 className="text-sm font-medium truncate mb-1">{aliasForAsset(asset) || asset.name}</h3>
+                          {aliasForAsset(asset) && (
                             <div className="mb-1 truncate text-[11px] text-muted-foreground font-mono-family">{asset.name}</div>
                           )}
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -861,9 +891,9 @@ export function AssetManager() {
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <h3 className="font-medium truncate">{aliasesByAsset[asset.name] || asset.name}</h3>
+                          <h3 className="font-medium truncate">{aliasForAsset(asset) || asset.name}</h3>
                           <p className="text-sm text-muted-foreground">
-                            {aliasesByAsset[asset.name] ? `${asset.name} · ` : ''}{formatCategory(asset.category)} · {asset.extension.toUpperCase()} · {isAudioExt(asset.extension) ? `${getAudioDurationLabel(asset.path, audioDurations, audioMetadataErrors)} · ` : ''}{formatSize(asset.size)}
+                            {aliasForAsset(asset) ? `${asset.name} · ` : ''}{formatCategory(asset.category)} · {asset.extension.toUpperCase()} · {isAudioExt(asset.extension) ? `${getAudioDurationLabel(asset.path, audioDurations, audioMetadataErrors)} · ` : ''}{formatSize(asset.size)}
                           </p>
                           {isAudioExt(asset.extension) && progress > 0 && (
                             <div className="mt-2 h-1 rounded bg-secondary overflow-hidden">
@@ -957,8 +987,8 @@ export function AssetManager() {
                       </label>
                       <input
                         type="text"
-                        value={aliasesByAsset[selectedAsset.name] || ''}
-                        onChange={(e) => handleAliasChange(selectedAsset.name, e.target.value)}
+                        value={aliasForAsset(selectedAsset)}
+                        onChange={(e) => handleAliasChange(selectedAsset, e.target.value)}
                         className="w-full px-3 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
                         placeholder={activeTab === 'scene' ? '例：教室 · 白天' : '例：悲伤主旋律'}
                         aria-label="素材显示名称"
@@ -1000,12 +1030,12 @@ export function AssetManager() {
                             <div className="mb-1 text-[10px] text-muted-foreground">{group.title}</div>
                             <div className="flex flex-wrap gap-2">
                               {group.tags.map((tagName) => {
-                                const active = (tagsByAsset[selectedAsset.name] ?? []).includes(tagName);
+                                const active = tagsForAsset(selectedAsset).includes(tagName);
                                 return (
                                   <button
                                     key={tagName}
                                     type="button"
-                                    onClick={() => toggleTag(selectedAsset.name, tagName)}
+                                    onClick={() => toggleTag(selectedAsset, tagName)}
                                     className={`px-2 py-1 rounded-full text-xs border transition-colors ${
                                       active
                                         ? 'bg-primary/20 text-primary border-primary/30'
@@ -1039,26 +1069,30 @@ export function AssetManager() {
                       </button>
                     </div>
                     <div className="space-y-2">
-                      {(referencesByAsset[selectedAsset.name] ?? []).length === 0 ? (
+                      {referencesForAsset(selectedAsset).length === 0 ? (
                         <div className="text-xs text-muted-foreground rounded-md border border-dashed border-border p-3">暂无参考资料。</div>
-                      ) : (referencesByAsset[selectedAsset.name] ?? []).map((filename) => (
-                        <div key={filename} className="flex items-center gap-2 rounded-md bg-secondary/20 p-2">
-                          {activeTab === 'music' ? (
-                            <audio controls src={convertFileSrc(`${projectPath}/game/config/references/audio/${selectedAsset.name}/${filename}`)} className="min-w-0 flex-1 h-8" />
-                          ) : (
-                            <img src={convertFileSrc(`${projectPath}/game/config/references/backgrounds/${selectedAsset.name}/${filename}`)} alt="" className="w-10 h-10 rounded object-cover bg-secondary" />
-                          )}
-                          <span className="min-w-0 flex-1 truncate text-xs font-mono-family">{filename}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleReferenceRemove(filename)}
-                            className="p-1 rounded hover:bg-destructive/10"
-                            aria-label="删除参考资料"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
-                          </button>
-                        </div>
-                      ))}
+                      ) : referencesForAsset(selectedAsset).map((filename) => {
+                        const sourcePath = referenceFilePath(projectPath, selectedAsset.category, selectedAsset.name, filename);
+                        if (!sourcePath) return null;
+                        return (
+                          <div key={filename} className="flex items-center gap-2 rounded-md bg-secondary/20 p-2">
+                            {selectedAsset.category !== 'background' ? (
+                              <audio controls src={convertFileSrc(sourcePath)} className="min-w-0 flex-1 h-8" />
+                            ) : (
+                              <img src={convertFileSrc(sourcePath)} alt="" className="w-10 h-10 rounded object-cover bg-secondary" />
+                            )}
+                            <span className="min-w-0 flex-1 truncate text-xs font-mono-family">{filename}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleReferenceRemove(filename)}
+                              className="p-1 rounded hover:bg-destructive/10"
+                              aria-label="删除参考资料"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 

@@ -1,3 +1,4 @@
+use super::references;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -333,64 +334,18 @@ fn validate_assets(game_dir: &Path) -> Result<Vec<String>, String> {
         let content = fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
 
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with(';') {
-                continue;
-            }
-            // Parse commands that reference assets
-            let (cmd, asset_name) = match extract_asset_ref(line) {
-                Some(v) => v,
-                None => continue,
-            };
-            let dir = match cmd {
-                "changeBg" => "background",
-                "changeFigure" | "miniAvatar" => "figure",
-                "bgm" => "bgm",
-                "playEffect" => "sfx",
-                "playVideo" => "video",
-                _ => continue,
-            };
-            let asset_path = game_dir.join(dir).join(&asset_name);
+        for reference in references::find_asset_references(&content) {
+            let asset_path = game_dir.join(reference.category).join(&reference.filename);
             if !asset_path.exists() {
                 warnings.push(format!(
                     "[{}] 引用不存在的素材: {} ({}: {})",
-                    scene_name, asset_name, cmd, asset_name
+                    scene_name, reference.filename, reference.command, reference.filename
                 ));
             }
         }
     }
 
     Ok(warnings)
-}
-
-/// Extract (command_type, asset_filename) from a WebGAL script line.
-fn extract_asset_ref(line: &str) -> Option<(&str, String)> {
-    // Commands that take an asset filename as their first argument
-    let commands = [
-        "changeBg:",
-        "changeFigure:",
-        "miniAvatar:",
-        "bgm:",
-        "playEffect:",
-        "playVideo:",
-    ];
-
-    for cmd in &commands {
-        if let Some(rest) = line.strip_prefix(cmd) {
-            // Extract the filename before any flag (-) or semicolon
-            let asset = rest
-                .split(|c: char| c == '-' || c == ';')
-                .next()
-                .unwrap_or("")
-                .trim();
-            if !asset.is_empty() && asset != "none" {
-                let cmd_type = cmd.trim_end_matches(':');
-                return Some((cmd_type, asset.to_string()));
-            }
-        }
-    }
-    None
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
@@ -502,6 +457,7 @@ mod tests {
             "changeFigure:missing_figure.webp -left;\n",
             "bgm:peaceful.mp3;\n",
             "playEffect:click.wav;\n",
+            "playVideo:intro.mp4;\n",
         );
         fs::write(tmp.join("game").join("scene").join("start.txt"), scene).unwrap();
 
@@ -529,11 +485,13 @@ mod tests {
             .iter()
             .any(|w| w.contains("missing_figure.webp"));
         let has_missing_bgm = result.warnings.iter().any(|w| w.contains("peaceful.mp3"));
+        let has_missing_video = result.warnings.iter().any(|w| w.contains("intro.mp4"));
         assert!(
             has_missing_figure,
             "missing_figure.webp should trigger a warning"
         );
         assert!(has_missing_bgm, "peaceful.mp3 should trigger a warning");
+        assert!(has_missing_video, "intro.mp4 should trigger a warning");
 
         // Should NOT warn about existing asset
         let has_bg = result.warnings.iter().any(|w| w.contains("bg.webp"));

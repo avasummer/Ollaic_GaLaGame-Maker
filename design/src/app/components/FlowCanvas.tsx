@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import type { WebGalNode, WebGalCommandType } from '../lib/webgal-types';
 import { commandLabels } from '../lib/webgal-types';
+import { isTerminalNode } from '../lib/scene-editing';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import {
   ContextMenu,
@@ -84,10 +85,6 @@ const typeColors: Partial<Record<WebGalCommandType, string>> = {
   comment: 'border-muted bg-muted/5',
 };
 
-const TERMINAL_TYPES = new Set<WebGalCommandType>([
-  'choose', 'changeScene', 'end', 'jumpLabel',
-]);
-
 function getNodeSummary(node: WebGalNode): string {
   switch (node.type) {
     case 'dialogue':
@@ -154,7 +151,7 @@ function FlowNodeCard({
   const [gripMenuOpen, setGripMenuOpen] = useState(false);
   const Icon = commandIcons[node.type] || Type;
   const colors = typeColors[node.type] || 'border-border bg-card/50';
-  const terminal = TERMINAL_TYPES.has(node.type);
+  const terminal = isTerminalNode(node.type);
 
   const [{ handlerId, isOver }, drop] = useDrop<
     DragItem,
