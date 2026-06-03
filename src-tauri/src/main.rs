@@ -177,6 +177,9 @@ fn main() {
             ai::commands::validate_ai_config,
             ai::commands::default_ai_system_prompt,
             ai::commands::ai_chat_stream,
+            ai::commands::list_ai_logs,
+            ai::commands::clear_ai_logs,
+            ai::commands::get_ai_log_path,
             // Assets
             assets::commands::list_assets,
             assets::commands::list_all_assets,

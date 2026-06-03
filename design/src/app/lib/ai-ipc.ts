@@ -28,6 +28,16 @@ export interface AiValidationResult {
   message: string;
 }
 
+export interface AiLogEntry {
+  timestampMs: number;
+  action: string;
+  provider: string;
+  model: string;
+  endpoint: string;
+  success: boolean;
+  message: string;
+}
+
 export interface AiChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -53,6 +63,18 @@ export async function getDefaultSystemPrompt(): Promise<string> {
 
 export async function validateAiConfig(config: AiConfig): Promise<AiValidationResult> {
   return invoke<AiValidationResult>('validate_ai_config', { config });
+}
+
+export async function listAiLogs(limit?: number): Promise<AiLogEntry[]> {
+  return invoke<AiLogEntry[]>('list_ai_logs', { limit: limit ?? null });
+}
+
+export async function clearAiLogs(): Promise<void> {
+  return invoke<void>('clear_ai_logs');
+}
+
+export async function getAiLogPath(): Promise<string> {
+  return invoke<string>('get_ai_log_path');
 }
 
 export interface StreamHandlers {
