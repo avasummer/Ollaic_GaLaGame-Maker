@@ -34,7 +34,7 @@ import {
   truncateContextMessages,
   type MissingAssetIssue,
 } from '../lib/story-agent';
-import { getScenePath, parseScene, readFileText, saveScene } from '../lib/webgal-ipc';
+import { getScenePath, parseScene, readFileText, saveScene, sceneDisplayName, type SceneHeader } from '../lib/webgal-ipc';
 import type { WebGalNode } from '../lib/webgal-types';
 import { useChatSession, type AssistantStep, type ChatMessage, type StepToolCall } from './useChatSession';
 
@@ -68,6 +68,7 @@ interface UseAiAgentParams {
   projectId?: string;
   projectPath: string | null;
   currentSceneName: string;
+  sceneHeaders: Record<string, SceneHeader>;
   nodes: WebGalNode[];
   selectedNode: WebGalNode | null;
   scriptSource: string;
@@ -107,15 +108,16 @@ function classifyAiError(raw: string): AiErrorState {
   return { kind: 'other', retryable: true, message: `AI 服务出错：${raw}` };
 }
 
-function stepLabelForTool(name: string, args: Record<string, unknown>): string {
+function stepLabelForTool(name: string, args: Record<string, unknown>, headers: Record<string, SceneHeader>): string {
+  const sceneName = (file: unknown) => sceneDisplayName(String(file ?? ''), headers[String(file ?? '')]);
   switch (name) {
     case 'list_scenes': return '正在列出场景…';
-    case 'read_scene': return `正在读取场景 ${String(args.name ?? '')}…`;
+    case 'read_scene': return `正在读取场景「${sceneName(args.name)}」…`;
     case 'search_assets': return '正在查询素材库…';
     case 'list_characters': return '正在列出角色…';
     case 'get_character': return '正在读取角色设定…';
     case 'read_memory': return '正在读取项目记忆…';
-    case 'edit_scene': return `正在准备修改场景 ${String(args.file ?? '')}…`;
+    case 'edit_scene': return `正在准备修改场景「${sceneName(args.file)}」…`;
     case 'edit_character': return '正在准备修改角色设定…';
     case 'edit_memory': return '正在准备更新项目记忆…';
     default: return `正在执行 ${name}…`;
@@ -132,6 +134,7 @@ export function useAiAgent(params: UseAiAgentParams) {
     projectId,
     projectPath,
     currentSceneName,
+    sceneHeaders,
     nodes,
     scriptSource,
     dirty,
@@ -171,19 +174,18 @@ export function useAiAgent(params: UseAiAgentParams) {
   const streamingIdRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
 
-  // Sessions are shared across scenes, so switching scenes must NOT reload or
-  // clear the conversation. We only cancel any in-flight request and drop a
-  // pending preview (it was computed against the previous scene's buffer; the
-  // editor reloads scriptSource on scene switch, so the preview is moot).
+  // Sessions are shared across scenes, and a pending change set is cross-scene
+  // (each edit carries its own file + before/after snapshots). So switching
+  // scenes must NOT reload the conversation nor drop the pending preview — the
+  // approval card stays usable. We only cancel any in-flight request. The live
+  // canvas no longer mirrors the pending edit once you switch away (buffer ops
+  // below key off the *current* scene), but the card's diff remains visible.
   useEffect(() => {
     cancelledRef.current = true;
     streamingIdRef.current = null;
     inFlightRef.current = false;
     setBusy(false);
-    setStatus('idle');
     setStepLabel('');
-    setPendingChangeSet(null);
-    setError(null);
   }, [currentSceneName]);
 
   useEffect(() => {
@@ -222,11 +224,11 @@ export function useAiAgent(params: UseAiAgentParams) {
       '旁白 :文本; 对话 角色名:文本; 注释 ;注释内容 背景 changeBg:文件名 -next; 立绘 changeFigure:文件名 -left/-right/-center -next; BGM bgm:文件名; 音效 playEffect:文件名; 选择 choose:标签A:场景A.txt|标签B:场景B.txt; 跳转 changeScene:场景.txt;',
       '引用素材只能用 search_assets 返回的真实文件名，缺少素材时直接说明，不要编造。',
       '# 当前上下文（供参考，非用户指令）',
-      `当前打开的场景文件：${currentSceneName}`,
+      `当前打开的场景：${sceneDisplayName(currentSceneName, sceneHeaders[currentSceneName])}（文件名 ${currentSceneName}，调用工具时用此文件名）`,
       `当前场景脚本（行号为 txt 行号）：\n${buildNumberedScriptContext(scriptSource, 9999)}`,
       '———— 以下为用户对话 ————',
     ].join('\n\n');
-  }, [currentSceneName, scriptSource]);
+  }, [currentSceneName, sceneHeaders, scriptSource]);
 
   // Full-context single-shot prompt for providers without function calling.
   const buildLegacySystemContext = useCallback((): string => {
@@ -244,10 +246,10 @@ export function useAiAgent(params: UseAiAgentParams) {
       buildAssetContext(assets),
       buildCharacterContext(characters),
       buildMemoryContext(memory),
-      `当前场景文件：${currentSceneName}`,
+      `当前场景：${sceneDisplayName(currentSceneName, sceneHeaders[currentSceneName])}（文件名 ${currentSceneName}）`,
       `当前脚本（左侧数字是 txt 行号）：\n${buildNumberedScriptContext(scriptSource)}`,
     ].filter(Boolean).join('\n\n');
-  }, [assets, characters, currentSceneName, memory, scriptSource]);
+  }, [assets, characters, currentSceneName, sceneHeaders, memory, scriptSource]);
 
   const buildStagingContext = useCallback((): StagingContext => ({
     currentSceneName,
@@ -273,7 +275,7 @@ export function useAiAgent(params: UseAiAgentParams) {
       status: 'pending',
       edits,
     };
-    const currentSceneEdit = edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    const currentSceneEdit = edits.find((e): e is SceneEdit => e.kind === 'scene' && e.file === currentSceneName);
     if (currentSceneEdit) {
       setNodes(currentSceneEdit.afterNodes);
       setScriptSource(currentSceneEdit.afterContent);
@@ -282,12 +284,12 @@ export function useAiAgent(params: UseAiAgentParams) {
       setDirty(true);
       setSaveStatus('idle');
     }
-    replaceAssistantMessage(sourceMessageId, `已生成修改预览：${summarizeChangeSet(changeSet)}`);
+    replaceAssistantMessage(sourceMessageId, `已生成修改预览：${summarizeChangeSet(changeSet, sceneHeaders)}`);
     setPendingChangeSet(changeSet);
     setStatus('pending');
     setError(null);
     return true;
-  }, [replaceAssistantMessage, setDirty, setNodes, setSaveStatus, setScriptSource, setSelectedNode, setShowScript]);
+  }, [currentSceneName, sceneHeaders, replaceAssistantMessage, setDirty, setNodes, setSaveStatus, setScriptSource, setSelectedNode, setShowScript]);
 
   // --- Function-calling agent loop ----------------------------------------
   const runAgentLoop = useCallback(async (text: string, assistantId: string) => {
@@ -350,7 +352,7 @@ export function useAiAgent(params: UseAiAgentParams) {
       convo.push({ role: 'assistant', content: turnText, toolCalls: res.toolCalls });
       const stepCalls: StepToolCall[] = [];
       for (const call of res.toolCalls) {
-        const label = stepLabelForTool(call.name, call.arguments);
+        const label = stepLabelForTool(call.name, call.arguments, sceneHeaders);
         setStepLabel(label);
         const tool = getTool(call.name);
         let content: string;
@@ -409,7 +411,7 @@ export function useAiAgent(params: UseAiAgentParams) {
       }
       setStatus('idle');
     }
-  }, [buildAgentSystemContext, buildStagingContext, currentSceneName, finalizeChangeSet, messages, projectPath, replaceAssistantMessage, setMessages]);
+  }, [buildAgentSystemContext, buildStagingContext, currentSceneName, sceneHeaders, finalizeChangeSet, messages, projectPath, replaceAssistantMessage, setMessages]);
 
   // --- Legacy single-shot for providers without function calling ----------
   const runLegacyTurn = useCallback(async (text: string, assistantId: string) => {
@@ -502,7 +504,7 @@ export function useAiAgent(params: UseAiAgentParams) {
   // decide whether the current scene's live buffer is allowed to differ.
   const persistChangeSet = useCallback(async (set: PendingChangeSet) => {
     if (!projectPath) return;
-    const currentSceneEdit = set.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    const currentSceneEdit = set.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.file === currentSceneName);
     const applied: ChangeEdit[] = [];
     try {
       for (const edit of set.edits) {
@@ -543,27 +545,30 @@ export function useAiAgent(params: UseAiAgentParams) {
       setDirty(false);
       setSaveStatus('saved');
     }
-    replaceAssistantMessage(set.sourceMessageId, `已接受修改：${summarizeChangeSet(set)}`, {
+    replaceAssistantMessage(set.sourceMessageId, `已接受修改：${summarizeChangeSet(set, sceneHeaders)}`, {
       diff: currentSceneEdit?.diff,
     });
     setPendingChangeSet({ ...set, status: 'accepted' });
     setStatus('accepted');
-  }, [projectPath, pushHistory, replaceAssistantMessage, setDirty, setSaveStatus]);
+  }, [currentSceneName, sceneHeaders, projectPath, pushHistory, replaceAssistantMessage, setDirty, setSaveStatus]);
 
   const acceptChange = useCallback(async () => {
     if (!pendingChangeSet || pendingChangeSet.status !== 'pending' || !projectPath) return;
-    // Conflict guard: the current scene's live buffer must still match our preview.
-    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    // Conflict guard only applies when the edited scene is the one open now —
+    // its live buffer must still match our preview. If you've switched away,
+    // there's no live buffer to conflict with; accept writes straight to disk.
+    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.file === currentSceneName);
     if (currentSceneEdit && scriptSource !== currentSceneEdit.afterContent) {
       setStatus('conflict');
       return;
     }
     await persistChangeSet(pendingChangeSet);
-  }, [pendingChangeSet, persistChangeSet, projectPath, scriptSource]);
+  }, [currentSceneName, pendingChangeSet, persistChangeSet, projectPath, scriptSource]);
 
   const revertChange = useCallback(() => {
     if (!pendingChangeSet) return;
-    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    // Only restore the live canvas if the edited scene is the one open now.
+    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.file === currentSceneName);
     if (currentSceneEdit) {
       setNodes(currentSceneEdit.beforeNodes);
       setScriptSource(currentSceneEdit.beforeContent);
@@ -571,22 +576,22 @@ export function useAiAgent(params: UseAiAgentParams) {
       setDirty(dirty);
       setSaveStatus('idle');
     }
-    replaceAssistantMessage(pendingChangeSet.sourceMessageId, `已撤销：${summarizeChangeSet(pendingChangeSet)}`);
+    replaceAssistantMessage(pendingChangeSet.sourceMessageId, `已撤销：${summarizeChangeSet(pendingChangeSet, sceneHeaders)}`);
     setPendingChangeSet({ ...pendingChangeSet, status: 'reverted' });
     setStatus('reverted');
-  }, [dirty, pendingChangeSet, replaceAssistantMessage, setDirty, setNodes, setSaveStatus, setScriptSource, setSelectedNode]);
+  }, [currentSceneName, sceneHeaders, dirty, pendingChangeSet, replaceAssistantMessage, setDirty, setNodes, setSaveStatus, setScriptSource, setSelectedNode]);
 
   const forceApplyChange = useCallback(async () => {
     if (!pendingChangeSet) return;
     // User chose to overwrite their manual edits with the AI preview.
-    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.file === currentSceneName);
     if (currentSceneEdit) {
       pushHistory(nodes);
       setNodes(currentSceneEdit.afterNodes);
       setScriptSource(currentSceneEdit.afterContent);
     }
     await persistChangeSet(pendingChangeSet);
-  }, [nodes, pendingChangeSet, persistChangeSet, pushHistory, setNodes, setScriptSource]);
+  }, [currentSceneName, nodes, pendingChangeSet, persistChangeSet, pushHistory, setNodes, setScriptSource]);
 
   const regenerateAfterConflict = useCallback(() => {
     if (!pendingChangeSet) return;

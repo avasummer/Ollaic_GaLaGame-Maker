@@ -19,7 +19,7 @@ import {
 } from './editor-patch';
 import type { ProjectMemory } from './project-memory';
 import { createLineDiff, type DiffLine, type MissingAssetIssue } from './story-agent';
-import { parseScene, serializeScene } from './webgal-ipc';
+import { parseScene, serializeScene, sceneDisplayName, type SceneHeader } from './webgal-ipc';
 import type { WebGalNode } from './webgal-types';
 import type { StagedWrite } from './ai-tools';
 
@@ -195,13 +195,13 @@ export function stageMemoryEdit(
 }
 
 /** Human-readable one-line summary for an edit (approval list rows). */
-export function describeEdit(edit: ChangeEdit): string {
-  if (edit.kind === 'scene') return `场景 ${edit.file}：${edit.summary}`;
+export function describeEdit(edit: ChangeEdit, sceneHeaders?: Record<string, SceneHeader>): string {
+  if (edit.kind === 'scene') return `场景「${sceneDisplayName(edit.file, sceneHeaders?.[edit.file])}」：${edit.summary}`;
   if (edit.kind === 'character') return `角色 ${edit.name}：修改 ${edit.changedFields.join('、') || '（无变化）'}`;
   return `项目记忆：修改 ${edit.changedFields.join('、') || '（无变化）'}`;
 }
 
 /** Whole-set summary for the assistant message bubble. */
-export function summarizeChangeSet(set: PendingChangeSet): string {
-  return set.edits.map(describeEdit).join(' · ');
+export function summarizeChangeSet(set: PendingChangeSet, sceneHeaders?: Record<string, SceneHeader>): string {
+  return set.edits.map((e) => describeEdit(e, sceneHeaders)).join(' · ');
 }

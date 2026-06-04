@@ -1270,6 +1270,7 @@ function MiniLivePreview({ nodes }: { nodes: WebGalNode[] }) {
 interface AiAssistantPanelProps {
   aiAgent: ReturnType<typeof useAiAgent>;
   projectPath: string | null;
+  sceneHeaders: Record<string, SceneHeader>;
   sessionMenuOpen: boolean;
   onSessionMenuOpenChange: (open: boolean) => void;
   onRenameSession: (session: { id: string; title: string }) => void;
@@ -1281,6 +1282,7 @@ interface AiAssistantPanelProps {
 function AiAssistantPanel({
   aiAgent,
   projectPath,
+  sceneHeaders,
   sessionMenuOpen,
   onSessionMenuOpenChange,
   onRenameSession,
@@ -1415,6 +1417,7 @@ function AiAssistantPanel({
         {aiAgent.pendingChangeSet && aiAgent.status !== 'conflict' && (
           <ChangeSetCard
             changeSet={aiAgent.pendingChangeSet}
+            sceneHeaders={sceneHeaders}
             onAccept={() => { void aiAgent.acceptChange(); }}
             onRevert={aiAgent.revertChange}
           />
@@ -3038,6 +3041,7 @@ export function StoryEditor() {
     projectId,
     projectPath,
     currentSceneName,
+    sceneHeaders,
     nodes,
     selectedNode,
     scriptSource,
@@ -3194,6 +3198,7 @@ export function StoryEditor() {
           <AiAssistantPanel
             aiAgent={aiAgent}
             projectPath={projectPath}
+            sceneHeaders={sceneHeaders}
             sessionMenuOpen={sessionMenuOpen}
             onSessionMenuOpenChange={setSessionMenuOpen}
             onRenameSession={(session) => {
