@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { CheckCircle2, ChevronRight, FileEdit } from 'lucide-react';
-import type { ChatDiffLine } from '../hooks/useChatSession';
+import { CheckCircle2, ChevronRight, FileEdit, Wrench, AlertCircle } from 'lucide-react';
+import type { AssistantStep, ChatDiffLine } from '../hooks/useChatSession';
 
 interface AiMessageBubbleProps {
   role: 'user' | 'assistant';
   content: string;
+  steps?: AssistantStep[];
   isStreaming?: boolean;
   stopped?: boolean;
   diff?: ChatDiffLine[];
@@ -109,7 +110,35 @@ function MarkdownText({ text, enabled }: { text: string; enabled: boolean }) {
   return <>{output}</>;
 }
 
-export function AiMessageBubble({ role, content, isStreaming = false, stopped = false, diff }: AiMessageBubbleProps) {
+/** Renders a multi-step assistant reply: per-turn text blocks + tool-call rows. */
+function StepsView({ steps }: { steps: AssistantStep[] }) {
+  return (
+    <div className="space-y-2">
+      {steps.map((step, si) => (
+        <div key={si} className="space-y-1.5">
+          {step.text?.trim() && <MarkdownText text={step.text.trim()} enabled />}
+          {step.toolCalls?.map((call, ci) => (
+            <div
+              key={ci}
+              className={`flex items-center gap-2 rounded-md border px-2 py-1 text-[11px] ${
+                call.ok === false
+                  ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                  : 'border-border/50 bg-background/35 text-muted-foreground'
+              }`}
+              title={call.error}
+            >
+              {call.ok === false ? <AlertCircle className="h-3.5 w-3.5 shrink-0" /> : <Wrench className="h-3.5 w-3.5 shrink-0 text-chart-2" />}
+              <span className="min-w-0 flex-1 truncate">{call.label}</span>
+              {call.ok === false && <span className="shrink-0">失败</span>}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function AiMessageBubble({ role, content, steps, isStreaming = false, stopped = false, diff }: AiMessageBubbleProps) {
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const completeBlockRegex = /```(?:[a-z-]+|json)?\s*[\s\S]*?```/gi;
   const completeBlockTestRegex = /```(?:[a-z-]+|json)?\s*[\s\S]*?```/i;
@@ -132,31 +161,35 @@ export function AiMessageBubble({ role, content, isStreaming = false, stopped = 
           : 'bg-secondary border border-border'
       } ${role === 'assistant' ? 'font-mono-family' : 'font-body-family'}`}
     >
-      {textParts.map((part, index) => (
-        <div key={`part-${index}`}>
-          {part.trim() && <MarkdownText text={part.trim()} enabled={role === 'assistant'} />}
-          {(structuredBlocks[index] !== undefined || (index === 0 && hasOpenStructuredBlock)) && (
-            <div className="my-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setExpanded((prev) => ({ ...prev, [index]: !prev[index] }))}
-                className="flex w-full items-center gap-2 rounded-md border border-border/50 bg-background/35 px-2 py-1.5 text-muted-foreground transition-colors hover:bg-background/60 hover:text-foreground"
-                aria-expanded={expanded[index]}
-              >
-                <CheckCircle2 className="h-3.5 w-3.5 text-chart-5" />
-                <span className="min-w-0 flex-1 truncate text-left">{fallbackCardLabel}</span>
-                <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition-transform ${expanded[index] ? 'rotate-90' : ''}`} />
-              </button>
-              {expanded[index] && (
-                <pre className="mt-1.5 max-h-44 overflow-auto whitespace-pre-wrap rounded-md border border-border/50 bg-background/35 p-2 text-[11px] leading-relaxed text-muted-foreground">
-                  {structuredBlocks[index] ?? ''}
-                </pre>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-      {!content && isStreaming && '思考中...'}
+      {steps && steps.length > 0 ? (
+        <StepsView steps={steps} />
+      ) : (
+        textParts.map((part, index) => (
+          <div key={`part-${index}`}>
+            {part.trim() && <MarkdownText text={part.trim()} enabled={role === 'assistant'} />}
+            {(structuredBlocks[index] !== undefined || (index === 0 && hasOpenStructuredBlock)) && (
+              <div className="my-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setExpanded((prev) => ({ ...prev, [index]: !prev[index] }))}
+                  className="flex w-full items-center gap-2 rounded-md border border-border/50 bg-background/35 px-2 py-1.5 text-muted-foreground transition-colors hover:bg-background/60 hover:text-foreground"
+                  aria-expanded={expanded[index]}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5 text-chart-5" />
+                  <span className="min-w-0 flex-1 truncate text-left">{fallbackCardLabel}</span>
+                  <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition-transform ${expanded[index] ? 'rotate-90' : ''}`} />
+                </button>
+                {expanded[index] && (
+                  <pre className="mt-1.5 max-h-44 overflow-auto whitespace-pre-wrap rounded-md border border-border/50 bg-background/35 p-2 text-[11px] leading-relaxed text-muted-foreground">
+                    {structuredBlocks[index] ?? ''}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
+        ))
+      )}
+      {!content && (!steps || steps.length === 0) && isStreaming && '思考中...'}
       {isStreaming && content && <span className="inline-block w-2 h-3 ml-1 bg-current align-middle animate-pulse" />}
       {diff && diff.length > 0 && !isStreaming && <DiffBlock diff={diff} />}
       {stopped && <div className="mt-1 text-[11px] text-muted-foreground">已停止</div>}
