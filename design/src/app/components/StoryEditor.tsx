@@ -8,6 +8,7 @@ import {
   MessageCircle, GitBranch, Users, Music, Wand2, ArrowRight,
   GripVertical, MoreHorizontal, Copy, Trash2, Clipboard, Scissors,
   ZoomIn, ZoomOut, Maximize2, BookOpen, CornerDownRight, Split,
+  MessageSquarePlus, Pencil,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -51,6 +52,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
@@ -1257,6 +1259,7 @@ interface AiAssistantPanelProps {
 }
 
 function AiAssistantPanel({ aiAgent, projectPath, onOpenSettings, onSend }: AiAssistantPanelProps) {
+  const activeSession = aiAgent.sessions.find((session) => session.id === aiAgent.activeId);
   const statusText = aiAgent.busy
     ? '生成中'
     : aiAgent.status === 'pending'
@@ -1272,15 +1275,80 @@ function AiAssistantPanel({ aiAgent, projectPath, onOpenSettings, onSend }: AiAs
           <div className="flex h-6 w-6 items-center justify-center rounded-full bg-secondary-container/35 text-secondary">
             <Wand2 className="h-3.5 w-3.5" />
           </div>
-          <span className="truncate text-sm font-semibold text-on-surface">AI 创作助手</span>
+          <span className="truncate text-sm font-semibold text-on-surface" title={activeSession?.title}>
+            {activeSession?.title ?? 'AI 创作助手'}
+          </span>
           <span className="flex items-center gap-1 font-mono-family text-[10px] text-muted-foreground">
             <span className={`block h-1.5 w-1.5 rounded-full ${aiAgent.busy ? 'bg-primary' : 'bg-tertiary-container'}`} />
             {statusText}
           </span>
         </div>
-        <button type="button" onClick={aiAgent.clearConversation} className="story-os-icon-button h-7 w-7" aria-label="清空 AI 对话">
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={aiAgent.startNewSession}
+            disabled={aiAgent.busy}
+            className="story-os-icon-button h-7 w-7 disabled:opacity-40"
+            aria-label="新建 AI 会话"
+            title="新建会话"
+          >
+            <MessageSquarePlus className="h-4 w-4" />
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                disabled={aiAgent.busy}
+                className="story-os-icon-button h-7 w-7 disabled:opacity-40"
+                aria-label="AI 会话管理"
+                title="会话管理"
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuItem onClick={aiAgent.startNewSession}>
+                <MessageSquarePlus className="h-4 w-4" />
+                <span>新建会话</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>历史会话</DropdownMenuLabel>
+              {aiAgent.sessions.map((session) => (
+                <DropdownMenuItem
+                  key={session.id}
+                  onClick={() => aiAgent.selectSession(session.id)}
+                  className={`group ${session.id === aiAgent.activeId ? 'bg-secondary-container/50' : ''}`}
+                >
+                  <span className="min-w-0 flex-1 truncate">{session.title}</span>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      aiAgent.promptRenameSession(session.id);
+                    }}
+                    className="rounded p-0.5 opacity-0 hover:bg-secondary-container group-hover:opacity-100"
+                    aria-label="重命名会话"
+                    title="重命名"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      aiAgent.removeSession(session.id);
+                    }}
+                    className="rounded p-0.5 opacity-0 hover:bg-error-container hover:text-on-error-container group-hover:opacity-100"
+                    aria-label="删除会话"
+                    title="删除"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">

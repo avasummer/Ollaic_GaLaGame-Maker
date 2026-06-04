@@ -145,7 +145,17 @@ export function useAiAgent(params: UseAiAgentParams) {
     pushHistory,
   } = params;
 
-  const { messages, setMessages, clearMessages } = useChatSession(projectId, currentSceneName, INITIAL_AI_MESSAGE);
+  const {
+    messages,
+    setMessages,
+    sessions,
+    activeId,
+    newSession,
+    switchSession,
+    deleteSession,
+    renameSession,
+    ensureTitleFromFirstMessage,
+  } = useChatSession(projectId, INITIAL_AI_MESSAGE);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<AiPanelStatus>('idle');
@@ -161,7 +171,10 @@ export function useAiAgent(params: UseAiAgentParams) {
   const streamingIdRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
 
-  // Reset transient state when switching scenes.
+  // Sessions are shared across scenes, so switching scenes must NOT reload or
+  // clear the conversation. We only cancel any in-flight request and drop a
+  // pending preview (it was computed against the previous scene's buffer; the
+  // editor reloads scriptSource on scene switch, so the preview is moot).
   useEffect(() => {
     cancelledRef.current = true;
     streamingIdRef.current = null;
@@ -171,7 +184,6 @@ export function useAiAgent(params: UseAiAgentParams) {
     setStepLabel('');
     setPendingChangeSet(null);
     setError(null);
-    setInput('');
   }, [currentSceneName]);
 
   useEffect(() => {
@@ -281,7 +293,7 @@ export function useAiAgent(params: UseAiAgentParams) {
     const charEdits = new Map<string, CharacterEdit>();
     let memEdit: MemoryEdit | undefined;
 
-    const stage = async (staged: StagedWrite): Promise<string> => {
+    const stage = async (staged: StagedWrite): Promise<{ content: string; ok: boolean; error?: string }> => {
       try {
         if (staged.tool === 'edit_scene') {
           sceneEdits.set(staged.file, await stageSceneEdit(sceneEdits.get(staged.file), staged, stagingCtx));
@@ -290,10 +302,10 @@ export function useAiAgent(params: UseAiAgentParams) {
         } else {
           memEdit = stageMemoryEdit(memEdit, staged, stagingCtx);
         }
-        return JSON.stringify({ staged: true, message: '已暂存，等待用户确认。' });
+        return { content: JSON.stringify({ staged: true, message: '已暂存，等待用户确认。' }), ok: true };
       } catch (e) {
         const msg = isStageError(e) ? e.message : String(e);
-        return JSON.stringify({ staged: false, error: msg });
+        return { content: JSON.stringify({ staged: false, error: msg }), ok: false, error: msg };
       }
     };
 
@@ -305,6 +317,7 @@ export function useAiAgent(params: UseAiAgentParams) {
 
     let finalText = '';
     let nudged = false;
+    const trace: string[] = [];
     for (let turn = 0; turn < MAX_TURNS; turn += 1) {
       if (cancelledRef.current) return;
       setStatus(turn === 0 ? 'generating' : 'tooling');
@@ -340,20 +353,36 @@ export function useAiAgent(params: UseAiAgentParams) {
         let content: string;
         if (!tool) {
           content = JSON.stringify({ error: `未知工具：${call.name}` });
+          trace.push(`${call.name}: 未知工具`);
         } else if (tool.kind === 'write') {
-          const staged = (await tool.run(call.arguments, { projectPath, currentSceneName })) as StagedWrite;
-          content = await stage(staged);
+          try {
+            const staged = (await tool.run(call.arguments, { projectPath, currentSceneName })) as StagedWrite;
+            const result = await stage(staged);
+            content = result.content;
+            trace.push(`${call.name}: ${result.ok ? '已暂存' : `失败（${result.error}）`}`);
+          } catch (e) {
+            // Arg validation failure — feed the explicit message back so the
+            // model can fix its patch instead of aborting the whole loop.
+            content = JSON.stringify({ staged: false, error: String(e) });
+            trace.push(`${call.name}: 失败（${String(e)}）`);
+          }
         } else {
           try {
             content = JSON.stringify(await tool.run(call.arguments, { projectPath, currentSceneName }));
+            trace.push(`${call.name}: ok`);
           } catch (e) {
             content = JSON.stringify({ error: String(e) });
+            trace.push(`${call.name}: 失败（${String(e)}）`);
           }
         }
         convo.push({ role: 'tool', content, toolCallId: call.id });
       }
       if (turn === MAX_TURNS - 1) {
-        finalText = res.text ?? '已达到最大工具调用轮数。';
+        // Loop exhausted without producing edits. Surface what actually happened
+        // instead of a vague "max turns reached" so the user can act on it.
+        const recent = trace.slice(-8).join('；');
+        finalText = res.text
+          || `已达到最大工具调用轮数（${MAX_TURNS}）仍未生成可确认的修改。工具调用轨迹：${recent || '无'}。`;
       }
     }
 
@@ -419,6 +448,7 @@ export function useAiAgent(params: UseAiAgentParams) {
     const assistantId = `a-${Date.now() + 1}`;
     streamingIdRef.current = assistantId;
     setMessages([...messages, { id: userId, role: 'user', content: text }, { id: assistantId, role: 'assistant', content: '' }]);
+    ensureTitleFromFirstMessage(text);
     setInput('');
     setBusy(true);
 
@@ -442,7 +472,7 @@ export function useAiAgent(params: UseAiAgentParams) {
       setBusy(false);
       setStepLabel('');
     }
-  }, [busy, messages, pendingChangeSet, replaceAssistantMessage, runAgentLoop, runLegacyTurn, setMessages]);
+  }, [busy, ensureTitleFromFirstMessage, messages, pendingChangeSet, replaceAssistantMessage, runAgentLoop, runLegacyTurn, setMessages]);
 
   const retry = useCallback(() => {
     if (!lastPrompt || busy || cooldown > 0) return;
@@ -552,14 +582,38 @@ export function useAiAgent(params: UseAiAgentParams) {
     if (projectId) navigate(`/editor/${projectId}/assets`);
   }, [navigate, projectId]);
 
-  const clearConversation = useCallback(() => {
-    if (busy) return;
+  // Reset transient UI state shared by all session-switching actions.
+  const resetTransient = useCallback(() => {
     if (pendingChangeSet?.status === 'pending') revertChange();
-    clearMessages();
     setInput('');
     setError(null);
     setStatus('idle');
-  }, [busy, clearMessages, pendingChangeSet, revertChange]);
+    setPendingChangeSet(null);
+  }, [pendingChangeSet, revertChange]);
+
+  const startNewSession = useCallback(() => {
+    if (busy) return;
+    resetTransient();
+    newSession();
+  }, [busy, newSession, resetTransient]);
+
+  const selectSession = useCallback((id: string) => {
+    if (busy) return;
+    resetTransient();
+    switchSession(id);
+  }, [busy, resetTransient, switchSession]);
+
+  const removeSession = useCallback((id: string) => {
+    if (busy) return;
+    if (id === activeId) resetTransient();
+    deleteSession(id);
+  }, [activeId, busy, deleteSession, resetTransient]);
+
+  const promptRenameSession = useCallback((id: string) => {
+    const current = sessions.find((s) => s.id === id);
+    const next = window.prompt('重命名会话', current?.title ?? '');
+    if (next != null) renameSession(id, next);
+  }, [renameSession, sessions]);
 
   const saveMemory = useCallback(async (next: ProjectMemory) => {
     if (!projectPath) return;
@@ -595,6 +649,12 @@ export function useAiAgent(params: UseAiAgentParams) {
     memory,
     streamingIdRef,
     describeEdit,
+    sessions,
+    activeId,
+    startNewSession,
+    selectSession,
+    removeSession,
+    promptRenameSession,
     sendPrompt,
     acceptChange,
     revertChange,
@@ -602,7 +662,6 @@ export function useAiAgent(params: UseAiAgentParams) {
     regenerateAfterConflict,
     openAssets,
     retry,
-    clearConversation,
     saveMemory,
     stop,
   };
