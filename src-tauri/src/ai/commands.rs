@@ -1,7 +1,9 @@
 use super::config::{self, AiConfig};
 use futures::StreamExt;
 use genai::adapter::AdapterKind;
-use genai::chat::{ChatMessage, ChatRequest, ChatStreamEvent, StreamChunk};
+use genai::chat::{
+    ChatMessage, ChatRequest, ChatStreamEvent, StreamChunk, Tool, ToolCall, ToolResponse,
+};
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget};
 use serde::{Deserialize, Serialize};
@@ -9,9 +11,47 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Deserialize)]
+pub struct ToolCallInput {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AiMessageInput {
     pub role: String,
+    #[serde(default)]
     pub content: String,
+    /// For assistant turns that requested tools: the tool calls to replay.
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCallInput>>,
+    /// For role == "tool": the originating tool call id this content answers.
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolDef {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// JSON Schema for the tool parameters.
+    pub parameters: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AiToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTurnResult {
+    pub text: Option<String>,
+    pub tool_calls: Vec<AiToolCall>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -160,6 +200,98 @@ pub async fn ai_chat_stream(
     });
 
     Ok(())
+}
+
+/// Convert frontend message inputs into genai chat messages, replaying tool
+/// calls (assistant) and tool responses (tool role) so multi-step loops keep
+/// full provider-side context.
+fn to_chat_messages(messages: Vec<AiMessageInput>) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = Vec::new();
+    for m in messages {
+        match m.role.as_str() {
+            "system" => out.push(ChatMessage::system(m.content)),
+            "tool" => {
+                let call_id = m.tool_call_id.unwrap_or_default();
+                out.push(ToolResponse::new(call_id, m.content).into());
+            }
+            "assistant" => {
+                if let Some(calls) = m.tool_calls {
+                    if !calls.is_empty() {
+                        let tool_calls: Vec<ToolCall> = calls
+                            .into_iter()
+                            .map(|c| ToolCall {
+                                call_id: c.id,
+                                fn_name: c.name,
+                                fn_arguments: c.arguments,
+                                thought_signatures: None,
+                            })
+                            .collect();
+                        out.push(tool_calls.into());
+                        continue;
+                    }
+                }
+                out.push(ChatMessage::assistant(m.content));
+            }
+            _ => out.push(ChatMessage::user(m.content)),
+        }
+    }
+    out
+}
+
+/// Single non-streaming turn used by the multi-step agent loop. Returns either
+/// the model's tool calls (to be executed by the frontend) or its final text.
+#[tauri::command]
+pub async fn ai_chat_turn(
+    messages: Vec<AiMessageInput>,
+    tools: Vec<ToolDef>,
+    character_context: Option<String>,
+) -> Result<AiTurnResult, String> {
+    let cfg = config::load_config();
+    validate_config_basics(&cfg)?;
+
+    let mut chat_messages: Vec<ChatMessage> = Vec::new();
+    if let Some(ctx) = character_context {
+        if !ctx.trim().is_empty() {
+            chat_messages.push(ChatMessage::system(format!(
+                "## 当前项目的角色设定\n{ctx}"
+            )));
+        }
+    }
+    chat_messages.extend(to_chat_messages(messages));
+
+    let mut request = ChatRequest::new(chat_messages);
+    if !tools.is_empty() {
+        let genai_tools: Vec<Tool> = tools
+            .into_iter()
+            .map(|t| Tool::new(t.name).with_description(t.description).with_schema(t.parameters))
+            .collect();
+        request = request.with_tools(genai_tools);
+    }
+
+    let client = build_client(&cfg);
+    let endpoint = effective_endpoint(&cfg);
+
+    match client.exec_chat(&cfg.model, request, None).await {
+        Ok(response) => {
+            let text = response.first_text().map(|t| t.to_string());
+            let tool_calls = response
+                .into_tool_calls()
+                .into_iter()
+                .map(|c| AiToolCall {
+                    id: c.call_id,
+                    name: c.fn_name,
+                    arguments: c.fn_arguments,
+                })
+                .collect();
+            log_ai_event("chat_turn", &cfg, &endpoint, true, "turn completed");
+            Ok(AiTurnResult { text, tool_calls })
+        }
+        Err(err) => {
+            let message = err.to_string();
+            log_ai_event("chat_turn", &cfg, &endpoint, false, &message);
+            Err(message)
+        }
+    }
 }
 
 fn build_client(cfg: &AiConfig) -> Client {

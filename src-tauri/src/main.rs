@@ -176,6 +176,7 @@ fn main() {
             ai::commands::set_ai_config,
             ai::commands::validate_ai_config,
             ai::commands::ai_chat_stream,
+            ai::commands::ai_chat_turn,
             // Assets
             assets::commands::list_assets,
             assets::commands::list_all_assets,
