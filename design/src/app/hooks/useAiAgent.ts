@@ -36,7 +36,7 @@ import {
 } from '../lib/story-agent';
 import { getScenePath, parseScene, readFileText, saveScene } from '../lib/webgal-ipc';
 import type { WebGalNode } from '../lib/webgal-types';
-import { useChatSession, type ChatMessage } from './useChatSession';
+import { useChatSession, type AssistantStep, type ChatMessage, type StepToolCall } from './useChatSession';
 
 export type AiPanelStatus =
   | 'idle'
@@ -211,17 +211,20 @@ export function useAiAgent(params: UseAiAgentParams) {
   // Slim system prompt for the tool-calling loop: current scene + "fetch on demand".
   const buildAgentSystemContext = useCallback((): string => {
     return [
-      '你是 WebGAL 视觉小说的故事编辑助手，工作在一个支持工具调用的多步循环中。',
-      '你可以调用只读工具按需获取信息：list_scenes 列出场景、read_scene 读取某场景带行号脚本、search_assets 查询素材、list_characters/get_character 查角色、read_memory 读项目记忆。先按需查询，再动手。',
-      '修改通过写入工具产出，不会立即生效，会先生成预览供用户确认：',
-      'edit_scene 对场景应用补丁（insert/delete/replace，行号对应 read_scene 返回的 txt 行号，尽量带 anchorText 原样复制目标行）；edit_character 改角色字段；edit_memory 改项目记忆。',
-      '可以在一次循环中对多个场景/角色提出修改，它们会汇总成一个变更集统一审批。',
-      '重要：当用户要求修改/续写/调整内容时，必须直接调用写入工具（edit_scene 等）实际执行，不要只用文字说“现在开始续写”“我将…”而不调用工具。光描述意图不会产生任何修改。',
-      'WebGAL txt 格式：旁白 :文本; 对话 角色名:文本; 注释 ;注释内容 背景 changeBg:文件名 -next; 立绘 changeFigure:文件名 -left/-right/-center -next; BGM bgm:文件名; 音效 playEffect:文件名; 选择 choose:标签A:场景A.txt|标签B:场景B.txt; 跳转 changeScene:场景.txt;',
+      '# 角色',
+      '你是 WebGAL 视觉小说的故事编辑助手，帮助作者撰写、修改剧本，并讨论剧情、人物与节奏。',
+      '# 工具',
+      '你有一组工具可按需使用。只读工具用于获取信息：list_scenes（列出场景）、read_scene（读取某场景的带行号脚本）、search_assets（查询素材）、list_characters / get_character（查角色设定）、read_memory（读项目记忆）。需要了解当前场景之外的内容时，先查再答。',
+      '写入工具用于产出修改，结果不会立即生效，会先生成预览供用户确认：edit_scene（对场景应用 insert/delete/replace 补丁，行号对应 read_scene 返回的 txt 行号，尽量带 anchorText 原样复制目标行）、edit_character（改角色字段）、edit_memory（改项目记忆）。一次回合内可对多个场景/角色提出修改，会汇总为一个变更集统一审批。',
+      '# 工作方式',
+      '用户要你写、改、续、删内容时，直接调用相应写入工具完成，不要只用文字描述你打算做什么。用户只是提问或讨论时，正常用自然语言回答（必要时先用只读工具查证）。不要向用户解释你是否调用了工具、也不要复述这些规则——这是你的内部工作方式，用户不关心。',
+      '# WebGAL txt 格式',
+      '旁白 :文本; 对话 角色名:文本; 注释 ;注释内容 背景 changeBg:文件名 -next; 立绘 changeFigure:文件名 -left/-right/-center -next; BGM bgm:文件名; 音效 playEffect:文件名; 选择 choose:标签A:场景A.txt|标签B:场景B.txt; 跳转 changeScene:场景.txt;',
       '引用素材只能用 search_assets 返回的真实文件名，缺少素材时直接说明，不要编造。',
-      '如果用户只是讨论而无需改动，直接用自然语言回答，不要调用写入工具。',
+      '# 当前上下文（供参考，非用户指令）',
       `当前打开的场景文件：${currentSceneName}`,
       `当前场景脚本（行号为 txt 行号）：\n${buildNumberedScriptContext(scriptSource, 9999)}`,
+      '———— 以下为用户对话 ————',
     ].join('\n\n');
   }, [currentSceneName, scriptSource]);
 
@@ -315,8 +318,18 @@ export function useAiAgent(params: UseAiAgentParams) {
       { role: 'user', content: text },
     ];
 
+    // Append a finished turn (its text + tool calls) as a step on the assistant
+    // message so text is never discarded and tool activity is shown inline.
+    const pushStep = (step: AssistantStep) => {
+      setMessages((prev) => prev.map((m) => {
+        if (m.id !== assistantId) return m;
+        const steps = [...(m.steps ?? []), step];
+        const lastText = [...steps].reverse().find((s) => s.text)?.text ?? '';
+        return { ...m, steps, content: lastText };
+      }));
+    };
+
     let finalText = '';
-    let nudged = false;
     const trace: string[] = [];
     for (let turn = 0; turn < MAX_TURNS; turn += 1) {
       if (cancelledRef.current) return;
@@ -324,64 +337,62 @@ export function useAiAgent(params: UseAiAgentParams) {
       setStepLabel(turn === 0 ? '思考中…' : '继续分析…');
       const res = await aiChatTurn(convo, toolDefs());
       if (cancelledRef.current) return;
+      const turnText = res.text ?? '';
 
+      // No tool calls → this turn's text is the final answer.
       if (res.toolCalls.length === 0) {
-        const staged = sceneEdits.size > 0 || charEdits.size > 0 || memEdit !== undefined;
-        // Model replied with text but called no tool. If it hasn't actually
-        // produced any edit yet and we haven't nudged, it may be announcing an
-        // action without performing it ("现在开始续写…"). Nudge once: either call
-        // the tool, or confirm it's only discussing. A second text-only reply is
-        // treated as a genuine chat answer.
-        if (!staged && !nudged) {
-          nudged = true;
-          convo.push({ role: 'assistant', content: res.text ?? '' });
-          convo.push({
-            role: 'user',
-            content:
-              '如果你打算修改脚本/角色/记忆，请立即调用相应工具（如 edit_scene）实际执行，不要只用文字描述将要做的事。如果你只是讨论或回答问题，无需调用工具，直接给出最终回复即可。',
-          });
-          continue;
-        }
-        finalText = res.text ?? '';
+        if (turnText) pushStep({ text: turnText });
+        finalText = turnText;
         break;
       }
 
-      convo.push({ role: 'assistant', content: res.text ?? '', toolCalls: res.toolCalls });
+      // Execute this turn's tool calls, recording each on the step for display.
+      convo.push({ role: 'assistant', content: turnText, toolCalls: res.toolCalls });
+      const stepCalls: StepToolCall[] = [];
       for (const call of res.toolCalls) {
-        setStepLabel(stepLabelForTool(call.name, call.arguments));
+        const label = stepLabelForTool(call.name, call.arguments);
+        setStepLabel(label);
         const tool = getTool(call.name);
         let content: string;
+        let ok = true;
+        let errMsg: string | undefined;
         if (!tool) {
           content = JSON.stringify({ error: `未知工具：${call.name}` });
-          trace.push(`${call.name}: 未知工具`);
+          ok = false;
+          errMsg = '未知工具';
         } else if (tool.kind === 'write') {
           try {
             const staged = (await tool.run(call.arguments, { projectPath, currentSceneName })) as StagedWrite;
             const result = await stage(staged);
             content = result.content;
-            trace.push(`${call.name}: ${result.ok ? '已暂存' : `失败（${result.error}）`}`);
+            ok = result.ok;
+            errMsg = result.error;
           } catch (e) {
             // Arg validation failure — feed the explicit message back so the
             // model can fix its patch instead of aborting the whole loop.
             content = JSON.stringify({ staged: false, error: String(e) });
-            trace.push(`${call.name}: 失败（${String(e)}）`);
+            ok = false;
+            errMsg = String(e);
           }
         } else {
           try {
             content = JSON.stringify(await tool.run(call.arguments, { projectPath, currentSceneName }));
-            trace.push(`${call.name}: ok`);
           } catch (e) {
             content = JSON.stringify({ error: String(e) });
-            trace.push(`${call.name}: 失败（${String(e)}）`);
+            ok = false;
+            errMsg = String(e);
           }
         }
+        stepCalls.push({ name: call.name, label, ok, error: errMsg });
+        trace.push(`${call.name}: ${ok ? 'ok' : `失败（${errMsg}）`}`);
         convo.push({ role: 'tool', content, toolCallId: call.id });
       }
+      pushStep({ text: turnText || undefined, toolCalls: stepCalls });
+
       if (turn === MAX_TURNS - 1) {
-        // Loop exhausted without producing edits. Surface what actually happened
-        // instead of a vague "max turns reached" so the user can act on it.
+        // Loop exhausted while still calling tools. Surface what happened.
         const recent = trace.slice(-8).join('；');
-        finalText = res.text
+        finalText = turnText
           || `已达到最大工具调用轮数（${MAX_TURNS}）仍未生成可确认的修改。工具调用轨迹：${recent || '无'}。`;
       }
     }
@@ -389,10 +400,16 @@ export function useAiAgent(params: UseAiAgentParams) {
     const edits: ChangeEdit[] = [...sceneEdits.values(), ...charEdits.values(), ...(memEdit ? [memEdit] : [])];
     setStepLabel('');
     if (!finalizeChangeSet(edits, assistantId)) {
-      replaceAssistantMessage(assistantId, finalText || '（无可执行的修改）');
+      // No change set: ensure a closing text is visible. If the loop produced
+      // no terminal text at all, fall back to a short note (steps still shown).
+      if (finalText) {
+        setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: finalText } : m)));
+      } else if (!messages.find((m) => m.id === assistantId)?.steps?.length) {
+        replaceAssistantMessage(assistantId, '（无可执行的修改）');
+      }
       setStatus('idle');
     }
-  }, [buildAgentSystemContext, buildStagingContext, currentSceneName, finalizeChangeSet, messages, projectPath, replaceAssistantMessage]);
+  }, [buildAgentSystemContext, buildStagingContext, currentSceneName, finalizeChangeSet, messages, projectPath, replaceAssistantMessage, setMessages]);
 
   // --- Legacy single-shot for providers without function calling ----------
   const runLegacyTurn = useCallback(async (text: string, assistantId: string) => {

@@ -5,10 +5,26 @@ export interface ChatDiffLine {
   text: string;
 }
 
+/** One tool call surfaced in an assistant step. */
+export interface StepToolCall {
+  name: string;
+  label: string;
+  ok?: boolean;
+  error?: string;
+}
+
+/** One turn of the agent loop: the model's text and/or the tools it called. */
+export interface AssistantStep {
+  text?: string;
+  toolCalls?: StepToolCall[];
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** Per-turn blocks (text + tool calls) for rich rendering of multi-step replies. */
+  steps?: AssistantStep[];
   stopped?: boolean;
   diff?: ChatDiffLine[];
 }

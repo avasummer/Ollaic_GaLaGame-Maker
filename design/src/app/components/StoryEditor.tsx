@@ -1399,6 +1399,7 @@ function AiAssistantPanel({
             <AiMessageBubble
               role={message.role}
               content={message.content}
+              steps={message.steps}
               isStreaming={aiAgent.streamingIdRef.current === message.id && aiAgent.busy}
               stopped={message.stopped}
               diff={message.diff}
