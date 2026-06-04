@@ -204,6 +204,7 @@ export function useAiAgent(params: UseAiAgentParams) {
       '修改通过写入工具产出，不会立即生效，会先生成预览供用户确认：',
       'edit_scene 对场景应用补丁（insert/delete/replace，行号对应 read_scene 返回的 txt 行号，尽量带 anchorText 原样复制目标行）；edit_character 改角色字段；edit_memory 改项目记忆。',
       '可以在一次循环中对多个场景/角色提出修改，它们会汇总成一个变更集统一审批。',
+      '重要：当用户要求修改/续写/调整内容时，必须直接调用写入工具（edit_scene 等）实际执行，不要只用文字说“现在开始续写”“我将…”而不调用工具。光描述意图不会产生任何修改。',
       'WebGAL txt 格式：旁白 :文本; 对话 角色名:文本; 注释 ;注释内容 背景 changeBg:文件名 -next; 立绘 changeFigure:文件名 -left/-right/-center -next; BGM bgm:文件名; 音效 playEffect:文件名; 选择 choose:标签A:场景A.txt|标签B:场景B.txt; 跳转 changeScene:场景.txt;',
       '引用素材只能用 search_assets 返回的真实文件名，缺少素材时直接说明，不要编造。',
       '如果用户只是讨论而无需改动，直接用自然语言回答，不要调用写入工具。',
@@ -303,6 +304,7 @@ export function useAiAgent(params: UseAiAgentParams) {
     ];
 
     let finalText = '';
+    let nudged = false;
     for (let turn = 0; turn < MAX_TURNS; turn += 1) {
       if (cancelledRef.current) return;
       setStatus(turn === 0 ? 'generating' : 'tooling');
@@ -311,6 +313,22 @@ export function useAiAgent(params: UseAiAgentParams) {
       if (cancelledRef.current) return;
 
       if (res.toolCalls.length === 0) {
+        const staged = sceneEdits.size > 0 || charEdits.size > 0 || memEdit !== undefined;
+        // Model replied with text but called no tool. If it hasn't actually
+        // produced any edit yet and we haven't nudged, it may be announcing an
+        // action without performing it ("现在开始续写…"). Nudge once: either call
+        // the tool, or confirm it's only discussing. A second text-only reply is
+        // treated as a genuine chat answer.
+        if (!staged && !nudged) {
+          nudged = true;
+          convo.push({ role: 'assistant', content: res.text ?? '' });
+          convo.push({
+            role: 'user',
+            content:
+              '如果你打算修改脚本/角色/记忆，请立即调用相应工具（如 edit_scene）实际执行，不要只用文字描述将要做的事。如果你只是讨论或回答问题，无需调用工具，直接给出最终回复即可。',
+          });
+          continue;
+        }
         finalText = res.text ?? '';
         break;
       }
