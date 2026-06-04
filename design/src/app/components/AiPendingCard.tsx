@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { DiffLine } from '../lib/story-agent';
+import type { ChangeEdit, PendingChangeSet } from '../lib/change-set';
 
 interface AiPendingCardProps {
   summary: string;
@@ -49,6 +50,80 @@ function DiffViewer({ lines }: { lines: DiffLine[] }) {
         >
           收起 diff
         </button>
+      )}
+    </div>
+  );
+}
+
+function EditRow({ edit }: { edit: ChangeEdit }) {
+  const label =
+    edit.kind === 'scene'
+      ? `场景 ${edit.file}${edit.isCurrent ? '（当前）' : ''}`
+      : edit.kind === 'character'
+        ? `角色 ${edit.name}`
+        : '项目记忆';
+  const detail = edit.kind === 'scene' ? edit.summary : `修改 ${edit.changedFields.join('、') || '（无变化）'}`;
+  return (
+    <div className="mt-2 rounded-md border border-border bg-background/40 p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-foreground">{label}</span>
+        <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">{edit.kind}</span>
+      </div>
+      <div className="mt-1 text-muted-foreground">{detail}</div>
+      {edit.kind === 'scene' && (
+        <>
+          {edit.warnings.length > 0 && (
+            <div className="mt-2 rounded border border-primary/20 bg-background/50 p-1.5 text-muted-foreground">
+              {edit.warnings.map((w) => <div key={w}>{w}</div>)}
+            </div>
+          )}
+          <DiffViewer lines={edit.diff} />
+        </>
+      )}
+      {(edit.kind === 'character' || edit.kind === 'memory') && (
+        <div className="mt-2 space-y-1 font-mono-family text-[11px]">
+          {edit.changedFields.map((field) => (
+            <div key={field} className="rounded bg-background/60 p-1">
+              <span className="text-muted-foreground">{field}: </span>
+              <span className="text-foreground">{String((edit.after as unknown as Record<string, unknown>)[field] ?? '')}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Approval card for a multi-edit change set (scenes + characters + memory). */
+export function ChangeSetCard({ changeSet, onAccept, onRevert }: {
+  changeSet: PendingChangeSet;
+  onAccept: () => void;
+  onRevert: () => void;
+}) {
+  const { status, edits } = changeSet;
+  return (
+    <div className={`rounded-lg border p-3 text-xs ${
+      status === 'pending'
+        ? 'border-primary/30 bg-primary/10'
+        : status === 'accepted'
+        ? 'border-chart-5/30 bg-chart-5/10'
+        : status === 'failed'
+        ? 'border-destructive/30 bg-destructive/10'
+        : 'border-border bg-secondary/40'
+    }`}>
+      <div className="font-medium text-foreground">
+        {edits.length > 1 ? `共 ${edits.length} 处修改` : '修改方案'}
+      </div>
+      {edits.map((edit, index) => <EditRow key={`${edit.kind}-${index}`} edit={edit} />)}
+      {status === 'pending' && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button type="button" onClick={onAccept} className="rounded-md bg-primary px-3 py-2 text-primary-foreground transition-all hover:opacity-90">
+            接受全部
+          </button>
+          <button type="button" onClick={onRevert} className="rounded-md bg-secondary px-3 py-2 transition-colors hover:bg-secondary/70">
+            撤销本次
+          </button>
+        </div>
       )}
     </div>
   );

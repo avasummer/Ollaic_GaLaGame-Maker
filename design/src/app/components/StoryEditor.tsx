@@ -34,8 +34,8 @@ import { useAiAgent } from '../hooks/useAiAgent';
 import { insertSceneNode, reorderSceneNodes, pasteSceneNode } from '../lib/scene-editing';
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
-import { AiPendingCard } from './AiPendingCard';
-import { ConflictCard, ErrorCard, MissingAssetCard } from './AiStatusCard';
+import { ChangeSetCard } from './AiPendingCard';
+import { ConflictCard, ErrorCard } from './AiStatusCard';
 import { DetailPanel } from './DetailPanel';
 import {
   AlertDialog,
@@ -1295,22 +1295,17 @@ function AiAssistantPanel({ aiAgent, projectPath, onOpenSettings, onSend }: AiAs
             />
           </div>
         ))}
-        {aiAgent.pendingChange?.status === 'pending' && (
-          <AiPendingCard
-            summary={aiAgent.pendingChange.summary}
-            status={aiAgent.pendingChange.status}
-            diff={aiAgent.pendingChange.diff}
-            warnings={aiAgent.pendingChange.warnings}
-            onAccept={aiAgent.acceptChange}
-            onRevert={aiAgent.revertChange}
-          />
+        {aiAgent.busy && aiAgent.stepLabel && (
+          <div className="flex items-center gap-2 rounded-sm border border-border bg-surface-container-low px-3 py-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+            <span className="min-w-0 flex-1 truncate">{aiAgent.stepLabel}</span>
+          </div>
         )}
-        {aiAgent.status === 'missing_assets' && (
-          <MissingAssetCard
-            issues={aiAgent.missingIssues}
-            onUseFallback={aiAgent.useFallbackAssets}
-            onOpenAssets={aiAgent.openAssets}
-            onRetryPrompt={aiAgent.retryWithExistingAssets}
+        {aiAgent.pendingChangeSet && aiAgent.status !== 'conflict' && (
+          <ChangeSetCard
+            changeSet={aiAgent.pendingChangeSet}
+            onAccept={() => { void aiAgent.acceptChange(); }}
+            onRevert={aiAgent.revertChange}
           />
         )}
         {aiAgent.status === 'conflict' && (
@@ -1347,15 +1342,15 @@ function AiAssistantPanel({ aiAgent, projectPath, onOpenSettings, onSend }: AiAs
               onSend();
             }
           }}
-          disabled={aiAgent.busy || aiAgent.pendingChange?.status === 'pending'}
+          disabled={aiAgent.busy || aiAgent.pendingChangeSet?.status === 'pending'}
           className="mt-3 h-20 w-full resize-none rounded-sm border border-border bg-surface-container-lowest p-2 text-sm focus:border-secondary focus:outline-none focus:ring-2 focus:ring-secondary-container/30 disabled:opacity-60"
-          placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChange?.status === 'pending' ? '请先接受或撤销当前 AI 修改...' : '输入你的创作想法...'}
+          placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChangeSet?.status === 'pending' ? '请先接受或撤销当前 AI 修改...' : '输入你的创作想法...'}
           aria-label="AI 创作输入"
         />
         <button
           type="button"
           onClick={aiAgent.busy ? aiAgent.stop : onSend}
-          disabled={!aiAgent.busy && (!aiAgent.input.trim() || aiAgent.pendingChange?.status === 'pending')}
+          disabled={!aiAgent.busy && (!aiAgent.input.trim() || aiAgent.pendingChangeSet?.status === 'pending')}
           className="mt-2 flex w-full items-center justify-center gap-2 rounded-sm bg-secondary-container/60 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-secondary-container disabled:opacity-50"
         >
           {aiAgent.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -2943,11 +2938,11 @@ export function StoryEditor() {
   });
 
   useEffect(() => {
-    aiPendingPreviewRef.current = aiAgent.pendingChange?.status === 'pending';
+    aiPendingPreviewRef.current = aiAgent.pendingChangeSet?.status === 'pending';
     if (aiAgent.status === 'reverted' || aiAgent.status === 'accepted') {
       sceneDraftCache.current.delete(currentSceneName);
     }
-  }, [aiAgent.pendingChange?.status, aiAgent.status, currentSceneName]);
+  }, [aiAgent.pendingChangeSet?.status, aiAgent.status, currentSceneName]);
 
   const handleAiSend = () => { void aiAgent.sendPrompt(aiAgent.input); };
   // ---------------------------------------------------------------------------
