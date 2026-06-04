@@ -1,59 +1,52 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { aiChatStream, type AiChatMessage } from '../lib/ai-ipc';
+import { aiChatTurn, getAiConfig, type AiChatMessage } from '../lib/ai-ipc';
 import { listAllAssets, type AssetInfo } from '../lib/assets-ipc';
+import { updateCharacter } from '../lib/character-ipc';
 import type { Character } from '../lib/character-types';
-import { applyEditorPatches } from '../lib/editor-executor';
 import {
-  describeParseError,
-  extractEditorResponse,
-  extractPatchAssetRefs,
-  summarizePatches,
-  validatePatchText,
-  type EditorPatch,
-  type EditorResponse,
-} from '../lib/editor-patch';
-import { buildMemoryContext, emptyProjectMemory, readProjectMemory, saveProjectMemory, type ProjectMemory } from '../lib/project-memory';
+  describeEdit,
+  stageCharacterEdit,
+  stageMemoryEdit,
+  stageSceneEdit,
+  summarizeChangeSet,
+  type ChangeEdit,
+  type CharacterEdit,
+  type MemoryEdit,
+  type PendingChangeSet,
+  type SceneEdit,
+  type StageError,
+  type StagingContext,
+} from '../lib/change-set';
+import { extractEditorResponse } from '../lib/editor-patch';
+import { getTool, toolDefs, type StagedWrite } from '../lib/ai-tools';
 import {
-  buildNumberedScriptContext,
+  buildMemoryContext,
+  emptyProjectMemory,
+  readProjectMemory,
+  saveProjectMemory,
+  type ProjectMemory,
+} from '../lib/project-memory';
+import {
   buildAssetContext,
-  createLineDiff,
-  formatMissingAssetIssues,
+  buildNumberedScriptContext,
   hasAssetContextTruncation,
   truncateContextMessages,
-  type DiffLine,
   type MissingAssetIssue,
 } from '../lib/story-agent';
-import { parseScene, serializeScene, saveScene, getScenePath } from '../lib/webgal-ipc';
+import { getScenePath, parseScene, readFileText, saveScene } from '../lib/webgal-ipc';
 import type { WebGalNode } from '../lib/webgal-types';
 import { useChatSession, type ChatMessage } from './useChatSession';
 
 export type AiPanelStatus =
   | 'idle'
   | 'generating'
-  | 'validating'
+  | 'tooling'
   | 'pending'
   | 'accepted'
   | 'reverted'
   | 'conflict'
-  | 'missing_assets'
   | 'error';
-
-export interface AiChangeRecord {
-  id: string;
-  filePath: string;
-  beforeContent: string;
-  afterContent: string;
-  diff: DiffLine[];
-  summary: string;
-  status: 'pending' | 'accepted' | 'reverted';
-  createdAt: string;
-  beforeNodes: WebGalNode[];
-  afterNodes: WebGalNode[];
-  baseDirty: boolean;
-  sourceMessageId: string;
-  warnings: string[];
-}
 
 export interface AiErrorState {
   message: string;
@@ -61,10 +54,14 @@ export interface AiErrorState {
   retryable: boolean;
 }
 
+/** Providers with reliable native function-calling support. Others fall back. */
+const FC_PROVIDERS = new Set(['openai', 'anthropic', 'gemini', 'deepseek', 'groq', 'xai', 'cohere']);
+const MAX_TURNS = 6;
+
 export const INITIAL_AI_MESSAGE: ChatMessage = {
   id: '1',
   role: 'assistant',
-  content: '你好，我是故事编辑助手。你可以直接告诉我想续写剧情、调整对白、删除片段，或者一起讨论场景节奏和人物表现。',
+  content: '你好，我是故事编辑助手。你可以告诉我想续写剧情、调整对白、删除片段，或一起讨论场景节奏和人物表现。我可以查阅其他场景、素材库和角色设定，并跨场景/角色提出修改。',
 };
 
 interface UseAiAgentParams {
@@ -88,51 +85,12 @@ interface UseAiAgentParams {
 function buildCharacterContext(chars: Character[]): string {
   if (chars.length === 0) return '';
   return chars.map(c => {
-    const parts: string[] = [];
-    parts.push(`- ${c.name}`);
+    const parts: string[] = [`- ${c.name}（id: ${c.id}）`];
     if (c.aliases.length > 0) parts.push(`  别名: ${c.aliases.join(', ')}`);
     if (c.personality) parts.push(`  性格: ${c.personality}`);
-    if (c.description) parts.push(`  简介: ${c.description}`);
     if (c.dialogueStyle) parts.push(`  对话风格: ${c.dialogueStyle}`);
     return parts.join('\n');
-  }).join('\n\n');
-}
-
-function findApproxSelectedLine(scriptSource: string, selectedNode: WebGalNode | null): number | null {
-  if (!selectedNode) return null;
-  const lines = scriptSource.split('\n');
-  const candidates = [
-    selectedNode.content,
-    selectedNode.asset,
-    selectedNode.character && selectedNode.content ? `${selectedNode.character}:${selectedNode.content}` : '',
-    selectedNode.targetScene,
-    selectedNode.labelName,
-  ].filter((value): value is string => !!value && value.trim().length > 0);
-
-  for (const candidate of candidates) {
-    const index = lines.findIndex((line) => line.includes(candidate));
-    if (index >= 0) return index + 1;
-  }
-  return null;
-}
-
-function buildSelectedNodeContext(scriptSource: string, selectedNode: WebGalNode | null, nodes: WebGalNode[]): string {
-  if (!selectedNode) return '';
-  const index = nodes.findIndex((node) => node.id === selectedNode.id);
-  const lineNo = findApproxSelectedLine(scriptSource, selectedNode);
-  return [
-    `当前选中节点：${lineNo ? `推测 txt 行号 ${lineNo}` : `可视化节点序号 ${index >= 0 ? index + 1 : '未知'}`}。`,
-    '如果用户说“这里”“这个节点”“当前选中内容”，优先处理该节点。',
-    JSON.stringify({
-      type: selectedNode.type,
-      content: selectedNode.content,
-      character: selectedNode.character,
-      asset: selectedNode.asset,
-      targetScene: selectedNode.targetScene,
-      labelName: selectedNode.labelName,
-      flags: selectedNode.flags,
-    }, null, 2),
-  ].join('\n');
+  }).join('\n');
 }
 
 function classifyAiError(raw: string): AiErrorState {
@@ -149,6 +107,25 @@ function classifyAiError(raw: string): AiErrorState {
   return { kind: 'other', retryable: true, message: `AI 服务出错：${raw}` };
 }
 
+function stepLabelForTool(name: string, args: Record<string, unknown>): string {
+  switch (name) {
+    case 'list_scenes': return '正在列出场景…';
+    case 'read_scene': return `正在读取场景 ${String(args.name ?? '')}…`;
+    case 'search_assets': return '正在查询素材库…';
+    case 'list_characters': return '正在列出角色…';
+    case 'get_character': return '正在读取角色设定…';
+    case 'read_memory': return '正在读取项目记忆…';
+    case 'edit_scene': return `正在准备修改场景 ${String(args.file ?? '')}…`;
+    case 'edit_character': return '正在准备修改角色设定…';
+    case 'edit_memory': return '正在准备更新项目记忆…';
+    default: return `正在执行 ${name}…`;
+  }
+}
+
+function isStageError(value: unknown): value is StageError {
+  return typeof value === 'object' && value !== null && typeof (value as StageError).message === 'string';
+}
+
 export function useAiAgent(params: UseAiAgentParams) {
   const navigate = useNavigate();
   const {
@@ -156,7 +133,6 @@ export function useAiAgent(params: UseAiAgentParams) {
     projectPath,
     currentSceneName,
     nodes,
-    selectedNode,
     scriptSource,
     dirty,
     characters,
@@ -173,30 +149,28 @@ export function useAiAgent(params: UseAiAgentParams) {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<AiPanelStatus>('idle');
-  const [pendingChange, setPendingChange] = useState<AiChangeRecord | null>(null);
+  const [stepLabel, setStepLabel] = useState('');
+  const [pendingChangeSet, setPendingChangeSet] = useState<PendingChangeSet | null>(null);
   const [error, setError] = useState<AiErrorState | null>(null);
   const [assets, setAssets] = useState<AssetInfo[]>([]);
   const [memory, setMemory] = useState<ProjectMemory | null>(null);
-  const [missingIssues, setMissingIssues] = useState<MissingAssetIssue[]>([]);
   const [lastPrompt, setLastPrompt] = useState('');
   const [retryCount, setRetryCount] = useState(0);
   const [cooldown, setCooldown] = useState(0);
-  const cancelRef = useRef<(() => void) | null>(null);
+  const cancelledRef = useRef(false);
   const streamingIdRef = useRef<string | null>(null);
   const inFlightRef = useRef(false);
 
-  useEffect(() => () => { cancelRef.current?.(); }, []);
-
+  // Reset transient state when switching scenes.
   useEffect(() => {
-    cancelRef.current?.();
-    cancelRef.current = null;
+    cancelledRef.current = true;
     streamingIdRef.current = null;
     inFlightRef.current = false;
     setBusy(false);
     setStatus('idle');
-    setPendingChange(null);
+    setStepLabel('');
+    setPendingChangeSet(null);
     setError(null);
-    setMissingIssues([]);
     setInput('');
   }, [currentSceneName]);
 
@@ -207,16 +181,8 @@ export function useAiAgent(params: UseAiAgentParams) {
       return;
     }
     let cancelled = false;
-    listAllAssets(projectPath).then((list) => {
-      if (!cancelled) setAssets(list);
-    }).catch(() => {
-      if (!cancelled) setAssets([]);
-    });
-    readProjectMemory(projectPath).then((value) => {
-      if (!cancelled) setMemory(value);
-    }).catch(() => {
-      if (!cancelled) setMemory(null);
-    });
+    listAllAssets(projectPath).then((list) => { if (!cancelled) setAssets(list); }).catch(() => { if (!cancelled) setAssets([]); });
+    readProjectMemory(projectPath).then((value) => { if (!cancelled) setMemory(value); }).catch(() => { if (!cancelled) setMemory(null); });
     return () => { cancelled = true; };
   }, [projectPath]);
 
@@ -226,8 +192,28 @@ export function useAiAgent(params: UseAiAgentParams) {
     return () => clearTimeout(timer);
   }, [cooldown]);
 
-  const buildSystemContext = useCallback((): string => {
-    const currentScript = buildNumberedScriptContext(scriptSource);
+  const replaceAssistantMessage = useCallback((messageId: string, content: string, extra?: Partial<ChatMessage>) => {
+    setMessages(prev => prev.map(message => (message.id === messageId ? { ...message, content, ...extra } : message)));
+  }, [setMessages]);
+
+  // Slim system prompt for the tool-calling loop: current scene + "fetch on demand".
+  const buildAgentSystemContext = useCallback((): string => {
+    return [
+      '你是 WebGAL 视觉小说的故事编辑助手，工作在一个支持工具调用的多步循环中。',
+      '你可以调用只读工具按需获取信息：list_scenes 列出场景、read_scene 读取某场景带行号脚本、search_assets 查询素材、list_characters/get_character 查角色、read_memory 读项目记忆。先按需查询，再动手。',
+      '修改通过写入工具产出，不会立即生效，会先生成预览供用户确认：',
+      'edit_scene 对场景应用补丁（insert/delete/replace，行号对应 read_scene 返回的 txt 行号，尽量带 anchorText 原样复制目标行）；edit_character 改角色字段；edit_memory 改项目记忆。',
+      '可以在一次循环中对多个场景/角色提出修改，它们会汇总成一个变更集统一审批。',
+      'WebGAL txt 格式：旁白 :文本; 对话 角色名:文本; 注释 ;注释内容 背景 changeBg:文件名 -next; 立绘 changeFigure:文件名 -left/-right/-center -next; BGM bgm:文件名; 音效 playEffect:文件名; 选择 choose:标签A:场景A.txt|标签B:场景B.txt; 跳转 changeScene:场景.txt;',
+      '引用素材只能用 search_assets 返回的真实文件名，缺少素材时直接说明，不要编造。',
+      '如果用户只是讨论而无需改动，直接用自然语言回答，不要调用写入工具。',
+      `当前打开的场景文件：${currentSceneName}`,
+      `当前场景脚本（行号为 txt 行号）：\n${buildNumberedScriptContext(scriptSource, 9999)}`,
+    ].join('\n\n');
+  }, [currentSceneName, scriptSource]);
+
+  // Full-context single-shot prompt for providers without function calling.
+  const buildLegacySystemContext = useCallback((): string => {
     return [
       '你是 WebGAL txt 脚本编辑器助手。',
       '输出规则：只输出一个 JSON 对象，不要 Markdown 包裹，不要解释。',
@@ -236,242 +222,209 @@ export function useAiAgent(params: UseAiAgentParams) {
       'insert: {"type":"insert","file":"...","afterLine":正整数或"end","anchorText":"对应行原文","text":"WebGAL txt"}。',
       'delete: {"type":"delete","file":"...","startLine":正整数,"endLine":正整数,"anchorText":"起始行原文"}。',
       'replace: {"type":"replace","file":"...","startLine":正整数,"endLine":正整数,"anchorText":"起始行原文","text":"WebGAL txt"}。',
-      '行号必须对应下方带行号脚本中的 txt 行号。anchorText 请原样复制目标行完整文本，用于行号漂移兜底。',
-      'text 字段直接写 WebGAL txt 行，多行用 \\n 分隔，不要写 JSON 节点结构。',
-      'WebGAL txt 格式：旁白 :文本; 对话 角色名:文本; 注释 ;注释内容 背景 changeBg:文件名 -next; 立绘 changeFigure:文件名 -left/-right/-center -next; BGM bgm:文件名; 音效 playEffect:文件名; 选择 choose:标签A:场景A.txt|标签B:场景B.txt; 跳转 changeScene:场景.txt;',
-      '引用素材时只能使用当前素材库列表中的文件名。缺少素材时，返回 chat 说明，不要在 patch.text 中编造不存在的素材名。',
-      '不要声称已经直接修改文件；系统会生成 diff preview，只有用户接受后才写入。',
+      '行号必须对应下方带行号脚本中的 txt 行号。anchorText 请原样复制目标行完整文本。',
+      'text 字段直接写 WebGAL txt 行，多行用 \\n 分隔。',
+      '引用素材时只能使用当前素材库列表中的文件名，缺少素材时返回 chat 说明，不要编造。',
       buildAssetContext(assets),
       buildCharacterContext(characters),
       buildMemoryContext(memory),
       `当前场景文件：${currentSceneName}`,
-      `当前脚本（左侧数字是 txt 行号，不是可视化节点数，删除/替换必须使用这些行号）：\n${currentScript}`,
-      buildSelectedNodeContext(scriptSource, selectedNode, nodes),
+      `当前脚本（左侧数字是 txt 行号）：\n${buildNumberedScriptContext(scriptSource)}`,
     ].filter(Boolean).join('\n\n');
-  }, [assets, characters, currentSceneName, memory, nodes, scriptSource, selectedNode]);
+  }, [assets, characters, currentSceneName, memory, scriptSource]);
 
-  const buildPayload = useCallback((next: string, extraMessages: AiChatMessage[] = []): AiChatMessage[] => {
-    const maxMessages = scriptSource.split('\n').length > 200 ? 6 : 12;
-    return [
-      { role: 'system', content: buildSystemContext() },
-      ...truncateContextMessages(messages, maxMessages),
-      { role: 'user', content: next },
-      ...extraMessages,
-    ];
-  }, [buildSystemContext, messages, scriptSource]);
+  const buildStagingContext = useCallback((): StagingContext => ({
+    currentSceneName,
+    currentScriptSource: scriptSource,
+    currentNodes: nodes,
+    assets,
+    readSceneContent: async (file: string) => {
+      if (!projectPath) throw new Error('当前没有打开的项目。');
+      const path = await getScenePath(projectPath, file);
+      return readFileText(path);
+    },
+    getCharacter: (id: string) => characters.find((c) => c.id === id),
+    memory: memory ?? emptyProjectMemory(),
+  }), [assets, characters, currentSceneName, memory, nodes, projectPath, scriptSource]);
 
-  const replaceAssistantMessage = useCallback((messageId: string, content: string, extra?: Partial<import('./useChatSession').ChatMessage>) => {
-    setMessages(prev => prev.map(message => (
-      message.id === messageId ? { ...message, content, ...extra } : message
-    )));
-  }, [setMessages]);
-
-  const validatePatchAssets = useCallback((patches: EditorPatch[]): MissingAssetIssue[] => {
-    const available = new Set(assets.map((asset) => `${asset.category}/${asset.name}`));
-    const issues: MissingAssetIssue[] = [];
-    for (const patch of patches) {
-      if (patch.type === 'delete') continue;
-      for (const ref of extractPatchAssetRefs(patch.text)) {
-        if (!available.has(`${ref.expectedCategory}/${ref.file}`)) issues.push(ref);
-      }
-    }
-    return issues;
-  }, [assets]);
-
-  const createPendingChangeFromEditorResponse = useCallback(async (response: EditorResponse, sourceMessageId: string, warnings: string[] = []) => {
-    if (response.type === 'chat') {
-      replaceAssistantMessage(sourceMessageId, response.message);
-      setStatus('idle');
-      setError(null);
-      return;
-    }
-
-    const patches = response.patches;
-    if (patches.length === 0) {
-      setStatus('idle');
-      return;
-    }
-    const wrongFile = patches.find((patch) => patch.file !== currentSceneName);
-    if (wrongFile) {
-      setStatus('error');
-      setError({ kind: 'other', retryable: true, message: `AI patch 目标文件是 ${wrongFile.file}，但当前场景是 ${currentSceneName}。` });
-      return;
-    }
-    const textErrors = patches.flatMap((patch) => (patch.type === 'insert' || patch.type === 'replace') ? validatePatchText(patch.text) : []);
-    if (textErrors.length > 0) {
-      setStatus('error');
-      setError({ kind: 'other', retryable: true, message: `AI patch 中的 WebGAL txt 格式无效：\n${textErrors.join('\n')}` });
-      return;
-    }
-    const missing = projectPath ? validatePatchAssets(patches) : [];
-    if (missing.length > 0) {
-      setMissingIssues(missing);
-      setStatus('missing_assets');
-      setError({ kind: 'other', retryable: false, message: `AI patch 引用了素材库中不存在的文件，已阻止写入。\n${formatMissingAssetIssues(missing)}` });
-      return;
-    }
-
-    setStatus('validating');
-    try {
-      const beforeNodes = nodes;
-      const beforeContent = scriptSource;
-      const applied = applyEditorPatches(beforeContent, patches);
-      const afterNodes = await parseScene(applied.content);
-      const afterContent = await serializeScene(afterNodes);
-      if (afterContent === beforeContent) {
-        setStatus('error');
-        setError({ kind: 'other', retryable: true, message: 'AI 返回了 patch，但应用后脚本没有任何变化。请让它基于当前 txt 行号重新生成。' });
-        return;
-      }
-      const change: AiChangeRecord = {
-        id: `change-${Date.now()}`,
-        filePath: currentSceneName,
-        beforeContent,
-        afterContent,
-        diff: createLineDiff(beforeContent, afterContent),
-        summary: summarizePatches(patches),
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        beforeNodes,
-        afterNodes,
-        baseDirty: dirty,
-        sourceMessageId,
-        warnings: applied.correctedAnchors > 0 ? [...warnings, `已通过 anchorText 修正 ${applied.correctedAnchors} 处行号漂移。`] : warnings,
-      };
-      replaceAssistantMessage(sourceMessageId, `已生成修改预览：${change.summary}`);
-      setPendingChange(change);
-      setNodes(afterNodes);
-      setScriptSource(afterContent);
+  // Turn a finished set of staged edits into a pending change set + live preview.
+  const finalizeChangeSet = useCallback((edits: ChangeEdit[], sourceMessageId: string) => {
+    if (edits.length === 0) return false;
+    const changeSet: PendingChangeSet = {
+      id: `cs-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      sourceMessageId,
+      status: 'pending',
+      edits,
+    };
+    const currentSceneEdit = edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    if (currentSceneEdit) {
+      setNodes(currentSceneEdit.afterNodes);
+      setScriptSource(currentSceneEdit.afterContent);
       setSelectedNode(null);
       setShowScript(false);
       setDirty(true);
       setSaveStatus('idle');
-      setStatus('pending');
-      setError(null);
-    } catch (e) {
-      setStatus('error');
-      setError({ kind: 'other', retryable: true, message: `AI patch 无法应用或无法通过 WebGAL 解析校验：${String(e)}` });
     }
-  }, [currentSceneName, dirty, nodes, projectPath, replaceAssistantMessage, scriptSource, setDirty, setNodes, setSaveStatus, setScriptSource, setSelectedNode, setShowScript, validatePatchAssets]);
+    replaceAssistantMessage(sourceMessageId, `已生成修改预览：${summarizeChangeSet(changeSet)}`);
+    setPendingChangeSet(changeSet);
+    setStatus('pending');
+    setError(null);
+    return true;
+  }, [replaceAssistantMessage, setDirty, setNodes, setSaveStatus, setScriptSource, setSelectedNode, setShowScript]);
+
+  // --- Function-calling agent loop ----------------------------------------
+  const runAgentLoop = useCallback(async (text: string, assistantId: string) => {
+    const stagingCtx = buildStagingContext();
+    const sceneEdits = new Map<string, SceneEdit>();
+    const charEdits = new Map<string, CharacterEdit>();
+    let memEdit: MemoryEdit | undefined;
+
+    const stage = async (staged: StagedWrite): Promise<string> => {
+      try {
+        if (staged.tool === 'edit_scene') {
+          sceneEdits.set(staged.file, await stageSceneEdit(sceneEdits.get(staged.file), staged, stagingCtx));
+        } else if (staged.tool === 'edit_character') {
+          charEdits.set(staged.id, stageCharacterEdit(charEdits.get(staged.id), staged, stagingCtx));
+        } else {
+          memEdit = stageMemoryEdit(memEdit, staged, stagingCtx);
+        }
+        return JSON.stringify({ staged: true, message: '已暂存，等待用户确认。' });
+      } catch (e) {
+        const msg = isStageError(e) ? e.message : String(e);
+        return JSON.stringify({ staged: false, error: msg });
+      }
+    };
+
+    const convo: AiChatMessage[] = [
+      { role: 'system', content: buildAgentSystemContext() },
+      ...truncateContextMessages(messages, 8),
+      { role: 'user', content: text },
+    ];
+
+    let finalText = '';
+    for (let turn = 0; turn < MAX_TURNS; turn += 1) {
+      if (cancelledRef.current) return;
+      setStatus(turn === 0 ? 'generating' : 'tooling');
+      setStepLabel(turn === 0 ? '思考中…' : '继续分析…');
+      const res = await aiChatTurn(convo, toolDefs());
+      if (cancelledRef.current) return;
+
+      if (res.toolCalls.length === 0) {
+        finalText = res.text ?? '';
+        break;
+      }
+
+      convo.push({ role: 'assistant', content: res.text ?? '', toolCalls: res.toolCalls });
+      for (const call of res.toolCalls) {
+        setStepLabel(stepLabelForTool(call.name, call.arguments));
+        const tool = getTool(call.name);
+        let content: string;
+        if (!tool) {
+          content = JSON.stringify({ error: `未知工具：${call.name}` });
+        } else if (tool.kind === 'write') {
+          const staged = (await tool.run(call.arguments, { projectPath, currentSceneName })) as StagedWrite;
+          content = await stage(staged);
+        } else {
+          try {
+            content = JSON.stringify(await tool.run(call.arguments, { projectPath, currentSceneName }));
+          } catch (e) {
+            content = JSON.stringify({ error: String(e) });
+          }
+        }
+        convo.push({ role: 'tool', content, toolCallId: call.id });
+      }
+      if (turn === MAX_TURNS - 1) {
+        finalText = res.text ?? '已达到最大工具调用轮数。';
+      }
+    }
+
+    const edits: ChangeEdit[] = [...sceneEdits.values(), ...charEdits.values(), ...(memEdit ? [memEdit] : [])];
+    setStepLabel('');
+    if (!finalizeChangeSet(edits, assistantId)) {
+      replaceAssistantMessage(assistantId, finalText || '（无可执行的修改）');
+      setStatus('idle');
+    }
+  }, [buildAgentSystemContext, buildStagingContext, currentSceneName, finalizeChangeSet, messages, projectPath, replaceAssistantMessage]);
+
+  // --- Legacy single-shot for providers without function calling ----------
+  const runLegacyTurn = useCallback(async (text: string, assistantId: string) => {
+    setStatus('generating');
+    setStepLabel('思考中…');
+    const convo: AiChatMessage[] = [
+      { role: 'system', content: buildLegacySystemContext() },
+      ...truncateContextMessages(messages, 8),
+      { role: 'user', content: text },
+    ];
+    const res = await aiChatTurn(convo, []);
+    if (cancelledRef.current) return;
+    setStepLabel('');
+    const parsed = res.text ? extractEditorResponse(res.text) : null;
+    if (!parsed) {
+      replaceAssistantMessage(assistantId, res.text || 'AI 没有返回可执行方案，请重新描述你的需求。');
+      setStatus('idle');
+      return;
+    }
+    if (parsed.type === 'chat') {
+      replaceAssistantMessage(assistantId, parsed.message);
+      setStatus('idle');
+      return;
+    }
+    try {
+      const edit = await stageSceneEdit(undefined, { tool: 'edit_scene', file: currentSceneName, patches: parsed.patches }, buildStagingContext());
+      if (!finalizeChangeSet([edit], assistantId)) {
+        replaceAssistantMessage(assistantId, '（patch 应用后没有变化）');
+        setStatus('idle');
+      }
+    } catch (e) {
+      const msg = isStageError(e) ? e.message : String(e);
+      setStatus('error');
+      setError({ kind: 'other', retryable: true, message: msg });
+    }
+  }, [buildLegacySystemContext, buildStagingContext, currentSceneName, finalizeChangeSet, messages, replaceAssistantMessage]);
 
   const sendPrompt = useCallback(async (prompt: string) => {
     const text = prompt.trim();
     if (!text || busy || inFlightRef.current) return;
-    if (pendingChange?.status === 'pending') {
+    if (pendingChangeSet?.status === 'pending') {
       setError({ kind: 'other', retryable: false, message: '当前还有 AI 修改方案待确认。请先接受或撤销后再继续对话。' });
       return;
     }
     inFlightRef.current = true;
+    cancelledRef.current = false;
     setLastPrompt(text);
     setError(null);
-    setPendingChange(null);
-    setMissingIssues([]);
+    setPendingChangeSet(null);
     setStatus('generating');
 
     const userId = `u-${Date.now()}`;
     const assistantId = `a-${Date.now() + 1}`;
     streamingIdRef.current = assistantId;
-    let assistantContent = '';
     setMessages([...messages, { id: userId, role: 'user', content: text }, { id: assistantId, role: 'assistant', content: '' }]);
     setInput('');
     setBusy(true);
 
-    const isJsonLike = (s: string) => s.trimStart().startsWith('{') || s.trimStart().startsWith('```');
-
-    const appendChunk = (chunk: string) => {
-      assistantContent += chunk;
-      // JSON 输出不实时显示，等 onDone 后替换为人读摘要；聊天回复正常流式显示
-      if (!isJsonLike(assistantContent)) {
-        setMessages(prev => prev.map(m => (m.id === assistantId ? { ...m, content: m.content + chunk } : m)));
-      }
-    };
-
     try {
-      const { cancel } = await aiChatStream(buildPayload(text), {
-        onChunk: appendChunk,
-        onDone: async () => {
-          cancelRef.current = null;
-          streamingIdRef.current = null;
-          const parsed = extractEditorResponse(assistantContent);
-          if (parsed) {
-            inFlightRef.current = false;
-            setBusy(false);
-            setRetryCount(0);
-            await createPendingChangeFromEditorResponse(parsed, assistantId);
-            return;
-          }
-
-          // 格式错误，静默重试一次，复用原气泡
-          const retryPrompt = `你的输出无法解析：${describeParseError(assistantContent)}。请只输出合法 JSON，不要 Markdown，不要解释。`;
-          let retryContent = '';
-          streamingIdRef.current = assistantId;
-          // 清空原气泡，继续显示"思考中..."
-          setMessages(prev => prev.map(m => (m.id === assistantId ? { ...m, content: '' } : m)));
-          try {
-            const retryResult = await aiChatStream(buildPayload(text, [
-              { role: 'assistant', content: assistantContent },
-              { role: 'user', content: retryPrompt },
-            ]), {
-              onChunk: (chunk) => {
-                retryContent += chunk;
-                if (!isJsonLike(retryContent)) {
-                  setMessages(prev => prev.map(m => (m.id === assistantId ? { ...m, content: m.content + chunk } : m)));
-                }
-              },
-              onDone: async () => {
-                cancelRef.current = null;
-                streamingIdRef.current = null;
-                inFlightRef.current = false;
-                setBusy(false);
-                setRetryCount(0);
-                const retryParsed = extractEditorResponse(retryContent);
-                if (retryParsed) {
-                  await createPendingChangeFromEditorResponse(retryParsed, assistantId);
-                  return;
-                }
-                replaceAssistantMessage(assistantId, 'AI 没有返回可执行方案，请重新描述你的需求。');
-                setStatus('idle');
-                setError({ kind: 'other', retryable: true, message: 'AI 没有返回可执行方案，请重新描述你的需求。' });
-              },
-              onError: (msg) => {
-                cancelRef.current = null;
-                streamingIdRef.current = null;
-                inFlightRef.current = false;
-                setBusy(false);
-                setStatus('error');
-                const classified = classifyAiError(msg);
-                setError(classified);
-                if (classified.kind === 'rate_limit') setCooldown(30);
-              },
-            });
-            cancelRef.current = retryResult.cancel;
-          } catch (e) {
-            inFlightRef.current = false;
-            setBusy(false);
-            setStatus('error');
-            setError(classifyAiError(String(e)));
-          }
-        },
-        onError: (msg) => {
-          cancelRef.current = null;
-          streamingIdRef.current = null;
-          inFlightRef.current = false;
-          setBusy(false);
-          setStatus('error');
-          const classified = classifyAiError(msg);
-          setError(classified);
-          if (classified.kind === 'rate_limit') setCooldown(30);
-          setMessages(prev => prev.map(m => m.id === assistantId && !m.content ? { ...m, content: `（错误：${classified.message}）` } : m));
-        },
-      });
-      cancelRef.current = cancel;
+      const cfg = await getAiConfig();
+      const useFc = FC_PROVIDERS.has(cfg.provider);
+      if (useFc) await runAgentLoop(text, assistantId);
+      else await runLegacyTurn(text, assistantId);
+      setRetryCount(0);
     } catch (e) {
+      if (!cancelledRef.current) {
+        setStatus('error');
+        const classified = classifyAiError(String(e));
+        setError(classified);
+        if (classified.kind === 'rate_limit') setCooldown(30);
+        replaceAssistantMessage(assistantId, `（错误：${classified.message}）`);
+      }
+    } finally {
       inFlightRef.current = false;
+      streamingIdRef.current = null;
       setBusy(false);
-      setStatus('error');
-      setError(classifyAiError(String(e)));
+      setStepLabel('');
     }
-  }, [buildPayload, busy, createPendingChangeFromEditorResponse, messages, pendingChange, setMessages]);
+  }, [busy, messages, pendingChangeSet, replaceAssistantMessage, runAgentLoop, runLegacyTurn, setMessages]);
 
   const retry = useCallback(() => {
     if (!lastPrompt || busy || cooldown > 0) return;
@@ -480,85 +433,110 @@ export function useAiAgent(params: UseAiAgentParams) {
     void sendPrompt(lastPrompt);
   }, [busy, cooldown, error?.kind, lastPrompt, retryCount, sendPrompt]);
 
+  // Apply the whole change set atomically (all-or-rollback).
   const acceptChange = useCallback(async () => {
-    if (!pendingChange || pendingChange.status !== 'pending') return;
-    if (scriptSource !== pendingChange.afterContent) {
+    if (!pendingChangeSet || pendingChangeSet.status !== 'pending' || !projectPath) return;
+    // Conflict guard: the current scene's live buffer must still match our preview.
+    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    if (currentSceneEdit && scriptSource !== currentSceneEdit.afterContent) {
       setStatus('conflict');
       return;
     }
-    pushHistory(pendingChange.beforeNodes);
-    if (projectPath) {
-      const scenePath = await getScenePath(projectPath, currentSceneName);
-      await saveScene(scenePath, pendingChange.afterNodes);
+
+    const applied: ChangeEdit[] = [];
+    try {
+      for (const edit of pendingChangeSet.edits) {
+        if (edit.kind === 'scene') {
+          const path = await getScenePath(projectPath, edit.file);
+          await saveScene(path, edit.afterNodes);
+        } else if (edit.kind === 'character') {
+          await updateCharacter(projectPath, edit.after);
+        } else {
+          await saveProjectMemory(projectPath, edit.after);
+          setMemory(edit.after);
+        }
+        applied.push(edit);
+      }
+    } catch (e) {
+      // Roll back everything already written, in reverse order.
+      for (const edit of applied.reverse()) {
+        try {
+          if (edit.kind === 'scene') {
+            const path = await getScenePath(projectPath, edit.file);
+            await saveScene(path, edit.beforeNodes);
+          } else if (edit.kind === 'character') {
+            await updateCharacter(projectPath, edit.before);
+          } else {
+            await saveProjectMemory(projectPath, edit.before);
+            setMemory(edit.before);
+          }
+        } catch { /* best-effort rollback */ }
+      }
+      setStatus('error');
+      setError({ kind: 'other', retryable: false, message: `落盘失败，已回滚全部修改：${String(e)}` });
+      setPendingChangeSet({ ...pendingChangeSet, status: 'failed' });
+      return;
+    }
+
+    if (currentSceneEdit) {
+      pushHistory(currentSceneEdit.beforeNodes);
       setDirty(false);
       setSaveStatus('saved');
-    } else {
-      setDirty(true);
-      setSaveStatus('idle');
     }
-    replaceAssistantMessage(pendingChange.sourceMessageId, `已接受修改：${pendingChange.summary}`, { diff: pendingChange.diff });
-    setPendingChange({ ...pendingChange, status: 'accepted' });
+    replaceAssistantMessage(pendingChangeSet.sourceMessageId, `已接受修改：${summarizeChangeSet(pendingChangeSet)}`, {
+      diff: currentSceneEdit?.diff,
+    });
+    setPendingChangeSet({ ...pendingChangeSet, status: 'accepted' });
     setStatus('accepted');
-  }, [currentSceneName, pendingChange, projectPath, pushHistory, replaceAssistantMessage, scriptSource, setDirty, setSaveStatus]);
+  }, [pendingChangeSet, projectPath, pushHistory, replaceAssistantMessage, scriptSource, setDirty, setSaveStatus]);
 
   const revertChange = useCallback(() => {
-    if (!pendingChange) return;
-    setNodes(pendingChange.beforeNodes);
-    setScriptSource(pendingChange.beforeContent);
-    setSelectedNode(null);
-    setDirty(pendingChange.baseDirty);
-    setSaveStatus('idle');
-    replaceAssistantMessage(pendingChange.sourceMessageId, `已撤销：${pendingChange.summary}`);
-    setPendingChange({ ...pendingChange, status: 'reverted' });
+    if (!pendingChangeSet) return;
+    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    if (currentSceneEdit) {
+      setNodes(currentSceneEdit.beforeNodes);
+      setScriptSource(currentSceneEdit.beforeContent);
+      setSelectedNode(null);
+      setDirty(dirty);
+      setSaveStatus('idle');
+    }
+    replaceAssistantMessage(pendingChangeSet.sourceMessageId, `已撤销：${summarizeChangeSet(pendingChangeSet)}`);
+    setPendingChangeSet({ ...pendingChangeSet, status: 'reverted' });
     setStatus('reverted');
-  }, [pendingChange, replaceAssistantMessage, setDirty, setNodes, setSaveStatus, setScriptSource, setSelectedNode]);
+  }, [dirty, pendingChangeSet, replaceAssistantMessage, setDirty, setNodes, setSaveStatus, setScriptSource, setSelectedNode]);
 
   const forceApplyChange = useCallback(async () => {
-    if (!pendingChange) return;
-    pushHistory(nodes);
-    setNodes(pendingChange.afterNodes);
-    setScriptSource(pendingChange.afterContent);
-    if (projectPath) {
-      const scenePath = await getScenePath(projectPath, currentSceneName);
-      await saveScene(scenePath, pendingChange.afterNodes);
-      setDirty(false);
-      setSaveStatus('saved');
+    if (!pendingChangeSet) return;
+    // User chose to overwrite their manual edits with the AI preview.
+    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    if (currentSceneEdit) {
+      pushHistory(nodes);
+      setNodes(currentSceneEdit.afterNodes);
+      setScriptSource(currentSceneEdit.afterContent);
     }
-    setPendingChange({ ...pendingChange, status: 'accepted' });
-    setStatus('accepted');
-  }, [currentSceneName, nodes, pendingChange, projectPath, pushHistory, setDirty, setNodes, setSaveStatus, setScriptSource]);
+    setStatus('pending');
+    await acceptChange();
+  }, [acceptChange, nodes, pendingChangeSet, pushHistory, setNodes, setScriptSource]);
 
   const regenerateAfterConflict = useCallback(() => {
-    if (!pendingChange) return;
-    setPendingChange({ ...pendingChange, status: 'reverted' });
+    if (!pendingChangeSet) return;
+    setPendingChangeSet({ ...pendingChangeSet, status: 'reverted' });
     setStatus('idle');
     setInput('请基于我当前最新的脚本内容，重新生成一个不覆盖我手动修改的方案。');
-  }, [pendingChange]);
-
-  const useFallbackAssets = useCallback(() => {
-    setStatus('idle');
-    setError(null);
-    setInput('请改用素材库中已有的文件名重新生成 patch。如果没有合适素材，请用 chat 说明缺少什么素材。');
-  }, []);
+  }, [pendingChangeSet]);
 
   const openAssets = useCallback(() => {
     if (projectId) navigate(`/editor/${projectId}/assets`);
   }, [navigate, projectId]);
 
-  const retryWithExistingAssets = useCallback(() => {
-    setStatus('idle');
-    setError(null);
-    setInput('请改用已有素材重新生成。');
-  }, []);
-
   const clearConversation = useCallback(() => {
     if (busy) return;
-    if (pendingChange?.status === 'pending') revertChange();
+    if (pendingChangeSet?.status === 'pending') revertChange();
     clearMessages();
     setInput('');
     setError(null);
     setStatus('idle');
-  }, [busy, clearMessages, pendingChange, revertChange]);
+  }, [busy, clearMessages, pendingChangeSet, revertChange]);
 
   const saveMemory = useCallback(async (next: ProjectMemory) => {
     if (!projectPath) return;
@@ -567,43 +545,42 @@ export function useAiAgent(params: UseAiAgentParams) {
     setMemory(payload);
   }, [projectPath]);
 
+  const stop = useCallback(() => {
+    cancelledRef.current = true;
+    const stoppedId = streamingIdRef.current;
+    streamingIdRef.current = null;
+    inFlightRef.current = false;
+    if (stoppedId) {
+      setMessages(prev => prev.map(message => (message.id === stoppedId ? { ...message, stopped: true } : message)));
+    }
+    setBusy(false);
+    setStatus('idle');
+    setStepLabel('');
+  }, [setMessages]);
+
   return {
     messages,
     input,
     setInput,
     busy,
     status,
-    pendingChange,
+    stepLabel,
+    pendingChangeSet,
     error,
     cooldown,
     hasAssetTruncation: hasAssetContextTruncation(assets),
     memory,
-    missingIssues,
     streamingIdRef,
+    describeEdit,
     sendPrompt,
     acceptChange,
     revertChange,
     forceApplyChange,
     regenerateAfterConflict,
-    useFallbackAssets,
     openAssets,
-    retryWithExistingAssets,
     retry,
     clearConversation,
     saveMemory,
-    stop: () => {
-      cancelRef.current?.();
-      cancelRef.current = null;
-      const stoppedId = streamingIdRef.current;
-      streamingIdRef.current = null;
-      inFlightRef.current = false;
-      if (stoppedId) {
-        setMessages(prev => prev.map(message => (
-          message.id === stoppedId ? { ...message, stopped: true } : message
-        )));
-      }
-      setBusy(false);
-      setStatus('idle');
-    },
+    stop,
   };
 }
