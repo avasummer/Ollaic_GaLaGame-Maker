@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { X, RotateCcw, Save, PlugZap, CheckCircle2, AlertCircle, List, Trash2, RefreshCw } from 'lucide-react';
+import { X, Save, PlugZap, CheckCircle2, AlertCircle, List, Trash2, RefreshCw } from 'lucide-react';
 import {
   type AiLogEntry,
   type AiConfig,
   type AiValidationResult,
   getAiConfig,
   setAiConfig,
-  getDefaultSystemPrompt,
   validateAiConfig,
   listAiLogs,
   clearAiLogs,
@@ -77,15 +76,6 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
       base_url: preset.needsBaseUrl ? (config.base_url || preset.defaultBaseUrl) : '',
     });
     setValidation(null);
-  };
-
-  const handleResetPrompt = async () => {
-    try {
-      const sp = await getDefaultSystemPrompt();
-      update({ system_prompt: sp });
-    } catch (e) {
-      setError(String(e));
-    }
   };
 
   const handleVerify = async () => {
@@ -265,27 +255,6 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
                   </div>
                 )}
               </div>
-
-              <Field
-                label="系统提示词"
-                action={
-                  <button
-                    onClick={handleResetPrompt}
-                    className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-                    aria-label="恢复系统提示词默认值"
-                  >
-                    <RotateCcw className="w-3 h-3" /> 恢复默认
-                  </button>
-                }
-              >
-                <textarea
-                  value={config.system_prompt}
-                  onChange={(e) => update({ system_prompt: e.target.value })}
-                  rows={8}
-                  className="w-full px-3 py-2 bg-input-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-y leading-relaxed font-mono-family"
-                  aria-label="系统提示词"
-                />
-              </Field>
 
               <div className="rounded-lg border border-border bg-secondary/20 p-3">
                 <div className="flex items-center justify-between gap-3">

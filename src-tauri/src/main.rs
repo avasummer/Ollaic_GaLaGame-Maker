@@ -180,7 +180,6 @@ fn main() {
             ai::commands::get_ai_config,
             ai::commands::set_ai_config,
             ai::commands::validate_ai_config,
-            ai::commands::default_ai_system_prompt,
             ai::commands::ai_chat_stream,
             ai::commands::list_ai_logs,
             ai::commands::clear_ai_logs,
