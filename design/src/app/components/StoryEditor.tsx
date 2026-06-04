@@ -48,6 +48,14 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -114,6 +122,10 @@ export function StoryEditor() {
   const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
   const [aiCollapsed, setAiCollapsed] = useState(() => localStorage.getItem(`story-ai-collapsed-${projectId}`) === '1');
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
 
   // Build character context for AI system prompt
   const buildCharacterContext = useCallback((chars: Character[]): string => {
@@ -1205,58 +1217,64 @@ export function StoryEditor() {
                     type="button"
                     onClick={aiAgent.startNewSession}
                     disabled={aiAgent.busy}
-                    className="p-1.5 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-40"
+                    className="p-1.5 rounded-md text-foreground hover:bg-secondary/50 transition-colors disabled:opacity-40"
                     title="新建会话"
                     aria-label="新建 AI 会话"
                   >
                     <MessageSquarePlus className="w-4 h-4" />
                   </button>
-                  <DropdownMenu>
+                  <DropdownMenu open={sessionMenuOpen} onOpenChange={setSessionMenuOpen}>
                     <DropdownMenuTrigger asChild>
                       <button
                         type="button"
                         disabled={aiAgent.busy}
-                        className="p-1.5 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-40"
+                        className="p-1.5 rounded-md text-foreground hover:bg-secondary/50 transition-colors disabled:opacity-40"
                         title="会话管理"
                         aria-label="会话管理"
                       >
                         <MoreHorizontal className="w-4 h-4" />
                       </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-60">
-                      <DropdownMenuItem onClick={aiAgent.startNewSession}>
+                    <DropdownMenuContent align="end" className="w-64">
+                      <DropdownMenuItem onClick={() => { setSessionMenuOpen(false); aiAgent.startNewSession(); }}>
                         <MessageSquarePlus className="w-4 h-4" />
                         <span>新建会话</span>
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuLabel>历史会话</DropdownMenuLabel>
-                      {aiAgent.sessions.map((s) => (
-                        <DropdownMenuItem
-                          key={s.id}
-                          onClick={() => aiAgent.selectSession(s.id)}
-                          className={`group ${s.id === aiAgent.activeId ? 'bg-secondary/60' : ''}`}
-                        >
-                          <span className="min-w-0 flex-1 truncate">{s.title}</span>
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); aiAgent.promptRenameSession(s.id); }}
-                            className="opacity-0 group-hover:opacity-100 rounded p-0.5 hover:bg-secondary"
-                            title="重命名"
-                            aria-label="重命名会话"
+                      {/* Plain rows (not DropdownMenuItem): Radix MenuItem unmounts on
+                          pointerup, swallowing clicks on nested rename/delete buttons. */}
+                      <div className="max-h-64 overflow-y-auto">
+                        {aiAgent.sessions.map((s) => (
+                          <div
+                            key={s.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => { setSessionMenuOpen(false); aiAgent.selectSession(s.id); }}
+                            className={`group flex items-center gap-1 rounded-sm px-2 py-1.5 text-sm cursor-pointer text-foreground hover:bg-accent ${s.id === aiAgent.activeId ? 'bg-secondary/60' : ''}`}
                           >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); aiAgent.removeSession(s.id); }}
-                            className="opacity-0 group-hover:opacity-100 rounded p-0.5 hover:bg-destructive/20 hover:text-destructive"
-                            title="删除"
-                            aria-label="删除会话"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </DropdownMenuItem>
-                      ))}
+                            <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setSessionMenuOpen(false); setRenameTarget({ id: s.id, title: s.title }); setRenameValue(s.title); }}
+                              className="shrink-0 opacity-60 hover:opacity-100 rounded p-0.5 text-foreground hover:bg-secondary"
+                              title="重命名"
+                              aria-label="重命名会话"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setSessionMenuOpen(false); setDeleteTarget({ id: s.id, title: s.title }); }}
+                              className="shrink-0 opacity-60 hover:opacity-100 rounded p-0.5 text-foreground hover:bg-destructive/20 hover:text-destructive"
+                              title="删除"
+                              aria-label="删除会话"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </>
@@ -1372,6 +1390,74 @@ export function StoryEditor() {
           open={aiSettingsOpen}
           onClose={() => setAiSettingsOpen(false)}
         />
+
+        {/* Rename session — in-app dialog (Tauri has no native prompt). */}
+        <Dialog open={renameTarget !== null} onOpenChange={(o) => { if (!o) setRenameTarget(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>重命名会话</DialogTitle>
+            </DialogHeader>
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && renameValue.trim() && renameTarget) {
+                  aiAgent.renameSession(renameTarget.id, renameValue);
+                  setRenameTarget(null);
+                }
+              }}
+              className="w-full bg-input-background border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              placeholder="会话名称"
+              aria-label="会话名称"
+            />
+            <DialogFooter>
+              <button
+                type="button"
+                onClick={() => setRenameTarget(null)}
+                className="px-3 py-2 rounded-md bg-secondary text-sm hover:bg-secondary/70 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!renameValue.trim()}
+                onClick={() => { if (renameTarget) { aiAgent.renameSession(renameTarget.id, renameValue); setRenameTarget(null); } }}
+                className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm hover:opacity-90 transition-all disabled:opacity-50"
+              >
+                保存
+              </button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete session confirmation — in-app dialog. */}
+        <Dialog open={deleteTarget !== null} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>删除会话</DialogTitle>
+              <DialogDescription>
+                确定删除会话「{deleteTarget?.title}」？此操作不可撤销。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="px-3 py-2 rounded-md bg-secondary text-sm hover:bg-secondary/70 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => { if (deleteTarget) { aiAgent.removeSession(deleteTarget.id); setDeleteTarget(null); } }}
+                className="px-3 py-2 rounded-md bg-destructive text-destructive-foreground text-sm hover:opacity-90 transition-all"
+              >
+                删除
+              </button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <AppSettingsDialog
           open={appSettingsOpen}
