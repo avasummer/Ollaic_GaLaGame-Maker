@@ -433,19 +433,14 @@ export function useAiAgent(params: UseAiAgentParams) {
     void sendPrompt(lastPrompt);
   }, [busy, cooldown, error?.kind, lastPrompt, retryCount, sendPrompt]);
 
-  // Apply the whole change set atomically (all-or-rollback).
-  const acceptChange = useCallback(async () => {
-    if (!pendingChangeSet || pendingChangeSet.status !== 'pending' || !projectPath) return;
-    // Conflict guard: the current scene's live buffer must still match our preview.
-    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
-    if (currentSceneEdit && scriptSource !== currentSceneEdit.afterContent) {
-      setStatus('conflict');
-      return;
-    }
-
+  // Persist all edits atomically (all-or-rollback). No conflict guard — callers
+  // decide whether the current scene's live buffer is allowed to differ.
+  const persistChangeSet = useCallback(async (set: PendingChangeSet) => {
+    if (!projectPath) return;
+    const currentSceneEdit = set.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
     const applied: ChangeEdit[] = [];
     try {
-      for (const edit of pendingChangeSet.edits) {
+      for (const edit of set.edits) {
         if (edit.kind === 'scene') {
           const path = await getScenePath(projectPath, edit.file);
           await saveScene(path, edit.afterNodes);
@@ -474,7 +469,7 @@ export function useAiAgent(params: UseAiAgentParams) {
       }
       setStatus('error');
       setError({ kind: 'other', retryable: false, message: `落盘失败，已回滚全部修改：${String(e)}` });
-      setPendingChangeSet({ ...pendingChangeSet, status: 'failed' });
+      setPendingChangeSet({ ...set, status: 'failed' });
       return;
     }
 
@@ -483,12 +478,23 @@ export function useAiAgent(params: UseAiAgentParams) {
       setDirty(false);
       setSaveStatus('saved');
     }
-    replaceAssistantMessage(pendingChangeSet.sourceMessageId, `已接受修改：${summarizeChangeSet(pendingChangeSet)}`, {
+    replaceAssistantMessage(set.sourceMessageId, `已接受修改：${summarizeChangeSet(set)}`, {
       diff: currentSceneEdit?.diff,
     });
-    setPendingChangeSet({ ...pendingChangeSet, status: 'accepted' });
+    setPendingChangeSet({ ...set, status: 'accepted' });
     setStatus('accepted');
-  }, [pendingChangeSet, projectPath, pushHistory, replaceAssistantMessage, scriptSource, setDirty, setSaveStatus]);
+  }, [projectPath, pushHistory, replaceAssistantMessage, setDirty, setSaveStatus]);
+
+  const acceptChange = useCallback(async () => {
+    if (!pendingChangeSet || pendingChangeSet.status !== 'pending' || !projectPath) return;
+    // Conflict guard: the current scene's live buffer must still match our preview.
+    const currentSceneEdit = pendingChangeSet.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.isCurrent);
+    if (currentSceneEdit && scriptSource !== currentSceneEdit.afterContent) {
+      setStatus('conflict');
+      return;
+    }
+    await persistChangeSet(pendingChangeSet);
+  }, [pendingChangeSet, persistChangeSet, projectPath, scriptSource]);
 
   const revertChange = useCallback(() => {
     if (!pendingChangeSet) return;
@@ -514,9 +520,8 @@ export function useAiAgent(params: UseAiAgentParams) {
       setNodes(currentSceneEdit.afterNodes);
       setScriptSource(currentSceneEdit.afterContent);
     }
-    setStatus('pending');
-    await acceptChange();
-  }, [acceptChange, nodes, pendingChangeSet, pushHistory, setNodes, setScriptSource]);
+    await persistChangeSet(pendingChangeSet);
+  }, [nodes, pendingChangeSet, persistChangeSet, pushHistory, setNodes, setScriptSource]);
 
   const regenerateAfterConflict = useCallback(() => {
     if (!pendingChangeSet) return;
