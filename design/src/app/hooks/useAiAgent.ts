@@ -603,17 +603,13 @@ export function useAiAgent(params: UseAiAgentParams) {
     switchSession(id);
   }, [busy, resetTransient, switchSession]);
 
+  // Deletion confirmation and rename input are handled by in-app dialogs in the
+  // UI layer (Tauri has no native prompt/confirm command). These just apply.
   const removeSession = useCallback((id: string) => {
     if (busy) return;
     if (id === activeId) resetTransient();
     deleteSession(id);
   }, [activeId, busy, deleteSession, resetTransient]);
-
-  const promptRenameSession = useCallback((id: string) => {
-    const current = sessions.find((s) => s.id === id);
-    const next = window.prompt('重命名会话', current?.title ?? '');
-    if (next != null) renameSession(id, next);
-  }, [renameSession, sessions]);
 
   const saveMemory = useCallback(async (next: ProjectMemory) => {
     if (!projectPath) return;
@@ -654,7 +650,7 @@ export function useAiAgent(params: UseAiAgentParams) {
     startNewSession,
     selectSession,
     removeSession,
-    promptRenameSession,
+    renameSession,
     sendPrompt,
     acceptChange,
     revertChange,

@@ -39,6 +39,14 @@ import { ChangeSetCard } from './AiPendingCard';
 import { ConflictCard, ErrorCard } from './AiStatusCard';
 import { DetailPanel } from './DetailPanel';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -56,6 +64,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
 import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
 import { PerformanceTimeline } from './PerformanceTimeline';
 
@@ -1254,11 +1270,24 @@ function MiniLivePreview({ nodes }: { nodes: WebGalNode[] }) {
 interface AiAssistantPanelProps {
   aiAgent: ReturnType<typeof useAiAgent>;
   projectPath: string | null;
+  sessionMenuOpen: boolean;
+  onSessionMenuOpenChange: (open: boolean) => void;
+  onRenameSession: (session: { id: string; title: string }) => void;
+  onDeleteSession: (session: { id: string; title: string }) => void;
   onOpenSettings: () => void;
   onSend: () => void;
 }
 
-function AiAssistantPanel({ aiAgent, projectPath, onOpenSettings, onSend }: AiAssistantPanelProps) {
+function AiAssistantPanel({
+  aiAgent,
+  projectPath,
+  sessionMenuOpen,
+  onSessionMenuOpenChange,
+  onRenameSession,
+  onDeleteSession,
+  onOpenSettings,
+  onSend,
+}: AiAssistantPanelProps) {
   const activeSession = aiAgent.sessions.find((session) => session.id === aiAgent.activeId);
   const statusText = aiAgent.busy
     ? '生成中'
@@ -1294,58 +1323,71 @@ function AiAssistantPanel({ aiAgent, projectPath, onOpenSettings, onSend }: AiAs
           >
             <MessageSquarePlus className="h-4 w-4" />
           </button>
-          <DropdownMenu>
+          <DropdownMenu open={sessionMenuOpen} onOpenChange={onSessionMenuOpenChange}>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
                 disabled={aiAgent.busy}
-                className="story-os-icon-button h-7 w-7 disabled:opacity-40"
+                className="story-os-icon-button h-7 w-7 text-foreground disabled:opacity-40"
                 aria-label="AI 会话管理"
                 title="会话管理"
               >
                 <MoreHorizontal className="h-4 w-4" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-60">
-              <DropdownMenuItem onClick={aiAgent.startNewSession}>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuItem onClick={() => { onSessionMenuOpenChange(false); aiAgent.startNewSession(); }}>
                 <MessageSquarePlus className="h-4 w-4" />
                 <span>新建会话</span>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>历史会话</DropdownMenuLabel>
-              {aiAgent.sessions.map((session) => (
-                <DropdownMenuItem
-                  key={session.id}
-                  onClick={() => aiAgent.selectSession(session.id)}
-                  className={`group ${session.id === aiAgent.activeId ? 'bg-secondary-container/50' : ''}`}
-                >
-                  <span className="min-w-0 flex-1 truncate">{session.title}</span>
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      aiAgent.promptRenameSession(session.id);
+              <div className="max-h-64 overflow-y-auto">
+                {aiAgent.sessions.map((session) => (
+                  <div
+                    key={session.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => { onSessionMenuOpenChange(false); aiAgent.selectSession(session.id); }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onSessionMenuOpenChange(false);
+                        aiAgent.selectSession(session.id);
+                      }
                     }}
-                    className="rounded p-0.5 opacity-0 hover:bg-secondary-container group-hover:opacity-100"
-                    aria-label="重命名会话"
-                    title="重命名"
+                    className={`group flex cursor-pointer items-center gap-1 rounded-sm px-2 py-1.5 text-sm text-foreground hover:bg-secondary-container/45 ${session.id === aiAgent.activeId ? 'bg-secondary-container/50' : ''}`}
                   >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      aiAgent.removeSession(session.id);
-                    }}
-                    className="rounded p-0.5 opacity-0 hover:bg-error-container hover:text-on-error-container group-hover:opacity-100"
-                    aria-label="删除会话"
-                    title="删除"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </DropdownMenuItem>
-              ))}
+                    <span className="min-w-0 flex-1 truncate">{session.title}</span>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSessionMenuOpenChange(false);
+                        onRenameSession(session);
+                      }}
+                      className="shrink-0 rounded p-0.5 text-foreground opacity-60 hover:bg-secondary-container hover:opacity-100"
+                      aria-label="重命名会话"
+                      title="重命名"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSessionMenuOpenChange(false);
+                        onDeleteSession(session);
+                      }}
+                      className="shrink-0 rounded p-0.5 text-foreground opacity-60 hover:bg-error-container hover:text-on-error-container hover:opacity-100"
+                      aria-label="删除会话"
+                      title="删除"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -1960,6 +2002,10 @@ export function StoryEditor() {
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
   const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
   const [worldNodePositions, setWorldNodePositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
 
   const loadSceneHeaders = useCallback(async (projectPath: string, scenes: string[]) => {
     const entries = await Promise.all(
@@ -3147,6 +3193,13 @@ export function StoryEditor() {
           <AiAssistantPanel
             aiAgent={aiAgent}
             projectPath={projectPath}
+            sessionMenuOpen={sessionMenuOpen}
+            onSessionMenuOpenChange={setSessionMenuOpen}
+            onRenameSession={(session) => {
+              setRenameTarget(session);
+              setRenameValue(session.title);
+            }}
+            onDeleteSession={setDeleteTarget}
             onOpenSettings={() => setAiSettingsOpen(true)}
             onSend={handleAiSend}
           />
@@ -3231,6 +3284,74 @@ export function StoryEditor() {
           onRefreshProject={refreshProjectInfo}
           onNewScene={handleNewScene}
         />
+
+        {/* Rename session — in-app dialog (Tauri has no native prompt). */}
+        <Dialog open={renameTarget !== null} onOpenChange={(o) => { if (!o) setRenameTarget(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>重命名会话</DialogTitle>
+            </DialogHeader>
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && renameValue.trim() && renameTarget) {
+                  aiAgent.renameSession(renameTarget.id, renameValue);
+                  setRenameTarget(null);
+                }
+              }}
+              className="w-full bg-input-background border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              placeholder="会话名称"
+              aria-label="会话名称"
+            />
+            <DialogFooter>
+              <button
+                type="button"
+                onClick={() => setRenameTarget(null)}
+                className="px-3 py-2 rounded-md bg-secondary text-sm hover:bg-secondary/70 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!renameValue.trim()}
+                onClick={() => { if (renameTarget) { aiAgent.renameSession(renameTarget.id, renameValue); setRenameTarget(null); } }}
+                className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm hover:opacity-90 transition-all disabled:opacity-50"
+              >
+                保存
+              </button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete session confirmation — in-app dialog. */}
+        <Dialog open={deleteTarget !== null} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>删除会话</DialogTitle>
+              <DialogDescription>
+                确定删除会话「{deleteTarget?.title}」？此操作不可撤销。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="px-3 py-2 rounded-md bg-secondary text-sm hover:bg-secondary/70 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => { if (deleteTarget) { aiAgent.removeSession(deleteTarget.id); setDeleteTarget(null); } }}
+                className="px-3 py-2 rounded-md bg-destructive text-destructive-foreground text-sm hover:opacity-90 transition-all"
+              >
+                删除
+              </button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <AppSettingsDialog
           open={appSettingsOpen}
