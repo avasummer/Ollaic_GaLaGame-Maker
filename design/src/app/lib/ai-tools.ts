@@ -17,7 +17,7 @@ import { listAllAssets, listAssets, type AssetInfo } from './assets-ipc';
 import { getCharacter, listCharacterNames } from './character-ipc';
 import { readProjectMemory } from './project-memory';
 import { getScenePath, listScenes, readFileText } from './webgal-ipc';
-import type { EditorPatch } from './editor-patch';
+import { isEditorPatch, type EditorPatch } from './editor-patch';
 
 export type ToolKind = 'read' | 'write';
 
@@ -200,7 +200,12 @@ const writeTools: AgentTool[] = [
   {
     name: 'edit_scene',
     description:
-      '对某个场景文件应用补丁（insert/delete/replace）。file 为场景文件名。patches 中行号对应该场景 read_scene 返回的 txt 行号；尽量提供 anchorText（原样复制目标行）以兜底行号漂移。text 为 WebGAL txt，多行用 \\n 分隔。修改不会立即生效，会先生成预览供用户确认。',
+      '对某个场景文件应用补丁。file 为场景文件名。每个 patch 必须含 type 字段：' +
+      'insert 用 afterLine（正整数或字符串 "end"）+ text；' +
+      'delete 用 startLine + endLine；' +
+      'replace 用 startLine + endLine + text。' +
+      '行号对应该场景 read_scene 返回的 txt 行号（从 1 开始的整数，不能省略、不能为 null）。' +
+      '尽量提供 anchorText（原样复制目标行）以兜底行号漂移。text 为 WebGAL txt，多行用 \\n 分隔。修改先生成预览供用户确认。',
     kind: 'write',
     schema: {
       type: 'object',
@@ -208,8 +213,21 @@ const writeTools: AgentTool[] = [
         file: { type: 'string', description: '目标场景文件名' },
         patches: {
           type: 'array',
-          description: 'EditorPatch 数组',
-          items: { type: 'object' },
+          description: '补丁数组，按出现顺序应用',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['insert', 'delete', 'replace'], description: '补丁类型' },
+              afterLine: {
+                description: 'insert 专用：在该 txt 行号之后插入；可为正整数，或字符串 "end" 表示文件末尾',
+              },
+              startLine: { type: 'integer', minimum: 1, description: 'delete/replace 专用：起始 txt 行号（含）' },
+              endLine: { type: 'integer', minimum: 1, description: 'delete/replace 专用：结束 txt 行号（含）' },
+              anchorText: { type: 'string', description: '目标行原文，用于行号漂移兜底' },
+              text: { type: 'string', description: 'insert/replace 专用：写入的 WebGAL txt，多行用 \\n 分隔' },
+            },
+            required: ['type'],
+          },
         },
       },
       required: ['file', 'patches'],
@@ -217,8 +235,24 @@ const writeTools: AgentTool[] = [
     run: async (args) => {
       const file = asString(args.file);
       if (!file) throw new Error('edit_scene 需要 file。');
-      if (!Array.isArray(args.patches)) throw new Error('edit_scene 的 patches 必须是数组。');
-      return { tool: 'edit_scene', file, patches: args.patches as EditorPatch[] } satisfies StagedWrite;
+      if (!Array.isArray(args.patches) || args.patches.length === 0) {
+        throw new Error('edit_scene 的 patches 必须是非空数组。');
+      }
+      // The model puts `file` at the top level (one edit_scene = one file), but
+      // EditorPatch (and downstream applyEditorPatches) expects `file` on each
+      // patch. Inject it before validating/staging.
+      const patches = args.patches.map((p) =>
+        p && typeof p === 'object' ? { ...(p as Record<string, unknown>), file } : p,
+      );
+      const invalid = patches.findIndex((p) => !isEditorPatch(p));
+      if (invalid >= 0) {
+        throw new Error(
+          `patches[${invalid}] 字段不合法。每个 patch 必须含 type，且：` +
+          'insert 需 afterLine(正整数或"end")与 text；delete 需 startLine 与 endLine(正整数)；' +
+          'replace 需 startLine、endLine(正整数)与 text。行号必须是从 1 开始的整数，不能省略或为 null。',
+        );
+      }
+      return { tool: 'edit_scene', file, patches: patches as EditorPatch[] } satisfies StagedWrite;
     },
   },
   {

@@ -56,7 +56,7 @@ function isPositiveLine(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) > 0;
 }
 
-function isEditorPatch(value: unknown): value is EditorPatch {
+export function isEditorPatch(value: unknown): value is EditorPatch {
   if (!isRecord(value) || typeof value.type !== 'string') return false;
 
   if (typeof value.file !== 'string' || value.file.trim().length === 0) return false;

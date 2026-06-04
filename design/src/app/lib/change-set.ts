@@ -131,9 +131,6 @@ export async function stageSceneEdit(
   }
 
   const beforeNodes = existing?.beforeNodes ?? (isCurrent ? ctx.currentNodes : await parseScene(originalBefore));
-  const warnings = applied.correctedAnchors > 0
-    ? [...(existing?.warnings ?? []), `已通过 anchorText 修正 ${applied.correctedAnchors} 处行号漂移。`]
-    : existing?.warnings ?? [];
 
   return {
     kind: 'scene',
@@ -145,7 +142,7 @@ export async function stageSceneEdit(
     afterNodes,
     diff: createLineDiff(originalBefore, afterContent),
     summary: summarizePatches(staged.patches),
-    warnings,
+    warnings: existing?.warnings ?? [],
   };
 }
 
