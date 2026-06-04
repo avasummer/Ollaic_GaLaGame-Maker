@@ -38,8 +38,32 @@ export interface AiLogEntry {
 }
 
 export interface AiChatMessage {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  /** Assistant turns that requested tools: replayed so the provider keeps context. */
+  toolCalls?: AiToolCall[];
+  /** role === 'tool': the originating tool call id this content answers. */
+  toolCallId?: string;
+}
+
+/** A tool the model may call, described with a JSON Schema for its parameters. */
+export interface ToolDef {
+  name: string;
+  description: string;
+  parameters: unknown;
+}
+
+/** A tool call emitted by the model in one turn. */
+export interface AiToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+/** Result of one non-streaming agent turn: either tool calls or final text. */
+export interface AiTurnResult {
+  text: string | null;
+  toolCalls: AiToolCall[];
 }
 
 export type AiStreamEvent =
@@ -126,4 +150,27 @@ export async function aiChatStream(
   }
 
   return { requestId, cancel: stop };
+}
+
+/**
+ * One non-streaming agent turn. Sends conversation + available tools to the
+ * model and returns either tool calls (to execute) or final text. Used by the
+ * multi-step agent loop; pure-chat streaming still goes through aiChatStream.
+ */
+export async function aiChatTurn(
+  messages: AiChatMessage[],
+  tools: ToolDef[],
+  characterContext?: string,
+): Promise<AiTurnResult> {
+  const wireMessages = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+    tool_calls: m.toolCalls?.map((c) => ({ id: c.id, name: c.name, arguments: c.arguments })) ?? null,
+    tool_call_id: m.toolCallId ?? null,
+  }));
+  return invoke<AiTurnResult>('ai_chat_turn', {
+    messages: wireMessages,
+    tools,
+    characterContext,
+  });
 }
