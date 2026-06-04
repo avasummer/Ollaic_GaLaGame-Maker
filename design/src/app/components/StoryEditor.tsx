@@ -27,7 +27,7 @@ import {
   openProject, getScenePath, createScene,
   exportProject,
   setRuntimeProject, setRuntimeTemplateDir, getRuntimeUrl, jumpToSentence, openInBrowser,
-  readFileText, parseSceneHeader,
+  readFileText, parseSceneHeader, sceneDisplayName,
   type ProjectInfo, type SceneHeader,
 } from '../lib/webgal-ipc';
 import { listCharacterNames, listCharacters } from '../lib/character-ipc';
@@ -814,6 +814,7 @@ export function StoryEditor() {
     projectId,
     projectPath,
     currentSceneName,
+    sceneHeaders,
     nodes,
     selectedNode,
     scriptSource,
@@ -894,13 +895,9 @@ export function StoryEditor() {
                     className="max-w-[9rem] sm:max-w-[12rem] px-2 py-1 text-sm bg-secondary border border-border rounded-md font-mono-family"
                     aria-label="选择场景"
                   >
-                    {projectInfo.scenes.map((s) => {
-                      const h = sceneHeaders[s];
-                      const label = h?.chapter
-                        ? (h.outline ? `${h.chapter} — ${h.outline}` : h.chapter)
-                        : (h?.outline ?? s);
-                      return <option key={s} value={s} title={s}>{label}</option>;
-                    })}
+                    {projectInfo.scenes.map((s) => (
+                      <option key={s} value={s} title={s}>{sceneDisplayName(s, sceneHeaders[s])}</option>
+                    ))}
                   </select>
                   <button
                     onClick={() => setSceneManagerOpen((v) => !v)}
@@ -1317,6 +1314,7 @@ export function StoryEditor() {
               {aiAgent.pendingChangeSet && aiAgent.status !== 'conflict' && (
                 <ChangeSetCard
                   changeSet={aiAgent.pendingChangeSet}
+                  sceneHeaders={sceneHeaders}
                   onAccept={() => { void aiAgent.acceptChange(); }}
                   onRevert={aiAgent.revertChange}
                 />

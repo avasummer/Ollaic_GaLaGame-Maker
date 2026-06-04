@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { DiffLine } from '../lib/story-agent';
 import type { ChangeEdit, PendingChangeSet } from '../lib/change-set';
+import { sceneDisplayName, type SceneHeader } from '../lib/webgal-ipc';
 
 interface AiPendingCardProps {
   summary: string;
@@ -55,10 +56,10 @@ function DiffViewer({ lines }: { lines: DiffLine[] }) {
   );
 }
 
-function EditRow({ edit }: { edit: ChangeEdit }) {
+function EditRow({ edit, sceneHeaders }: { edit: ChangeEdit; sceneHeaders?: Record<string, SceneHeader> }) {
   const label =
     edit.kind === 'scene'
-      ? `场景 ${edit.file}${edit.isCurrent ? '（当前）' : ''}`
+      ? `场景「${sceneDisplayName(edit.file, sceneHeaders?.[edit.file])}」${edit.isCurrent ? '（当前）' : ''}`
       : edit.kind === 'character'
         ? `角色 ${edit.name}`
         : '项目记忆';
@@ -95,8 +96,9 @@ function EditRow({ edit }: { edit: ChangeEdit }) {
 }
 
 /** Approval card for a multi-edit change set (scenes + characters + memory). */
-export function ChangeSetCard({ changeSet, onAccept, onRevert }: {
+export function ChangeSetCard({ changeSet, sceneHeaders, onAccept, onRevert }: {
   changeSet: PendingChangeSet;
+  sceneHeaders?: Record<string, SceneHeader>;
   onAccept: () => void;
   onRevert: () => void;
 }) {
@@ -114,7 +116,7 @@ export function ChangeSetCard({ changeSet, onAccept, onRevert }: {
       <div className="font-medium text-foreground">
         {edits.length > 1 ? `共 ${edits.length} 处修改` : '修改方案'}
       </div>
-      {edits.map((edit, index) => <EditRow key={`${edit.kind}-${index}`} edit={edit} />)}
+      {edits.map((edit, index) => <EditRow key={`${edit.kind}-${index}`} edit={edit} sceneHeaders={sceneHeaders} />)}
       {status === 'pending' && (
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button type="button" onClick={onAccept} className="rounded-md bg-primary px-3 py-2 text-primary-foreground transition-all hover:opacity-90">

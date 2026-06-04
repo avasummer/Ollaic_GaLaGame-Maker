@@ -16,7 +16,7 @@ import type { ToolDef } from './ai-ipc';
 import { listAllAssets, listAssets, type AssetInfo } from './assets-ipc';
 import { getCharacter, listCharacterNames } from './character-ipc';
 import { readProjectMemory } from './project-memory';
-import { getScenePath, listScenes, readFileText } from './webgal-ipc';
+import { getScenePath, listScenes, readFileText, parseSceneHeader } from './webgal-ipc';
 import { isEditorPatch, type EditorPatch } from './editor-patch';
 
 export type ToolKind = 'read' | 'write';
@@ -93,12 +93,21 @@ function summarizeAssets(assets: AssetInfo[], query?: string): unknown {
 const readTools: AgentTool[] = [
   {
     name: 'list_scenes',
-    description: '列出项目中所有场景文件名（game/scene 下的 .txt）。',
+    description: '列出项目中所有场景，给出文件名与对应的章节名/大纲。调用其它工具（read_scene/edit_scene）时用 file 文件名；章节名/大纲仅供你理解剧情结构。',
     kind: 'read',
     schema: { type: 'object', properties: {}, required: [] },
     run: async (_args, ctx) => {
       const projectPath = requireProject(ctx);
-      const scenes = await listScenes(sceneDir(projectPath));
+      const files = await listScenes(sceneDir(projectPath));
+      // Pair each filename with its chapter/outline header for comprehension.
+      const scenes = await Promise.all(files.map(async (file) => {
+        try {
+          const header = parseSceneHeader(await readFileText(await getScenePath(projectPath, file)));
+          return { file, chapter: header.chapter ?? '', outline: header.outline ?? '' };
+        } catch {
+          return { file, chapter: '', outline: '' };
+        }
+      }));
       return { scenes };
     },
   },
