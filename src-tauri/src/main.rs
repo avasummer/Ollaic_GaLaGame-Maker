@@ -167,6 +167,8 @@ fn main() {
             webgal::project::save_project_metadata,
             webgal::project::create_project_snapshot,
             webgal::project::list_project_snapshots,
+            webgal::project::rename_project_snapshot,
+            webgal::project::delete_project_snapshot,
             webgal::project::restore_project_snapshot,
             // Runtime preview server
             get_runtime_url,

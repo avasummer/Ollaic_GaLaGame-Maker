@@ -16,6 +16,7 @@ import { DetailPanel } from './DetailPanel';
 import { AiSettingsDialog } from './AiSettingsDialog';
 import { AppSettingsDialog, loadAppSettings } from './AppSettingsDialog';
 import { ProjectMetadataDialog, type ExportTaskState } from './ProjectMetadataDialog';
+import { SnapshotManagerDialog } from './SnapshotManagerDialog';
 import { SceneManagerPanel } from './SceneManager';
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
@@ -27,10 +28,10 @@ import {
   parseScene, serializeScene, saveScene, loadScene,
   openProject, getScenePath, createScene,
   exportProject, readProjectMetadata, saveProjectMetadata,
-  createProjectSnapshot, listProjectSnapshots, restoreProjectSnapshot,
+  createProjectSnapshot, listProjectSnapshots, renameProjectSnapshot, deleteProjectSnapshot, restoreProjectSnapshot,
   setRuntimeProject, setRuntimeTemplateDir, getRuntimeUrl, jumpToSentence, openInBrowser,
   readFileText, parseSceneHeader,
-  type ProjectInfo, type SceneHeader, type ProjectMetadata,
+  type ProjectInfo, type SceneHeader, type ProjectMetadata, type SnapshotInfo,
 } from '../lib/webgal-ipc';
 import { listCharacterNames, listCharacters } from '../lib/character-ipc';
 import type { Character } from '../lib/character-types';
@@ -137,7 +138,11 @@ export function StoryEditor() {
     outputDir: string;
     asZip: boolean;
   } | null>(null);
+  const [snapshotManagerOpen, setSnapshotManagerOpen] = useState(false);
+  const [snapshots, setSnapshots] = useState<SnapshotInfo[]>([]);
   const [snapshotBusy, setSnapshotBusy] = useState(false);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [snapshotStatus, setSnapshotStatus] = useState<string | null>(null);
   const [characterNames, setCharacterNames] = useState<string[]>([]);
   const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
@@ -885,58 +890,108 @@ export function StoryEditor() {
     setProjectMetadataOpen(true);
   }, [projectPath]);
 
-  const handleCreateSnapshot = useCallback(async () => {
-    if (!projectPath || snapshotBusy) return;
-    if (dirty && !(await handleSave())) return;
-    const label = window.prompt('快照名称', `snapshot-${new Date().toISOString().slice(0, 10)}`);
-    if (label === null) return;
-    setSnapshotBusy(true);
+  const refreshSnapshots = useCallback(async () => {
+    if (!projectPath) return;
     try {
-      const snapshot = await createProjectSnapshot(projectPath, label);
-      alert(`快照已创建: ${snapshot.label}`);
+      setSnapshotError(null);
+      setSnapshots(await listProjectSnapshots(projectPath));
     } catch (e) {
-      alert(`创建快照失败: ${e}`);
+      setSnapshotError(`读取快照失败: ${e}`);
+    }
+  }, [projectPath]);
+
+  const handleOpenSnapshotManager = useCallback(() => {
+    if (!projectPath) return;
+    setSnapshotError(null);
+    setSnapshotStatus(null);
+    setSnapshotManagerOpen(true);
+  }, [projectPath]);
+
+  const handleCreateSnapshot = useCallback(async (label: string, kind: SnapshotInfo['kind'] = 'manual') => {
+    if (!projectPath || snapshotBusy) return;
+    setSnapshotBusy(true);
+    setSnapshotError(null);
+    setSnapshotStatus(null);
+    try {
+      if (dirty && !(await handleSave())) return;
+      const snapshot = await createProjectSnapshot(projectPath, label, kind);
+      setSnapshotStatus(`快照已创建: ${snapshot.label}`);
+      await refreshSnapshots();
+    } catch (e) {
+      setSnapshotError(`创建快照失败: ${e}`);
     } finally {
       setSnapshotBusy(false);
     }
-  }, [projectPath, snapshotBusy, dirty, handleSave]);
+  }, [projectPath, snapshotBusy, dirty, handleSave, refreshSnapshots]);
 
-  const handleRestoreSnapshot = useCallback(async () => {
+  const handleRestoreSnapshot = useCallback(async (snapshot: SnapshotInfo) => {
     if (!projectPath || snapshotBusy) return;
-    if (dirty && !(await handleSave())) return;
     setSnapshotBusy(true);
+    setSnapshotError(null);
+    setSnapshotStatus(null);
     try {
-      const snapshots = await listProjectSnapshots(projectPath);
-      if (snapshots.length === 0) {
-        alert('当前项目还没有快照。');
-        return;
-      }
-      const lines = snapshots.map((s, index) => `${index + 1}. ${s.label} (${new Date(Number(s.createdAt)).toLocaleString()})`);
-      const answer = window.prompt(`选择要回滚的快照编号:\n${lines.join('\n')}`);
-      if (!answer) return;
-      const index = Number(answer) - 1;
-      const snapshot = snapshots[index];
-      if (!snapshot) {
-        alert('无效的快照编号。');
-        return;
-      }
-      if (!window.confirm(`确定回滚到快照“${snapshot.label}”？当前 game/ 内容会被替换。`)) return;
-      await createProjectSnapshot(projectPath, 'before-restore');
+      if (dirty && !(await handleSave())) return;
+      await createProjectSnapshot(projectPath, 'before-restore', 'beforeRestore', `回滚到“${snapshot.label}”前自动备份`);
       await restoreProjectSnapshot(projectPath, snapshot.id);
-      await refreshProjectInfo();
-      const scenePath = await getScenePath(projectPath, currentSceneName);
+      const info = await openProject(projectPath);
+      setProjectInfo(info);
+      void loadSceneHeaders(projectPath, info.scenes);
+      void loadSceneLinkMap(projectPath, info.scenes);
+      const restoredSceneName = info.scenes.includes(currentSceneName)
+        ? currentSceneName
+        : (info.scenes[0] ?? 'start.txt');
+      setCurrentSceneName(restoredSceneName);
+      const scenePath = await getScenePath(projectPath, restoredSceneName);
       const loaded = await loadScene(scenePath);
       setNodes(loaded);
       setScriptSource(await serializeScene(loaded));
+      sceneDraftCache.current.clear();
       setDirty(false);
       setSelectedNode(null);
-      alert('快照已回滚。已自动创建 before-restore 备份。');
+      setSnapshotStatus(`已回滚到“${snapshot.label}”，并自动创建 before-restore 备份。`);
+      await refreshSnapshots();
     } catch (e) {
-      alert(`回滚快照失败: ${e}`);
+      setSnapshotError(`回滚快照失败: ${e}`);
     } finally {
       setSnapshotBusy(false);
     }
-  }, [projectPath, snapshotBusy, dirty, handleSave, refreshProjectInfo, currentSceneName]);
+  }, [projectPath, snapshotBusy, dirty, handleSave, loadSceneHeaders, loadSceneLinkMap, currentSceneName, refreshSnapshots]);
+
+  const handleRenameSnapshot = useCallback(async (snapshot: SnapshotInfo, label: string) => {
+    if (!projectPath || snapshotBusy) return;
+    setSnapshotBusy(true);
+    setSnapshotError(null);
+    setSnapshotStatus(null);
+    try {
+      const renamed = await renameProjectSnapshot(projectPath, snapshot.id, label);
+      setSnapshotStatus(`快照已重命名: ${renamed.label}`);
+      await refreshSnapshots();
+    } catch (e) {
+      setSnapshotError(`重命名快照失败: ${e}`);
+    } finally {
+      setSnapshotBusy(false);
+    }
+  }, [projectPath, snapshotBusy, refreshSnapshots]);
+
+  const handleDeleteSnapshot = useCallback(async (snapshot: SnapshotInfo) => {
+    if (!projectPath || snapshotBusy) return;
+    setSnapshotBusy(true);
+    setSnapshotError(null);
+    setSnapshotStatus(null);
+    try {
+      await deleteProjectSnapshot(projectPath, snapshot.id);
+      setSnapshotStatus(`快照已删除: ${snapshot.label}`);
+      await refreshSnapshots();
+    } catch (e) {
+      setSnapshotError(`删除快照失败: ${e}`);
+    } finally {
+      setSnapshotBusy(false);
+    }
+  }, [projectPath, snapshotBusy, refreshSnapshots]);
+
+  const handleCreateExportCandidateSnapshot = useCallback(async () => {
+    await handleCreateSnapshot(`candidate-${new Date().toISOString().slice(0, 10)}`, 'exportCandidate');
+  }, [handleCreateSnapshot]);
 
   const handleOpenRuntime = useCallback(async () => {
     try {
@@ -1140,24 +1195,14 @@ export function StoryEditor() {
               {projectPath && (
                 <>
                   <button
-                    onClick={handleCreateSnapshot}
+                    onClick={handleOpenSnapshotManager}
                     disabled={snapshotBusy}
                     className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm disabled:opacity-50"
-                    title="创建项目快照"
-                    aria-label="创建项目快照"
+                    title="历史版本"
+                    aria-label="历史版本"
                   >
                     {snapshotBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <History className="w-3.5 h-3.5" />}
-                    <span>快照</span>
-                  </button>
-                  <button
-                    onClick={handleRestoreSnapshot}
-                    disabled={snapshotBusy}
-                    className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm disabled:opacity-50"
-                    title="回滚到项目快照"
-                    aria-label="回滚到项目快照"
-                  >
-                    <History className="w-3.5 h-3.5" />
-                    <span>回滚</span>
+                    <span>历史</span>
                   </button>
                   <button
                     onClick={handleExportProject}
@@ -1194,13 +1239,9 @@ export function StoryEditor() {
                   </DropdownMenuItem>
                   {projectPath && (
                     <>
-                      <DropdownMenuItem onClick={handleCreateSnapshot}>
+                      <DropdownMenuItem onClick={handleOpenSnapshotManager}>
                         <History className="w-4 h-4" />
-                        创建快照
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={handleRestoreSnapshot}>
-                        <History className="w-4 h-4" />
-                        回滚快照
+                        历史版本
                       </DropdownMenuItem>
                       <DropdownMenuItem onClick={handleExportProject}>
                         <Package className="w-4 h-4" />
@@ -1522,6 +1563,21 @@ export function StoryEditor() {
           onSave={handleSaveProjectMetadata}
           onExport={handleExportProjectWithMetadata}
           onRetryExport={handleRetryExportProject}
+        />
+
+        <SnapshotManagerDialog
+          open={snapshotManagerOpen}
+          snapshots={snapshots}
+          busy={snapshotBusy}
+          error={snapshotError}
+          status={snapshotStatus}
+          onClose={() => setSnapshotManagerOpen(false)}
+          onRefresh={refreshSnapshots}
+          onCreate={handleCreateSnapshot}
+          onCreateExportCandidate={handleCreateExportCandidateSnapshot}
+          onRestore={handleRestoreSnapshot}
+          onRename={handleRenameSnapshot}
+          onDelete={handleDeleteSnapshot}
         />
 
         <AppSettingsDialog

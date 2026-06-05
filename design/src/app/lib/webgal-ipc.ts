@@ -169,6 +169,11 @@ export interface SnapshotInfo {
   label: string;
   createdAt: string;
   path: string;
+  kind?: 'manual' | 'beforeRestore' | 'exportCandidate' | 'auto' | string;
+  description?: string | null;
+  includesEditorState?: boolean;
+  metadataIncluded?: boolean | null;
+  fileCount?: number | null;
 }
 
 /** Read editor/project metadata stored at the project root. */
@@ -197,13 +202,33 @@ export async function exportProject(
 }
 
 /** Create a persistent whole-project snapshot. */
-export async function createProjectSnapshot(projectPath: string, label?: string): Promise<SnapshotInfo> {
-  return invoke<SnapshotInfo>('create_project_snapshot', { projectPath, label: label ?? null });
+export async function createProjectSnapshot(
+  projectPath: string,
+  label?: string,
+  kind?: SnapshotInfo['kind'],
+  description?: string | null,
+): Promise<SnapshotInfo> {
+  return invoke<SnapshotInfo>('create_project_snapshot', {
+    projectPath,
+    label: label ?? null,
+    kind: kind ?? null,
+    description: description ?? null,
+  });
 }
 
 /** List persistent project snapshots, newest first. */
 export async function listProjectSnapshots(projectPath: string): Promise<SnapshotInfo[]> {
   return invoke<SnapshotInfo[]>('list_project_snapshots', { projectPath });
+}
+
+/** Rename a persistent project snapshot. */
+export async function renameProjectSnapshot(projectPath: string, snapshotId: string, label: string): Promise<SnapshotInfo> {
+  return invoke<SnapshotInfo>('rename_project_snapshot', { projectPath, snapshotId, label });
+}
+
+/** Delete a persistent project snapshot. */
+export async function deleteProjectSnapshot(projectPath: string, snapshotId: string): Promise<void> {
+  return invoke<void>('delete_project_snapshot', { projectPath, snapshotId });
 }
 
 /** Restore a persistent project snapshot. */
