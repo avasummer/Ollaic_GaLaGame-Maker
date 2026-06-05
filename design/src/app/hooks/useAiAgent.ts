@@ -468,7 +468,7 @@ export function useAiAgent(params: UseAiAgentParams) {
     const text = prompt.trim();
     if (!text || busy || inFlightRef.current) return;
     if (pendingChangeSet?.status === 'pending') {
-      setError({ kind: 'other', retryable: false, message: '当前还有 AI 修改方案待确认。请先接受或撤销后再继续对话。' });
+      setError({ kind: 'other', retryable: false, message: '当前还有 AI 修改方案待确认。请先同意或拒绝后再继续对话。' });
       return;
     }
     inFlightRef.current = true;
@@ -574,7 +574,7 @@ export function useAiAgent(params: UseAiAgentParams) {
       setSaveStatus('saved');
     }
     if (createdScene) onScenesChanged?.();
-    replaceAssistantMessage(set.sourceMessageId, `已接受修改：${summarizeChangeSet(set, sceneHeaders)}`, {
+    replaceAssistantMessage(set.sourceMessageId, `已同意修改：${summarizeChangeSet(set, sceneHeaders)}`, {
       diff: currentSceneEdit?.diff,
     });
     setPendingChangeSet({ ...set, status: 'accepted' });
@@ -605,7 +605,7 @@ export function useAiAgent(params: UseAiAgentParams) {
       setDirty(dirty);
       setSaveStatus('idle');
     }
-    replaceAssistantMessage(pendingChangeSet.sourceMessageId, `已撤销：${summarizeChangeSet(pendingChangeSet, sceneHeaders)}`);
+    replaceAssistantMessage(pendingChangeSet.sourceMessageId, `已拒绝：${summarizeChangeSet(pendingChangeSet, sceneHeaders)}`);
     setPendingChangeSet({ ...pendingChangeSet, status: 'reverted' });
     setStatus('reverted');
   }, [currentSceneName, sceneHeaders, dirty, pendingChangeSet, replaceAssistantMessage, setDirty, setNodes, setSaveStatus, setScriptSource, setSelectedNode]);

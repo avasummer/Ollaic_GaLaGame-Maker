@@ -6,15 +6,6 @@ import { sceneDisplayName, type SceneHeader } from '../lib/webgal-ipc';
 import { computeNodeDiff, summarizeNodeDiff } from '../lib/node-diff';
 import { MiniNodeCard } from './MiniNodeCard';
 
-interface AiPendingCardProps {
-  summary: string;
-  status: 'pending' | 'accepted' | 'reverted';
-  diff: DiffLine[];
-  warnings?: string[];
-  onAccept: () => void;
-  onRevert: () => void;
-}
-
 function DiffViewer({ lines }: { lines: DiffLine[] }) {
   const [expanded, setExpanded] = useState(false);
   const visible = expanded ? lines : lines.slice(0, 30);
@@ -159,48 +150,10 @@ export function ChangeSetCard({ changeSet, sceneHeaders, onAccept, onRevert }: {
       {status === 'pending' && (
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button type="button" onClick={onAccept} className="rounded-md bg-primary px-3 py-2 text-primary-foreground transition-all hover:opacity-90">
-            接受全部
+            同意
           </button>
           <button type="button" onClick={onRevert} className="rounded-md bg-secondary px-3 py-2 transition-colors hover:bg-secondary/70">
-            撤销本次
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function AiPendingCard({ summary, status, diff, warnings = [], onAccept, onRevert }: AiPendingCardProps) {
-  return (
-    <div className={`rounded-lg border p-3 text-xs ${
-      status === 'pending'
-        ? 'border-primary/30 bg-primary/10'
-        : status === 'accepted'
-        ? 'border-chart-5/30 bg-chart-5/10'
-        : 'border-border bg-secondary/40'
-    }`}>
-      <div className="font-medium text-foreground">{summary}</div>
-      {warnings.length > 0 && (
-        <div className="mt-2 rounded-md border border-primary/20 bg-background/50 p-2 text-muted-foreground">
-          {warnings.map((warning) => <div key={warning}>{warning}</div>)}
-        </div>
-      )}
-      <DiffViewer lines={diff} />
-      {status === 'pending' && (
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={onAccept}
-            className="rounded-md bg-primary px-3 py-2 text-primary-foreground transition-all hover:opacity-90"
-          >
-            接受修改
-          </button>
-          <button
-            type="button"
-            onClick={onRevert}
-            className="rounded-md bg-secondary px-3 py-2 transition-colors hover:bg-secondary/70"
-          >
-            撤销本次
+            拒绝
           </button>
         </div>
       )}

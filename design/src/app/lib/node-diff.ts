@@ -86,12 +86,17 @@ function collapseModified(entries: NodeDiffEntry[]): NodeDiffEntry[] {
   return out;
 }
 
+/** Full ordered diff sequence (context + added + removed + modified), unfiltered. */
+export function computeFullNodeDiff(before: WebGalNode[], after: WebGalNode[]): NodeDiffEntry[] {
+  return collapseModified(lcsDiff(before, after));
+}
+
 /**
  * Returns only the changed entries (added/removed/modified) plus one context
  * node of padding around each change for orientation. Empty when identical.
  */
 export function computeNodeDiff(before: WebGalNode[], after: WebGalNode[]): NodeDiffEntry[] {
-  const full = collapseModified(lcsDiff(before, after));
+  const full = computeFullNodeDiff(before, after);
   if (!full.some((e) => e.kind !== 'context')) return [];
 
   const keep = new Set<number>();

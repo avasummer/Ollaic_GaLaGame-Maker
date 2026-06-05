@@ -36,6 +36,9 @@ import { insertSceneNode, reorderSceneNodes, pasteSceneNode } from '../lib/scene
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
 import { ChangeSetCard } from './AiPendingCard';
+import { MiniNodeCard } from './MiniNodeCard';
+import { computeFullNodeDiff, type NodeDiffEntry } from '../lib/node-diff';
+import type { SceneEdit } from '../lib/change-set';
 import { ConflictCard, ErrorCard } from './AiStatusCard';
 import { DetailPanel } from './DetailPanel';
 import {
@@ -64,14 +67,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from './ui/dialog';
 import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
 import { PerformanceTimeline } from './PerformanceTimeline';
 
@@ -1458,7 +1453,7 @@ function AiAssistantPanel({
           }}
           disabled={aiAgent.busy || aiAgent.pendingChangeSet?.status === 'pending'}
           className="mt-3 h-20 w-full resize-none rounded-sm border border-border bg-surface-container-lowest p-2 text-sm focus:border-secondary focus:outline-none focus:ring-2 focus:ring-secondary-container/30 disabled:opacity-60"
-          placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChangeSet?.status === 'pending' ? '请先接受或撤销当前 AI 修改...' : '输入你的创作想法...'}
+          placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChangeSet?.status === 'pending' ? '请先同意或拒绝当前 AI 修改...' : '输入你的创作想法...'}
           aria-label="AI 创作输入"
         />
         <button
@@ -1491,6 +1486,7 @@ interface ScriptCommandStreamProps {
   clipboardNode?: WebGalNode | null;
   characterColors?: Record<string, string>;
   searchQuery?: string;
+  previewEntries?: NodeDiffEntry[];
 }
 
 function ScriptCommandStream({
@@ -1509,6 +1505,7 @@ function ScriptCommandStream({
   clipboardNode,
   characterColors,
   searchQuery,
+  previewEntries,
 }: ScriptCommandStreamProps) {
   const query = searchQuery?.trim().toLowerCase() ?? '';
   const visibleNodes = query
@@ -1850,6 +1847,20 @@ function ScriptCommandStream({
         </div>
       </div>
 
+      {previewEntries ? (
+        <div className="relative z-10 flex-1 overflow-y-auto p-8">
+          <div className="mx-auto max-w-4xl pb-20">
+            <div className="mb-4 border border-primary/25 bg-primary/10 px-4 py-2 text-center text-xs font-semibold text-primary">
+              AI 修改预览 - 同意后生效
+            </div>
+            <div className="grid gap-3">
+              {previewEntries.map((entry, index) => (
+                <MiniNodeCard key={`${entry.kind}-${index}`} entry={entry} />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className="relative z-10 flex-1 overflow-y-auto p-8">
         <div className="mx-auto max-w-4xl space-y-6 pb-20">
         {nodes.length === 0 ? (
@@ -1955,6 +1966,7 @@ function ScriptCommandStream({
           </button>
         </div>
       </div>
+      )}
     </section>
   );
 }
@@ -3062,6 +3074,19 @@ export function StoryEditor() {
     },
   });
 
+  // While an AI change set is pending, if it edits the currently-open scene,
+  // render the canvas as a read-only node diff (green added / red deleted /
+  // yellow modified) instead of the editable list.
+  const aiPreviewEntries = useMemo(() => {
+    const set = aiAgent.pendingChangeSet;
+    if (!set || set.status !== 'pending') return undefined;
+    const sceneEdit = set.edits.find(
+      (e): e is SceneEdit => e.kind === 'scene' && e.file === currentSceneName,
+    );
+    if (!sceneEdit) return undefined;
+    return computeFullNodeDiff(sceneEdit.beforeNodes, sceneEdit.afterNodes);
+  }, [aiAgent.pendingChangeSet, currentSceneName]);
+
   useEffect(() => {
     aiPendingPreviewRef.current = aiAgent.pendingChangeSet?.status === 'pending';
     if (aiAgent.status === 'reverted' || aiAgent.status === 'accepted') {
@@ -3198,6 +3223,7 @@ export function StoryEditor() {
               clipboardNode={clipboardNode}
               characterColors={characterColors}
               searchQuery={commandSearchQuery}
+              previewEntries={aiPreviewEntries}
             />
           )}
 
