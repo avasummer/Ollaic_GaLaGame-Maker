@@ -53,7 +53,14 @@ export interface MemoryEdit {
   changedFields: string[];
 }
 
-export type ChangeEdit = SceneEdit | CharacterEdit | MemoryEdit;
+export interface CreateSceneEdit {
+  kind: 'create_scene';
+  file: string;          // filename with .txt suffix
+  chapter?: string;
+  outline?: string;
+}
+
+export type ChangeEdit = SceneEdit | CharacterEdit | MemoryEdit | CreateSceneEdit;
 
 export interface PendingChangeSet {
   id: string;
@@ -71,6 +78,8 @@ export interface StagingContext {
   assets: AssetInfo[];
   /** Read another scene's raw content from disk (by scene file name). */
   readSceneContent: (file: string) => Promise<string>;
+  /** List existing scene file names (for create-scene duplicate checks). */
+  listSceneFiles: () => Promise<string[]>;
   /** Look up a character by id (from the in-memory list). */
   getCharacter: (id: string) => Character | undefined;
   /** Current project memory (or a blank one). */
@@ -194,10 +203,26 @@ export function stageMemoryEdit(
   };
 }
 
+/** Build a CreateSceneEdit, normalizing the filename and rejecting duplicates. */
+export async function stageCreateSceneEdit(
+  staged: Extract<StagedWrite, { tool: 'create_scene' }>,
+  ctx: StagingContext,
+): Promise<CreateSceneEdit> {
+  const base = staged.name.trim().replace(/\\/g, '/').split('/').pop() ?? staged.name.trim();
+  if (!base) throw { message: 'create_scene 的场景名为空。' } satisfies StageError;
+  const file = base.toLowerCase().endsWith('.txt') ? base : `${base}.txt`;
+  const existing = await ctx.listSceneFiles();
+  if (existing.some((f) => f.toLowerCase() === file.toLowerCase())) {
+    throw { message: `场景「${file}」已存在，换个名字，或用 edit_scene 修改它。` } satisfies StageError;
+  }
+  return { kind: 'create_scene', file, chapter: staged.chapter, outline: staged.outline };
+}
+
 /** Human-readable one-line summary for an edit (approval list rows). */
 export function describeEdit(edit: ChangeEdit, sceneHeaders?: Record<string, SceneHeader>): string {
   if (edit.kind === 'scene') return `场景「${sceneDisplayName(edit.file, sceneHeaders?.[edit.file])}」：${edit.summary}`;
   if (edit.kind === 'character') return `角色 ${edit.name}：修改 ${edit.changedFields.join('、') || '（无变化）'}`;
+  if (edit.kind === 'create_scene') return `新建场景「${edit.chapter || edit.file}」`;
   return `项目记忆：修改 ${edit.changedFields.join('、') || '（无变化）'}`;
 }
 

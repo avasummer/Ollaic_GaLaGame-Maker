@@ -827,6 +827,12 @@ export function StoryEditor() {
     setSelectedNode,
     setShowScript,
     pushHistory,
+    onScenesChanged: async () => {
+      if (!projectPath) return;
+      const info = await openProject(projectPath);
+      setProjectInfo(info);
+      void loadSceneHeaders(projectPath, info.scenes);
+    },
   });
 
   useEffect(() => {
