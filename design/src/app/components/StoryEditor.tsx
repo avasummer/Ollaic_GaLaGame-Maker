@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -6,7 +6,7 @@ import {
   Sparkles, Save, Play, Image, ArrowLeft, Send,
   Upload, Download, FileText, FolderOpen, Layers, Check, Loader2, SlidersHorizontal,
   Undo2, Redo2, Package, MoreHorizontal, PanelRightClose, PanelRightOpen,
-  X, AlertTriangle, History,
+  X, AlertTriangle, MessageSquarePlus, Pencil, Trash2, History,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -20,8 +20,10 @@ import { SnapshotManagerDialog } from './SnapshotManagerDialog';
 import { SceneManagerPanel } from './SceneManager';
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
-import { AiPendingCard } from './AiPendingCard';
-import { ConflictCard, ErrorCard, MissingAssetCard } from './AiStatusCard';
+import { ChangeSetCard } from './AiPendingCard';
+import { computeFullNodeDiff } from '../lib/node-diff';
+import type { SceneEdit } from '../lib/change-set';
+import { ConflictCard, ErrorCard } from './AiStatusCard';
 import type { WebGalNode, WebGalCommandType, SceneLink } from '../lib/webgal-types';
 import { extractSceneLinks } from '../lib/webgal-types';
 import {
@@ -30,7 +32,7 @@ import {
   exportProject, readProjectMetadata, saveProjectMetadata,
   createProjectSnapshot, listProjectSnapshots, renameProjectSnapshot, deleteProjectSnapshot, restoreProjectSnapshot,
   setRuntimeProject, setRuntimeTemplateDir, getRuntimeUrl, jumpToSentence, openInBrowser,
-  readFileText, parseSceneHeader,
+  readFileText, parseSceneHeader, sceneDisplayName,
   type ProjectInfo, type SceneHeader, type ProjectMetadata, type SnapshotInfo,
 } from '../lib/webgal-ipc';
 import { listCharacterNames, listCharacters } from '../lib/character-ipc';
@@ -46,8 +48,18 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -64,12 +76,11 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 const aiStatusLabels: Record<AiPanelStatus, string> = {
   idle: '等待输入',
   generating: '生成中',
-  validating: '校验中',
+  tooling: '调用工具中',
   pending: '待确认',
-  accepted: '已接受',
-  reverted: '已撤销',
+  accepted: '已同意',
+  reverted: '已拒绝',
   conflict: '有冲突',
-  missing_assets: '缺少素材',
   error: '出错',
 };
 
@@ -147,6 +158,10 @@ export function StoryEditor() {
   const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
   const [aiCollapsed, setAiCollapsed] = useState(() => localStorage.getItem(`story-ai-collapsed-${projectId}`) === '1');
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
 
   // Build character context for AI system prompt
   const buildCharacterContext = useCallback((chars: Character[]): string => {
@@ -1007,6 +1022,7 @@ export function StoryEditor() {
     projectId,
     projectPath,
     currentSceneName,
+    sceneHeaders,
     nodes,
     selectedNode,
     scriptSource,
@@ -1019,7 +1035,26 @@ export function StoryEditor() {
     setSelectedNode,
     setShowScript,
     pushHistory,
+    onScenesChanged: async () => {
+      if (!projectPath) return;
+      const info = await openProject(projectPath);
+      setProjectInfo(info);
+      void loadSceneHeaders(projectPath, info.scenes);
+    },
   });
+
+  // While an AI change set is pending, if it edits the currently-open scene,
+  // render the canvas as a read-only node diff (green added / red deleted /
+  // yellow modified) instead of the editable list.
+  const aiPreviewEntries = useMemo(() => {
+    const set = aiAgent.pendingChangeSet;
+    if (!set || set.status !== 'pending') return undefined;
+    const sceneEdit = set.edits.find(
+      (e): e is SceneEdit => e.kind === 'scene' && e.file === currentSceneName,
+    );
+    if (!sceneEdit) return undefined;
+    return computeFullNodeDiff(sceneEdit.beforeNodes, sceneEdit.afterNodes);
+  }, [aiAgent.pendingChangeSet, currentSceneName]);
 
   useEffect(() => {
     const list = aiMessagesListRef.current;
@@ -1027,11 +1062,11 @@ export function StoryEditor() {
   }, [aiAgent.messages]);
 
   useEffect(() => {
-    aiPendingPreviewRef.current = aiAgent.pendingChange?.status === 'pending';
+    aiPendingPreviewRef.current = aiAgent.pendingChangeSet?.status === 'pending';
     if (aiAgent.status === 'reverted' || aiAgent.status === 'accepted') {
       sceneDraftCache.current.delete(currentSceneName);
     }
-  }, [aiAgent.pendingChange?.status, aiAgent.status, currentSceneName]);
+  }, [aiAgent.pendingChangeSet?.status, aiAgent.status, currentSceneName]);
 
   const handleAiSend = () => { void aiAgent.sendPrompt(aiAgent.input); };
   // ---------------------------------------------------------------------------
@@ -1087,13 +1122,9 @@ export function StoryEditor() {
                     className="max-w-[9rem] sm:max-w-[12rem] px-2 py-1 text-sm bg-secondary border border-border rounded-md font-mono-family"
                     aria-label="选择场景"
                   >
-                    {projectInfo.scenes.map((s) => {
-                      const h = sceneHeaders[s];
-                      const label = h?.chapter
-                        ? (h.outline ? `${h.chapter} — ${h.outline}` : h.chapter)
-                        : (h?.outline ?? s);
-                      return <option key={s} value={s} title={s}>{label}</option>;
-                    })}
+                    {projectInfo.scenes.map((s) => (
+                      <option key={s} value={s} title={s}>{sceneDisplayName(s, sceneHeaders[s])}</option>
+                    ))}
                   </select>
                   <button
                     onClick={() => setSceneManagerOpen((v) => !v)}
@@ -1369,6 +1400,7 @@ export function StoryEditor() {
                   onCutNode={cutNode}
                   onPasteNode={pasteNode}
                   clipboardNode={clipboardNode}
+                  previewEntries={aiPreviewEntries}
                 />
               </div>
             </>
@@ -1406,8 +1438,8 @@ export function StoryEditor() {
                     <Sparkles className="w-4 h-4 text-primary" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className="text-sm uppercase tracking-widest text-muted-foreground font-mono-family">
-                      AI 创作助手
+                    <h3 className="truncate text-sm text-foreground" title={aiAgent.sessions.find((s) => s.id === aiAgent.activeId)?.title}>
+                      {aiAgent.sessions.find((s) => s.id === aiAgent.activeId)?.title ?? 'AI 创作助手'}
                     </h3>
                     <div className="mt-1 flex items-center gap-2">
                       <span className={`h-2 w-2 rounded-full ${
@@ -1426,14 +1458,68 @@ export function StoryEditor() {
                   </div>
                   <button
                     type="button"
-                    onClick={aiAgent.clearConversation}
+                    onClick={aiAgent.startNewSession}
                     disabled={aiAgent.busy}
-                    className="p-1.5 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-40"
-                    title="清空对话"
-                    aria-label="清空 AI 对话"
+                    className="p-1.5 rounded-md text-foreground hover:bg-secondary/50 transition-colors disabled:opacity-40"
+                    title="新建会话"
+                    aria-label="新建 AI 会话"
                   >
-                    <X className="w-4 h-4" />
+                    <MessageSquarePlus className="w-4 h-4" />
                   </button>
+                  <DropdownMenu open={sessionMenuOpen} onOpenChange={setSessionMenuOpen}>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        disabled={aiAgent.busy}
+                        className="p-1.5 rounded-md text-foreground hover:bg-secondary/50 transition-colors disabled:opacity-40"
+                        title="会话管理"
+                        aria-label="会话管理"
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-64">
+                      <DropdownMenuItem onClick={() => { setSessionMenuOpen(false); aiAgent.startNewSession(); }}>
+                        <MessageSquarePlus className="w-4 h-4" />
+                        <span>新建会话</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>历史会话</DropdownMenuLabel>
+                      {/* Plain rows (not DropdownMenuItem): Radix MenuItem unmounts on
+                          pointerup, swallowing clicks on nested rename/delete buttons. */}
+                      <div className="max-h-64 overflow-y-auto">
+                        {aiAgent.sessions.map((s) => (
+                          <div
+                            key={s.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => { setSessionMenuOpen(false); aiAgent.selectSession(s.id); }}
+                            className={`group flex items-center gap-1 rounded-sm px-2 py-1.5 text-sm cursor-pointer text-foreground hover:bg-accent ${s.id === aiAgent.activeId ? 'bg-secondary/60' : ''}`}
+                          >
+                            <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setSessionMenuOpen(false); setRenameTarget({ id: s.id, title: s.title }); setRenameValue(s.title); }}
+                              className="shrink-0 opacity-60 hover:opacity-100 rounded p-0.5 text-foreground hover:bg-secondary"
+                              title="重命名"
+                              aria-label="重命名会话"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setSessionMenuOpen(false); setDeleteTarget({ id: s.id, title: s.title }); }}
+                              className="shrink-0 opacity-60 hover:opacity-100 rounded p-0.5 text-foreground hover:bg-destructive/20 hover:text-destructive"
+                              title="删除"
+                              aria-label="删除会话"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </>
               )}
             </div>
@@ -1461,26 +1547,22 @@ export function StoryEditor() {
                     key={msg.id}
                     className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
                   >
-                    <AiMessageBubble role={msg.role} content={msg.content} isStreaming={isStreaming} stopped={msg.stopped} diff={msg.diff} />
+                    <AiMessageBubble role={msg.role} content={msg.content} steps={msg.steps} isStreaming={isStreaming} stopped={msg.stopped} diff={msg.diff} />
                   </div>
                 );
               })}
-              {aiAgent.pendingChange && aiAgent.status !== 'conflict' && (
-                <AiPendingCard
-                  summary={aiAgent.pendingChange.summary}
-                  status={aiAgent.pendingChange.status}
-                  diff={aiAgent.pendingChange.diff}
-                  warnings={aiAgent.pendingChange.warnings}
+              {aiAgent.busy && aiAgent.stepLabel && (
+                <div className="flex items-center gap-2 rounded-md border border-border bg-secondary/35 px-3 py-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  <span className="min-w-0 flex-1 truncate">{aiAgent.stepLabel}</span>
+                </div>
+              )}
+              {aiAgent.pendingChangeSet && aiAgent.status !== 'conflict' && (
+                <ChangeSetCard
+                  changeSet={aiAgent.pendingChangeSet}
+                  sceneHeaders={sceneHeaders}
                   onAccept={() => { void aiAgent.acceptChange(); }}
                   onRevert={aiAgent.revertChange}
-                />
-              )}
-              {aiAgent.status === 'missing_assets' && (
-                <MissingAssetCard
-                  issues={aiAgent.missingIssues}
-                  onUseFallback={aiAgent.useFallbackAssets}
-                  onOpenAssets={aiAgent.openAssets}
-                  onRetryPrompt={aiAgent.retryWithExistingAssets}
                 />
               )}
               {aiAgent.status === 'conflict' && (
@@ -1520,9 +1602,9 @@ export function StoryEditor() {
                     handleAiSend();
                   }
                 }}
-                disabled={aiAgent.busy || aiAgent.pendingChange?.status === 'pending'}
+                disabled={aiAgent.busy || aiAgent.pendingChangeSet?.status === 'pending'}
                 className="w-full h-20 bg-input-background border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none disabled:opacity-60"
-                placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChange?.status === 'pending' ? '请先接受或撤销当前 AI 修改...' : '输入你的创作想法...'}
+                placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChangeSet?.status === 'pending' ? '请先同意或拒绝当前 AI 修改...' : '输入你的创作想法...'}
                 aria-label="AI 创作输入"
               />
               {aiAgent.busy ? (
@@ -1536,7 +1618,7 @@ export function StoryEditor() {
               ) : (
                 <button
                   onClick={handleAiSend}
-                  disabled={!aiAgent.input.trim() || aiAgent.pendingChange?.status === 'pending'}
+                  disabled={!aiAgent.input.trim() || aiAgent.pendingChangeSet?.status === 'pending'}
                   className="mt-2 w-full px-3 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50"
                 >
                   <Send className="w-3.5 h-3.5" />
@@ -1552,6 +1634,74 @@ export function StoryEditor() {
           open={aiSettingsOpen}
           onClose={() => setAiSettingsOpen(false)}
         />
+
+        {/* Rename session — in-app dialog (Tauri has no native prompt). */}
+        <Dialog open={renameTarget !== null} onOpenChange={(o) => { if (!o) setRenameTarget(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>重命名会话</DialogTitle>
+            </DialogHeader>
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && renameValue.trim() && renameTarget) {
+                  aiAgent.renameSession(renameTarget.id, renameValue);
+                  setRenameTarget(null);
+                }
+              }}
+              className="w-full bg-input-background border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              placeholder="会话名称"
+              aria-label="会话名称"
+            />
+            <DialogFooter>
+              <button
+                type="button"
+                onClick={() => setRenameTarget(null)}
+                className="px-3 py-2 rounded-md bg-secondary text-sm hover:bg-secondary/70 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!renameValue.trim()}
+                onClick={() => { if (renameTarget) { aiAgent.renameSession(renameTarget.id, renameValue); setRenameTarget(null); } }}
+                className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm hover:opacity-90 transition-all disabled:opacity-50"
+              >
+                保存
+              </button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete session confirmation — in-app dialog. */}
+        <Dialog open={deleteTarget !== null} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>删除会话</DialogTitle>
+              <DialogDescription>
+                确定删除会话「{deleteTarget?.title}」？此操作不可撤销。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="px-3 py-2 rounded-md bg-secondary text-sm hover:bg-secondary/70 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => { if (deleteTarget) { aiAgent.removeSession(deleteTarget.id); setDeleteTarget(null); } }}
+                className="px-3 py-2 rounded-md bg-destructive text-destructive-foreground text-sm hover:opacity-90 transition-all"
+              >
+                删除
+              </button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <ProjectMetadataDialog
           open={projectMetadataOpen}

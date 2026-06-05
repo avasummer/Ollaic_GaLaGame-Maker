@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import type { ReactNode } from 'react';
-import { CheckCircle2, ChevronRight, FileEdit } from 'lucide-react';
-import type { ChatDiffLine } from '../hooks/useChatSession';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { ChevronRight, FileEdit, Wrench, AlertCircle } from 'lucide-react';
+import type { AssistantStep, ChatDiffLine } from '../hooks/useChatSession';
 
 interface AiMessageBubbleProps {
   role: 'user' | 'assistant';
   content: string;
+  steps?: AssistantStep[];
   isStreaming?: boolean;
   stopped?: boolean;
   diff?: ChatDiffLine[];
@@ -50,80 +52,79 @@ function DiffBlock({ diff }: { diff: ChatDiffLine[] }) {
   );
 }
 
-function renderInlineMarkdown(text: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const regex = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`)/g;
-  let last = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > last) nodes.push(text.slice(last, match.index));
-    const token = match[0];
-    if (token.startsWith('`')) {
-      nodes.push(<code key={`code-${match.index}`} className="rounded bg-background/70 px-1 py-0.5 text-[0.92em]">{token.slice(1, -1)}</code>);
-    } else {
-      nodes.push(<strong key={`strong-${match.index}`}>{token.slice(2, -2)}</strong>);
-    }
-    last = match.index + token.length;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
+/** Full GFM markdown (tables, headings, quotes, code, lists, task lists). */
+function Markdown({ children }: { children: string }) {
+  return (
+    <div className="space-y-1.5 leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => <h1 className="mt-2 mb-1 text-base font-semibold">{children}</h1>,
+          h2: ({ children }) => <h2 className="mt-2 mb-1 text-sm font-semibold">{children}</h2>,
+          h3: ({ children }) => <h3 className="mt-2 mb-1 text-sm font-semibold">{children}</h3>,
+          p: ({ children }) => <p className="my-1">{children}</p>,
+          ul: ({ children }) => <ul className="my-1 list-disc space-y-0.5 pl-5">{children}</ul>,
+          ol: ({ children }) => <ol className="my-1 list-decimal space-y-0.5 pl-5">{children}</ol>,
+          li: ({ children }) => <li>{children}</li>,
+          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+          em: ({ children }) => <em className="italic">{children}</em>,
+          a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" className="text-primary underline">{children}</a>,
+          blockquote: ({ children }) => <blockquote className="my-1 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
+          hr: () => <hr className="my-2 border-border" />,
+          code: ({ className, children }) => {
+            const inline = !className;
+            if (inline) return <code className="rounded bg-background/70 px-1 py-0.5 text-[0.92em]">{children}</code>;
+            return (
+              <pre className="my-1.5 overflow-x-auto rounded-md border border-border/50 bg-background/50 p-2 text-[11px] leading-relaxed">
+                <code className={className}>{children}</code>
+              </pre>
+            );
+          },
+          table: ({ children }) => (
+            <div className="my-1.5 overflow-x-auto">
+              <table className="w-full border-collapse text-[11px]">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="bg-background/40">{children}</thead>,
+          th: ({ children }) => <th className="border border-border/60 px-2 py-1 text-left font-semibold">{children}</th>,
+          td: ({ children }) => <td className="border border-border/60 px-2 py-1 align-top">{children}</td>,
+        }}
+      >
+        {children}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
-function MarkdownText({ text, enabled }: { text: string; enabled: boolean }) {
-  if (!enabled) return <div className="whitespace-pre-wrap">{text}</div>;
-
-  const lines = text.split('\n');
-  const output: React.ReactNode[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const unordered = lines[i].match(/^\s*[-*]\s+(.+)$/);
-    const ordered = lines[i].match(/^\s*\d+\.\s+(.+)$/);
-    if (unordered || ordered) {
-      const orderedList = !!ordered;
-      const items: string[] = [];
-      while (i < lines.length) {
-        const item = orderedList
-          ? lines[i].match(/^\s*\d+\.\s+(.+)$/)
-          : lines[i].match(/^\s*[-*]\s+(.+)$/);
-        if (!item) break;
-        items.push(item[1]);
-        i += 1;
-      }
-      const ListTag = orderedList ? 'ol' : 'ul';
-      output.push(
-        <ListTag key={`list-${i}`} className={`my-1 space-y-0.5 ${orderedList ? 'list-decimal' : 'list-disc'} pl-5`}>
-          {items.map((item, index) => <li key={`${item}-${index}`}>{renderInlineMarkdown(item)}</li>)}
-        </ListTag>,
-      );
-      continue;
-    }
-
-    output.push(
-      <div key={`line-${i}`} className={lines[i] ? '' : 'h-3'}>
-        {renderInlineMarkdown(lines[i])}
-      </div>,
-    );
-    i += 1;
-  }
-  return <>{output}</>;
+/** Renders a multi-step assistant reply: per-turn text blocks + tool-call rows. */
+function StepsView({ steps }: { steps: AssistantStep[] }) {
+  return (
+    <div className="space-y-2">
+      {steps.map((step, si) => (
+        <div key={si} className="space-y-1.5">
+          {step.text?.trim() && <Markdown>{step.text.trim()}</Markdown>}
+          {step.toolCalls?.map((call, ci) => (
+            <div
+              key={ci}
+              className={`flex items-center gap-2 rounded-md border px-2 py-1 text-[11px] ${
+                call.ok === false
+                  ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                  : 'border-border/50 bg-background/35 text-muted-foreground'
+              }`}
+              title={call.error}
+            >
+              {call.ok === false ? <AlertCircle className="h-3.5 w-3.5 shrink-0" /> : <Wrench className="h-3.5 w-3.5 shrink-0 text-chart-2" />}
+              <span className="min-w-0 flex-1 truncate">{call.label}</span>
+              {call.ok === false && <span className="shrink-0">失败</span>}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
 }
 
-export function AiMessageBubble({ role, content, isStreaming = false, stopped = false, diff }: AiMessageBubbleProps) {
-  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
-  const completeBlockRegex = /```(?:[a-z-]+|json)?\s*[\s\S]*?```/gi;
-  const completeBlockTestRegex = /```(?:[a-z-]+|json)?\s*[\s\S]*?```/i;
-  const openBlockRegex = /```(?:[a-z-]+|json)?\s*[\s\S]*$/i;
-  const hasStructuredBlocks = completeBlockTestRegex.test(content) || openBlockRegex.test(content);
-  const textParts = hasStructuredBlocks
-    ? content.replace(openBlockRegex, '').split(completeBlockRegex)
-    : [content];
-  const hasOpenStructuredBlock = openBlockRegex.test(content);
-  const fallbackCardLabel = hasOpenStructuredBlock && isStreaming
-    ? '正在生成修改预览...'
-    : '已生成修改预览';
-  const structuredBlocks = Array.from(content.matchAll(/```(?:[a-z-]+|json)?\s*([\s\S]*?)(?:```|$)/gi), (match) => match[1] ?? '');
-
+export function AiMessageBubble({ role, content, steps, isStreaming = false, stopped = false, diff }: AiMessageBubbleProps) {
   return (
     <div
       className={`max-w-[85%] rounded-lg px-3 py-2 text-sm break-words ${
@@ -132,31 +133,14 @@ export function AiMessageBubble({ role, content, isStreaming = false, stopped = 
           : 'bg-secondary border border-border'
       } ${role === 'assistant' ? 'font-mono-family' : 'font-body-family'}`}
     >
-      {textParts.map((part, index) => (
-        <div key={`part-${index}`}>
-          {part.trim() && <MarkdownText text={part.trim()} enabled={role === 'assistant'} />}
-          {(structuredBlocks[index] !== undefined || (index === 0 && hasOpenStructuredBlock)) && (
-            <div className="my-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setExpanded((prev) => ({ ...prev, [index]: !prev[index] }))}
-                className="flex w-full items-center gap-2 rounded-md border border-border/50 bg-background/35 px-2 py-1.5 text-muted-foreground transition-colors hover:bg-background/60 hover:text-foreground"
-                aria-expanded={expanded[index]}
-              >
-                <CheckCircle2 className="h-3.5 w-3.5 text-chart-5" />
-                <span className="min-w-0 flex-1 truncate text-left">{fallbackCardLabel}</span>
-                <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition-transform ${expanded[index] ? 'rotate-90' : ''}`} />
-              </button>
-              {expanded[index] && (
-                <pre className="mt-1.5 max-h-44 overflow-auto whitespace-pre-wrap rounded-md border border-border/50 bg-background/35 p-2 text-[11px] leading-relaxed text-muted-foreground">
-                  {structuredBlocks[index] ?? ''}
-                </pre>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-      {!content && isStreaming && '思考中...'}
+      {steps && steps.length > 0 ? (
+        <StepsView steps={steps} />
+      ) : content && role === 'assistant' ? (
+        <Markdown>{content}</Markdown>
+      ) : (
+        <div className="whitespace-pre-wrap">{content}</div>
+      )}
+      {!content && (!steps || steps.length === 0) && isStreaming && '思考中...'}
       {isStreaming && content && <span className="inline-block w-2 h-3 ml-1 bg-current align-middle animate-pulse" />}
       {diff && diff.length > 0 && !isStreaming && <DiffBlock diff={diff} />}
       {stopped && <div className="mt-1 text-[11px] text-muted-foreground">已停止</div>}

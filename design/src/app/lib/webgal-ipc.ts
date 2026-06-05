@@ -50,6 +50,17 @@ export interface SceneHeader {
   outline?: string;
 }
 
+/**
+ * Human-readable label for a scene: its chapter (and outline) when set,
+ * falling back to the raw filename. Used everywhere a scene is shown to the
+ * user or to the AI for comprehension — the filename stays the identifier for
+ * WebGAL commands (changeScene, edit_scene, etc.).
+ */
+export function sceneDisplayName(file: string, header?: SceneHeader): string {
+  if (header?.chapter) return header.outline ? `${header.chapter} — ${header.outline}` : header.chapter;
+  return header?.outline ?? file;
+}
+
 /** Serialize a SceneHeader back into leading comment lines. */
 export function serializeSceneHeader(header: SceneHeader): string {
   const lines: string[] = [];
