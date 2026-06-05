@@ -1,7 +1,10 @@
 import { useState } from 'react';
+import { ChevronRight } from 'lucide-react';
 import type { DiffLine } from '../lib/story-agent';
-import type { ChangeEdit, PendingChangeSet } from '../lib/change-set';
+import type { ChangeEdit, PendingChangeSet, SceneEdit } from '../lib/change-set';
 import { sceneDisplayName, type SceneHeader } from '../lib/webgal-ipc';
+import { computeNodeDiff, summarizeNodeDiff } from '../lib/node-diff';
+import { MiniNodeCard } from './MiniNodeCard';
 
 interface AiPendingCardProps {
   summary: string;
@@ -56,6 +59,44 @@ function DiffViewer({ lines }: { lines: DiffLine[] }) {
   );
 }
 
+/** Scene change shown as node-level diff, with the raw text diff as a fallback. */
+function SceneNodeDiff({ edit }: { edit: SceneEdit }) {
+  const [showText, setShowText] = useState(false);
+  const entries = computeNodeDiff(edit.beforeNodes, edit.afterNodes);
+  const { added, modified, removed } = summarizeNodeDiff(entries);
+  return (
+    <>
+      {edit.warnings.length > 0 && (
+        <div className="mt-2 rounded border border-primary/20 bg-background/50 p-1.5 text-muted-foreground">
+          {edit.warnings.map((w) => <div key={w}>{w}</div>)}
+        </div>
+      )}
+      <div className="mt-2 flex items-center gap-2 text-[10px] font-mono-family">
+        {added > 0 && <span className="text-green-400">+{added}</span>}
+        {modified > 0 && <span className="text-yellow-400">✏{modified}</span>}
+        {removed > 0 && <span className="text-red-400">-{removed}</span>}
+      </div>
+      {entries.length > 0 ? (
+        <div className="mt-1.5 space-y-1">
+          {entries.map((entry, i) => <MiniNodeCard key={i} entry={entry} />)}
+        </div>
+      ) : (
+        <div className="mt-1.5 text-[11px] text-muted-foreground">无节点变化</div>
+      )}
+      <button
+        type="button"
+        onClick={() => setShowText((v) => !v)}
+        className="mt-2 flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+        aria-expanded={showText}
+      >
+        <ChevronRight className={`h-3 w-3 transition-transform ${showText ? 'rotate-90' : ''}`} />
+        查看文本 diff
+      </button>
+      {showText && <DiffViewer lines={edit.diff} />}
+    </>
+  );
+}
+
 function EditRow({ edit, sceneHeaders }: { edit: ChangeEdit; sceneHeaders?: Record<string, SceneHeader> }) {
   const label =
     edit.kind === 'scene'
@@ -78,16 +119,7 @@ function EditRow({ edit, sceneHeaders }: { edit: ChangeEdit; sceneHeaders?: Reco
         <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">{edit.kind}</span>
       </div>
       <div className="mt-1 text-muted-foreground">{detail}</div>
-      {edit.kind === 'scene' && (
-        <>
-          {edit.warnings.length > 0 && (
-            <div className="mt-2 rounded border border-primary/20 bg-background/50 p-1.5 text-muted-foreground">
-              {edit.warnings.map((w) => <div key={w}>{w}</div>)}
-            </div>
-          )}
-          <DiffViewer lines={edit.diff} />
-        </>
-      )}
+      {edit.kind === 'scene' && <SceneNodeDiff edit={edit} />}
       {(edit.kind === 'character' || edit.kind === 'memory') && (
         <div className="mt-2 space-y-1 font-mono-family text-[11px]">
           {edit.changedFields.map((field) => (

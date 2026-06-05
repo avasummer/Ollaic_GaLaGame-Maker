@@ -2,12 +2,12 @@ import { useRef, useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDrag, useDrop } from 'react-dnd';
 import {
-  MessageCircle, GitBranch, Image as ImageIcon, User, Music, Film, Tag,
-  ArrowRight, Type, Monitor, Variable, Keyboard, Wand2, Move, Award,
+  Type, Keyboard,
   GripVertical, ArrowDown, Copy, Scissors, Trash2, Clipboard,
 } from 'lucide-react';
 import type { WebGalNode, WebGalCommandType } from '../lib/webgal-types';
 import { commandLabels, isMetadataComment } from '../lib/webgal-types';
+import { commandIcons, typeColors } from '../lib/node-display';
 import { isTerminalNode } from '../lib/scene-editing';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import {
@@ -32,58 +32,6 @@ interface FlowCanvasProps {
 }
 
 const DND_ITEM = 'flow-node';
-
-const commandIcons: Partial<Record<WebGalCommandType, typeof MessageCircle>> = {
-  dialogue: MessageCircle,
-  narrator: Type,
-  intro: Monitor,
-  choose: GitBranch,
-  changeBg: ImageIcon,
-  changeFigure: User,
-  miniAvatar: User,
-  changeScene: ArrowRight,
-  callScene: ArrowRight,
-  end: ArrowRight,
-  bgm: Music,
-  playEffect: Music,
-  playVideo: Film,
-  label: Tag,
-  jumpLabel: Tag,
-  setVar: Variable,
-  setTextbox: Monitor,
-  getUserInput: Keyboard,
-  setAnimation: Wand2,
-  setTransform: Move,
-  unlockCg: Award,
-  unlockBgm: Award,
-  comment: Type,
-};
-
-const typeColors: Partial<Record<WebGalCommandType, string>> = {
-  dialogue: 'border-accent bg-accent/5',
-  narrator: 'border-accent bg-accent/5',
-  intro: 'border-accent bg-accent/5',
-  choose: 'border-primary bg-primary/5',
-  changeBg: 'border-chart-5 bg-chart-5/5',
-  changeFigure: 'border-chart-5 bg-chart-5/5',
-  miniAvatar: 'border-chart-5 bg-chart-5/5',
-  changeScene: 'border-blue-400 bg-blue-400/5',
-  callScene: 'border-blue-400 bg-blue-400/5',
-  end: 'border-blue-400 bg-blue-400/5',
-  bgm: 'border-purple-400 bg-purple-400/5',
-  playEffect: 'border-purple-400 bg-purple-400/5',
-  playVideo: 'border-purple-400 bg-purple-400/5',
-  label: 'border-yellow-400 bg-yellow-400/5',
-  jumpLabel: 'border-yellow-400 bg-yellow-400/5',
-  setVar: 'border-yellow-400 bg-yellow-400/5',
-  setTextbox: 'border-yellow-400 bg-yellow-400/5',
-  getUserInput: 'border-yellow-400 bg-yellow-400/5',
-  setAnimation: 'border-primary bg-primary/5',
-  setTransform: 'border-primary bg-primary/5',
-  unlockCg: 'border-primary bg-primary/5',
-  unlockBgm: 'border-primary bg-primary/5',
-  comment: 'border-muted bg-muted/5',
-};
 
 function getNodeSummary(node: WebGalNode): string {
   switch (node.type) {
