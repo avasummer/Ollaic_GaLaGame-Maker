@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -19,6 +19,8 @@ import { SceneManagerPanel } from './SceneManager';
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
 import { ChangeSetCard } from './AiPendingCard';
+import { computeFullNodeDiff } from '../lib/node-diff';
+import type { SceneEdit } from '../lib/change-set';
 import { ConflictCard, ErrorCard } from './AiStatusCard';
 import type { WebGalNode, WebGalCommandType, SceneLink } from '../lib/webgal-types';
 import { extractSceneLinks } from '../lib/webgal-types';
@@ -73,8 +75,8 @@ const aiStatusLabels: Record<AiPanelStatus, string> = {
   generating: '生成中',
   tooling: '调用工具中',
   pending: '待确认',
-  accepted: '已接受',
-  reverted: '已撤销',
+  accepted: '已同意',
+  reverted: '已拒绝',
   conflict: '有冲突',
   error: '出错',
 };
@@ -835,6 +837,19 @@ export function StoryEditor() {
     },
   });
 
+  // While an AI change set is pending, if it edits the currently-open scene,
+  // render the canvas as a read-only node diff (green added / red deleted /
+  // yellow modified) instead of the editable list.
+  const aiPreviewEntries = useMemo(() => {
+    const set = aiAgent.pendingChangeSet;
+    if (!set || set.status !== 'pending') return undefined;
+    const sceneEdit = set.edits.find(
+      (e): e is SceneEdit => e.kind === 'scene' && e.file === currentSceneName,
+    );
+    if (!sceneEdit) return undefined;
+    return computeFullNodeDiff(sceneEdit.beforeNodes, sceneEdit.afterNodes);
+  }, [aiAgent.pendingChangeSet, currentSceneName]);
+
   useEffect(() => {
     const list = aiMessagesListRef.current;
     if (list) list.scrollTop = list.scrollHeight;
@@ -1161,6 +1176,7 @@ export function StoryEditor() {
                   onCutNode={cutNode}
                   onPasteNode={pasteNode}
                   clipboardNode={clipboardNode}
+                  previewEntries={aiPreviewEntries}
                 />
               </div>
             </>
@@ -1364,7 +1380,7 @@ export function StoryEditor() {
                 }}
                 disabled={aiAgent.busy || aiAgent.pendingChangeSet?.status === 'pending'}
                 className="w-full h-20 bg-input-background border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none disabled:opacity-60"
-                placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChangeSet?.status === 'pending' ? '请先接受或撤销当前 AI 修改...' : '输入你的创作想法...'}
+                placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChangeSet?.status === 'pending' ? '请先同意或拒绝当前 AI 修改...' : '输入你的创作想法...'}
                 aria-label="AI 创作输入"
               />
               {aiAgent.busy ? (

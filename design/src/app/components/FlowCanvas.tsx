@@ -8,6 +8,7 @@ import {
 import type { WebGalNode, WebGalCommandType } from '../lib/webgal-types';
 import { commandLabels, isMetadataComment } from '../lib/webgal-types';
 import { commandIcons, typeColors } from '../lib/node-display';
+import type { NodeDiffEntry } from '../lib/node-diff';
 import { isTerminalNode } from '../lib/scene-editing';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import {
@@ -29,6 +30,8 @@ interface FlowCanvasProps {
   onCutNode?: (node: WebGalNode) => void;
   onPasteNode?: (atIndex: number) => void;
   clipboardNode?: WebGalNode | null;
+  /** When set, render a read-only AI change preview instead of the editable list. */
+  previewEntries?: NodeDiffEntry[];
 }
 
 const DND_ITEM = 'flow-node';
@@ -283,9 +286,59 @@ function FlowNodeCard({
   );
 }
 
+/** Read-only node card for the AI change preview (added/removed/modified/context). */
+function PreviewNodeCard({ entry }: { entry: NodeDiffEntry }) {
+  const node = entry.after ?? entry.before;
+  if (!node || isMetadataComment(node)) return null;
+  const Icon = commandIcons[node.type];
+  const baseColor = typeColors[node.type] || 'border-border bg-card/50';
+  const summary = getNodeSummary(node);
+  const oldSummary = entry.kind === 'modified' && entry.before ? getNodeSummary(entry.before) : undefined;
+
+  const accent =
+    entry.kind === 'added'
+      ? 'border-green-400 bg-green-400/10'
+      : entry.kind === 'removed'
+        ? 'border-red-400 bg-red-400/10 opacity-60'
+        : entry.kind === 'modified'
+          ? 'border-yellow-400 bg-yellow-400/10'
+          : baseColor;
+  const tag =
+    entry.kind === 'added' ? '新增'
+      : entry.kind === 'removed' ? '删除'
+        : entry.kind === 'modified' ? '修改'
+          : null;
+  const tagColor =
+    entry.kind === 'added' ? 'text-green-400'
+      : entry.kind === 'removed' ? 'text-red-400'
+        : 'text-yellow-400';
+
+  return (
+    <div className="flex w-full flex-col items-center">
+      <div
+        className={`w-[360px] max-w-full rounded-lg border px-4 py-3 backdrop-blur-sm ${accent}`}
+        title={oldSummary ? `修改前：${oldSummary}` : undefined}
+      >
+        <div className="mb-1 flex items-center gap-2.5">
+          <div className="rounded bg-background/50 p-1.5">
+            {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
+          </div>
+          <span className="text-xs text-muted-foreground">{commandLabels[node.type] ?? node.type}</span>
+          {tag && <span className={`ml-auto text-[10px] font-medium ${tagColor}`}>{tag}</span>}
+        </div>
+        <div className={`text-sm text-foreground ${entry.kind === 'removed' ? 'line-through' : ''}`}>
+          {summary || '(空)'}
+        </div>
+      </div>
+      <div className="h-4 w-px bg-border/60" />
+    </div>
+  );
+}
+
 export function FlowCanvas({
   nodes, selectedNode, onSelectNode, onReorderNodes, characterColors,
   onDeleteNode, onCopyNode, onCutNode, onPasteNode, clipboardNode,
+  previewEntries,
 }: FlowCanvasProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -322,6 +375,23 @@ export function FlowCanvas({
       container.scrollTop = Math.max(0, cardTop - container.clientHeight / 2 + card.offsetHeight / 2);
     }
   }, [selectedNode?.id]);
+
+  // AI change preview: render a read-only diff list (incl. ghost deleted nodes)
+  // instead of the editable canvas. Edits are not applied until 同意/拒绝.
+  if (previewEntries) {
+    return (
+      <div className="flex-1 relative overflow-hidden bg-background/50">
+        <div className="border-b border-primary/30 bg-primary/10 px-4 py-2 text-center text-xs text-foreground">
+          预览模式
+        </div>
+        <div className="h-full overflow-y-auto px-6 py-8 pb-24">
+          <div className="mx-auto flex max-w-md flex-col items-center">
+            {previewEntries.map((entry, i) => <PreviewNodeCard key={i} entry={entry} />)}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
