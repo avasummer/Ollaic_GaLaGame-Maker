@@ -319,16 +319,29 @@ function PreviewNodeCard({ entry }: { entry: NodeDiffEntry }) {
         className={`w-[360px] max-w-full rounded-lg border px-4 py-3 backdrop-blur-sm ${accent}`}
         title={oldSummary ? `修改前：${oldSummary}` : undefined}
       >
-        <div className="mb-1 flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 mb-1">
           <div className="rounded bg-background/50 p-1.5">
             {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
           </div>
           <span className="text-xs text-muted-foreground">{commandLabels[node.type] ?? node.type}</span>
           {tag && <span className={`ml-auto text-[10px] font-medium ${tagColor}`}>{tag}</span>}
         </div>
-        <div className={`text-sm text-foreground ${entry.kind === 'removed' ? 'line-through' : ''}`}>
-          {summary || '(空)'}
-        </div>
+        {entry.kind === 'modified' && oldSummary !== undefined ? (
+          <div className="space-y-1">
+            <div className="flex items-start gap-1.5 text-sm text-muted-foreground line-through decoration-red-400/50">
+              <span className="select-none text-red-400/70">−</span>
+              <span className="min-w-0 flex-1">{oldSummary || '(空)'}</span>
+            </div>
+            <div className="flex items-start gap-1.5 text-sm text-foreground">
+              <span className="select-none text-green-400/80">+</span>
+              <span className="min-w-0 flex-1">{summary || '(空)'}</span>
+            </div>
+          </div>
+        ) : (
+          <div className={`text-sm text-foreground ${entry.kind === 'removed' ? 'line-through' : ''}`}>
+            {summary || '(空)'}
+          </div>
+        )}
       </div>
       <div className="h-4 w-px bg-border/60" />
     </div>
