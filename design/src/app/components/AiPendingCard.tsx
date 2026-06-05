@@ -62,8 +62,15 @@ function EditRow({ edit, sceneHeaders }: { edit: ChangeEdit; sceneHeaders?: Reco
       ? `场景「${sceneDisplayName(edit.file, sceneHeaders?.[edit.file])}」${edit.isCurrent ? '（当前）' : ''}`
       : edit.kind === 'character'
         ? `角色 ${edit.name}`
-        : '项目记忆';
-  const detail = edit.kind === 'scene' ? edit.summary : `修改 ${edit.changedFields.join('、') || '（无变化）'}`;
+        : edit.kind === 'create_scene'
+          ? `新建场景「${edit.chapter || edit.file}」`
+          : '项目记忆';
+  const detail =
+    edit.kind === 'scene'
+      ? edit.summary
+      : edit.kind === 'create_scene'
+        ? `文件 ${edit.file}${edit.outline ? ` · 大纲：${edit.outline}` : ''}`
+        : `修改 ${edit.changedFields.join('、') || '（无变化）'}`;
   return (
     <div className="mt-2 rounded-md border border-border bg-background/40 p-2">
       <div className="flex items-center justify-between gap-2">

@@ -203,7 +203,8 @@ const readTools: AgentTool[] = [
 export type StagedWrite =
   | { tool: 'edit_scene'; file: string; patches: EditorPatch[] }
   | { tool: 'edit_character'; id: string; partial: Record<string, unknown> }
-  | { tool: 'edit_memory'; partial: Record<string, unknown> };
+  | { tool: 'edit_memory'; partial: Record<string, unknown> }
+  | { tool: 'create_scene'; name: string; chapter?: string; outline?: string };
 
 const writeTools: AgentTool[] = [
   {
@@ -299,6 +300,31 @@ const writeTools: AgentTool[] = [
     run: async (args) => {
       const partial = (args.partial && typeof args.partial === 'object' ? args.partial : {}) as Record<string, unknown>;
       return { tool: 'edit_memory', partial } satisfies StagedWrite;
+    },
+  },
+  {
+    name: 'create_scene',
+    description:
+      '新建一个空场景文件，可选设置章节名(chapter)和大纲(outline)。建好后用 edit_scene 往里写内容（afterLine 用 "end" 追加）。新建先进入预览，用户确认后才落盘。',
+    kind: 'write',
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '场景文件名，可不含 .txt（会自动补全）' },
+        chapter: { type: 'string', description: '可选：章节名' },
+        outline: { type: 'string', description: '可选：本章大纲/简述' },
+      },
+      required: ['name'],
+    },
+    run: async (args) => {
+      const name = asString(args.name);
+      if (!name) throw new Error('create_scene 需要场景名 name。');
+      return {
+        tool: 'create_scene',
+        name,
+        chapter: asString(args.chapter),
+        outline: asString(args.outline),
+      } satisfies StagedWrite;
     },
   },
 ];

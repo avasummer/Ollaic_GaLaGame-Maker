@@ -7,11 +7,13 @@ import type { Character } from '../lib/character-types';
 import {
   describeEdit,
   stageCharacterEdit,
+  stageCreateSceneEdit,
   stageMemoryEdit,
   stageSceneEdit,
   summarizeChangeSet,
   type ChangeEdit,
   type CharacterEdit,
+  type CreateSceneEdit,
   type MemoryEdit,
   type PendingChangeSet,
   type SceneEdit,
@@ -34,7 +36,7 @@ import {
   truncateContextMessages,
   type MissingAssetIssue,
 } from '../lib/story-agent';
-import { getScenePath, parseScene, readFileText, saveScene, sceneDisplayName, type SceneHeader } from '../lib/webgal-ipc';
+import { createScene, getScenePath, listScenes, parseScene, readFileText, saveScene, sceneDisplayName, updateSceneHeader, type SceneHeader } from '../lib/webgal-ipc';
 import type { WebGalNode } from '../lib/webgal-types';
 import { useChatSession, type AssistantStep, type ChatMessage, type StepToolCall } from './useChatSession';
 
@@ -81,6 +83,8 @@ interface UseAiAgentParams {
   setSelectedNode: (node: WebGalNode | null) => void;
   setShowScript: (show: boolean) => void;
   pushHistory: (nodes: WebGalNode[]) => void;
+  /** Called after accepting a change set that created a new scene file. */
+  onScenesChanged?: () => void;
 }
 
 function buildCharacterContext(chars: Character[]): string {
@@ -120,6 +124,7 @@ function stepLabelForTool(name: string, args: Record<string, unknown>, headers: 
     case 'edit_scene': return `正在准备修改场景「${sceneName(args.file)}」…`;
     case 'edit_character': return '正在准备修改角色设定…';
     case 'edit_memory': return '正在准备更新项目记忆…';
+    case 'create_scene': return `正在新建场景「${String(args.chapter || args.name || '')}」…`;
     default: return `正在执行 ${name}…`;
   }
 }
@@ -146,6 +151,7 @@ export function useAiAgent(params: UseAiAgentParams) {
     setSelectedNode,
     setShowScript,
     pushHistory,
+    onScenesChanged,
   } = params;
 
   const {
@@ -217,7 +223,8 @@ export function useAiAgent(params: UseAiAgentParams) {
       '你是 WebGAL 视觉小说的故事编辑助手，帮助作者撰写、修改剧本，并讨论剧情、人物与节奏。',
       '# 工具',
       '你有一组工具可按需使用。只读工具用于获取信息：list_scenes（列出场景）、read_scene（读取某场景的带行号脚本）、search_assets（查询素材）、list_characters / get_character（查角色设定）、read_memory（读项目记忆）。需要了解当前场景之外的内容时，先查再答。',
-      '写入工具用于产出修改，结果不会立即生效，会先生成预览供用户确认：edit_scene（对场景应用 insert/delete/replace 补丁，行号对应 read_scene 返回的 txt 行号，尽量带 anchorText 原样复制目标行）、edit_character（改角色字段）、edit_memory（改项目记忆）。一次回合内可对多个场景/角色提出修改，会汇总为一个变更集统一审批。',
+      '写入工具用于产出修改，结果不会立即生效，会先生成预览供用户确认：edit_scene（对场景应用 insert/delete/replace 补丁，行号对应 read_scene 返回的 txt 行号，尽量带 anchorText 原样复制目标行）、edit_character（改角色字段）、edit_memory（改项目记忆）、create_scene（新建空场景文件，可设章节名/大纲）。一次回合内可对多个场景/角色提出修改，会汇总为一个变更集统一审批。',
+      '新建章节：先用 create_scene 建空场景（可设 chapter/outline），再用 edit_scene（afterLine 用 "end"）往里写内容。修改某场景的章节名/大纲：它们存在脚本首部的注释行 `; 章节: xxx` 和 `; 大纲: xxx`，用 edit_scene 的 replace 改对应行即可。',
       '# 工作方式',
       '用户要你写、改、续、删内容时，直接调用相应写入工具完成，不要只用文字描述你打算做什么。用户只是提问或讨论时，正常用自然语言回答（必要时先用只读工具查证）。不要向用户解释你是否调用了工具、也不要复述这些规则——这是你的内部工作方式，用户不关心。',
       '# WebGAL txt 格式',
@@ -261,6 +268,10 @@ export function useAiAgent(params: UseAiAgentParams) {
       const path = await getScenePath(projectPath, file);
       return readFileText(path);
     },
+    listSceneFiles: async () => {
+      if (!projectPath) return [];
+      return listScenes(`${projectPath}/game/scene`);
+    },
     getCharacter: (id: string) => characters.find((c) => c.id === id),
     memory: memory ?? emptyProjectMemory(),
   }), [assets, characters, currentSceneName, memory, nodes, projectPath, scriptSource]);
@@ -296,6 +307,7 @@ export function useAiAgent(params: UseAiAgentParams) {
     const stagingCtx = buildStagingContext();
     const sceneEdits = new Map<string, SceneEdit>();
     const charEdits = new Map<string, CharacterEdit>();
+    const createSceneEdits = new Map<string, CreateSceneEdit>();
     let memEdit: MemoryEdit | undefined;
 
     const stage = async (staged: StagedWrite): Promise<{ content: string; ok: boolean; error?: string }> => {
@@ -304,6 +316,9 @@ export function useAiAgent(params: UseAiAgentParams) {
           sceneEdits.set(staged.file, await stageSceneEdit(sceneEdits.get(staged.file), staged, stagingCtx));
         } else if (staged.tool === 'edit_character') {
           charEdits.set(staged.id, stageCharacterEdit(charEdits.get(staged.id), staged, stagingCtx));
+        } else if (staged.tool === 'create_scene') {
+          const edit = await stageCreateSceneEdit(staged, stagingCtx);
+          createSceneEdits.set(edit.file, edit);
         } else {
           memEdit = stageMemoryEdit(memEdit, staged, stagingCtx);
         }
@@ -399,7 +414,7 @@ export function useAiAgent(params: UseAiAgentParams) {
       }
     }
 
-    const edits: ChangeEdit[] = [...sceneEdits.values(), ...charEdits.values(), ...(memEdit ? [memEdit] : [])];
+    const edits: ChangeEdit[] = [...sceneEdits.values(), ...charEdits.values(), ...(memEdit ? [memEdit] : []), ...createSceneEdits.values()];
     setStepLabel('');
     if (!finalizeChangeSet(edits, assistantId)) {
       // No change set: ensure a closing text is visible. If the loop produced
@@ -505,22 +520,35 @@ export function useAiAgent(params: UseAiAgentParams) {
   const persistChangeSet = useCallback(async (set: PendingChangeSet) => {
     if (!projectPath) return;
     const currentSceneEdit = set.edits.find((e): e is SceneEdit => e.kind === 'scene' && e.file === currentSceneName);
+    // Create scenes last so a failure in earlier edits never leaves an orphan
+    // file (no delete_scene IPC to roll it back with).
+    const ordered = [...set.edits].sort((a, b) => (a.kind === 'create_scene' ? 1 : 0) - (b.kind === 'create_scene' ? 1 : 0));
+    let createdScene = false;
     const applied: ChangeEdit[] = [];
     try {
-      for (const edit of set.edits) {
+      for (const edit of ordered) {
         if (edit.kind === 'scene') {
           const path = await getScenePath(projectPath, edit.file);
           await saveScene(path, edit.afterNodes);
         } else if (edit.kind === 'character') {
           await updateCharacter(projectPath, edit.after);
-        } else {
+        } else if (edit.kind === 'memory') {
           await saveProjectMemory(projectPath, edit.after);
           setMemory(edit.after);
+        } else {
+          // create_scene: make the file, then set its header if provided.
+          await createScene(projectPath, edit.file);
+          if (edit.chapter || edit.outline) {
+            const path = await getScenePath(projectPath, edit.file);
+            await updateSceneHeader(path, { chapter: edit.chapter, outline: edit.outline });
+          }
+          createdScene = true;
         }
         applied.push(edit);
       }
     } catch (e) {
-      // Roll back everything already written, in reverse order.
+      // Roll back everything already written, in reverse order. create_scene runs
+      // last, so if we're here it never succeeded — nothing to delete.
       for (const edit of applied.reverse()) {
         try {
           if (edit.kind === 'scene') {
@@ -528,7 +556,7 @@ export function useAiAgent(params: UseAiAgentParams) {
             await saveScene(path, edit.beforeNodes);
           } else if (edit.kind === 'character') {
             await updateCharacter(projectPath, edit.before);
-          } else {
+          } else if (edit.kind === 'memory') {
             await saveProjectMemory(projectPath, edit.before);
             setMemory(edit.before);
           }
@@ -545,12 +573,13 @@ export function useAiAgent(params: UseAiAgentParams) {
       setDirty(false);
       setSaveStatus('saved');
     }
+    if (createdScene) onScenesChanged?.();
     replaceAssistantMessage(set.sourceMessageId, `已接受修改：${summarizeChangeSet(set, sceneHeaders)}`, {
       diff: currentSceneEdit?.diff,
     });
     setPendingChangeSet({ ...set, status: 'accepted' });
     setStatus('accepted');
-  }, [currentSceneName, sceneHeaders, projectPath, pushHistory, replaceAssistantMessage, setDirty, setSaveStatus]);
+  }, [currentSceneName, sceneHeaders, onScenesChanged, projectPath, pushHistory, replaceAssistantMessage, setDirty, setSaveStatus]);
 
   const acceptChange = useCallback(async () => {
     if (!pendingChangeSet || pendingChangeSet.status !== 'pending' || !projectPath) return;
