@@ -6,7 +6,7 @@ import {
   Sparkles, Save, Play, Image, ArrowLeft, Send,
   Upload, Download, FileText, FolderOpen, Layers, Check, Loader2, SlidersHorizontal,
   Undo2, Redo2, Package, MoreHorizontal, PanelRightClose, PanelRightOpen,
-  X, AlertTriangle,
+  X, AlertTriangle, History,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -15,6 +15,8 @@ import { FlowCanvas } from './FlowCanvas';
 import { DetailPanel } from './DetailPanel';
 import { AiSettingsDialog } from './AiSettingsDialog';
 import { AppSettingsDialog, loadAppSettings } from './AppSettingsDialog';
+import { ProjectMetadataDialog, type ExportTaskState } from './ProjectMetadataDialog';
+import { SnapshotManagerDialog } from './SnapshotManagerDialog';
 import { SceneManagerPanel } from './SceneManager';
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
@@ -25,10 +27,11 @@ import { extractSceneLinks } from '../lib/webgal-types';
 import {
   parseScene, serializeScene, saveScene, loadScene,
   openProject, getScenePath, createScene,
-  exportProject,
+  exportProject, readProjectMetadata, saveProjectMetadata,
+  createProjectSnapshot, listProjectSnapshots, renameProjectSnapshot, deleteProjectSnapshot, restoreProjectSnapshot,
   setRuntimeProject, setRuntimeTemplateDir, getRuntimeUrl, jumpToSentence, openInBrowser,
   readFileText, parseSceneHeader,
-  type ProjectInfo, type SceneHeader,
+  type ProjectInfo, type SceneHeader, type ProjectMetadata, type SnapshotInfo,
 } from '../lib/webgal-ipc';
 import { listCharacterNames, listCharacters } from '../lib/character-ipc';
 import type { Character } from '../lib/character-types';
@@ -81,6 +84,23 @@ setAnimation:enter-from-left -target=fig-left -next;
 choose:打招呼:branch_friendly.txt|保持沉默:branch_silent.txt;
 `;
 
+const EMPTY_PROJECT_METADATA: ProjectMetadata = {
+  synopsis: '',
+  description: '',
+  coverPath: '',
+  tags: [],
+  version: '0.1.0',
+  releaseNotes: '',
+  lastExportDir: '',
+};
+
+const IDLE_EXPORT_TASK: ExportTaskState = {
+  status: 'idle',
+  warnings: [],
+  issues: [],
+  failureCount: 0,
+};
+
 export function StoryEditor() {
   const navigate = useNavigate();
   const { projectId } = useParams();
@@ -109,6 +129,20 @@ export function StoryEditor() {
   // AI state
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
+  const [projectMetadataOpen, setProjectMetadataOpen] = useState(false);
+  const [projectMetadata, setProjectMetadata] = useState<ProjectMetadata | null>(null);
+  const [metadataSaving, setMetadataSaving] = useState(false);
+  const [exportTask, setExportTask] = useState<ExportTaskState>(IDLE_EXPORT_TASK);
+  const lastExportPayloadRef = useRef<{
+    metadata: ProjectMetadata;
+    outputDir: string;
+    asZip: boolean;
+  } | null>(null);
+  const [snapshotManagerOpen, setSnapshotManagerOpen] = useState(false);
+  const [snapshots, setSnapshots] = useState<SnapshotInfo[]>([]);
+  const [snapshotBusy, setSnapshotBusy] = useState(false);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [snapshotStatus, setSnapshotStatus] = useState<string | null>(null);
   const [characterNames, setCharacterNames] = useState<string[]>([]);
   const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
@@ -223,6 +257,19 @@ export function StoryEditor() {
     setRuntimeProject(projectPath).catch((e) =>
       console.warn('[runtime] failed to sync project path:', e),
     );
+  }, [projectPath]);
+
+  useEffect(() => {
+    if (!projectPath) {
+      setProjectMetadata(null);
+      return;
+    }
+    readProjectMetadata(projectPath)
+      .then((metadata) => setProjectMetadata(metadata ?? EMPTY_PROJECT_METADATA))
+      .catch((e) => {
+        console.warn('[project] failed to load metadata:', e);
+        setProjectMetadata(EMPTY_PROJECT_METADATA);
+      });
   }, [projectPath]);
 
   useEffect(() => {
@@ -761,31 +808,190 @@ export function StoryEditor() {
     markDirty();
   }, [scriptSource, markDirty]);
 
-  // Export project to runnable WebGAL package
-  const handleExportProject = useCallback(async () => {
+  const projectName = projectInfo?.config.Game_name || projectPath?.split('/').pop() || '未命名项目';
+
+  const handleSaveProjectMetadata = useCallback(async (metadata: ProjectMetadata) => {
     if (!projectPath) return;
-    // Save current scene first
-    if (dirty && !(await handleSave())) return;
-
-    const dest = await saveDialog({
-      title: 'Select export directory',
-      directory: true,
-    });
-    if (!dest) return;
-
+    setMetadataSaving(true);
     try {
-      const result = await exportProject(projectPath, dest, false);
+      await saveProjectMetadata(projectPath, metadata);
+      setProjectMetadata(metadata);
+    } catch (e) {
+      alert(`保存元信息失败: ${e}`);
+    } finally {
+      setMetadataSaving(false);
+    }
+  }, [projectPath]);
+
+  const handleExportProjectWithMetadata = useCallback(async (
+    metadata: ProjectMetadata,
+    outputDir: string,
+    asZip: boolean,
+  ) => {
+    if (!projectPath) return;
+    const failureCount = exportTask.status === 'failed' ? exportTask.failureCount : 0;
+    lastExportPayloadRef.current = { metadata, outputDir, asZip };
+    try {
+      if (dirty && !(await handleSave())) return;
+      const payload = { ...metadata, lastExportDir: outputDir };
+      lastExportPayloadRef.current = { metadata: payload, outputDir, asZip };
+      setExportTask({
+        status: 'savingMetadata',
+        warnings: [],
+        issues: [],
+        failureCount,
+      });
+      await saveProjectMetadata(projectPath, payload);
+      setProjectMetadata(payload);
+      setExportTask({
+        status: 'exporting',
+        warnings: [],
+        issues: [],
+        failureCount,
+      });
+      const result = await exportProject(projectPath, outputDir, asZip, payload);
       if (result.success) {
-        let msg = `导出成功。游戏已保存到 ${dest}`;
-        if (result.warnings.length > 0) {
-          msg += `\n\n警告:\n${result.warnings.join('\n')}`;
-        }
-        alert(msg);
+        setExportTask({
+          status: 'succeeded',
+          outputPath: result.outputPath || outputDir,
+          warnings: result.warnings ?? [],
+          issues: result.issues ?? [],
+          failureCount: 0,
+        });
+      } else {
+        setExportTask({
+          status: 'failed',
+          warnings: result.warnings ?? [],
+          issues: result.issues ?? [],
+          error: '导出校验未通过，请处理错误后重试。',
+          failureCount: failureCount + 1,
+        });
       }
     } catch (e) {
-      alert(`导出失败: ${e}`);
+      setExportTask((prev) => ({
+        status: 'failed',
+        warnings: prev.warnings ?? [],
+        issues: prev.issues ?? [],
+        error: String(e),
+        failureCount: failureCount + 1,
+      }));
     }
-  }, [projectPath, dirty, handleSave]);
+  }, [projectPath, dirty, handleSave, exportTask.status, exportTask.failureCount]);
+
+  const handleRetryExportProject = useCallback(async () => {
+    const payload = lastExportPayloadRef.current;
+    if (!payload) return;
+    await handleExportProjectWithMetadata(payload.metadata, payload.outputDir, payload.asZip);
+  }, [handleExportProjectWithMetadata]);
+
+  const handleExportProject = useCallback(() => {
+    if (!projectPath) return;
+    setExportTask(IDLE_EXPORT_TASK);
+    setProjectMetadataOpen(true);
+  }, [projectPath]);
+
+  const refreshSnapshots = useCallback(async () => {
+    if (!projectPath) return;
+    try {
+      setSnapshotError(null);
+      setSnapshots(await listProjectSnapshots(projectPath));
+    } catch (e) {
+      setSnapshotError(`读取快照失败: ${e}`);
+    }
+  }, [projectPath]);
+
+  const handleOpenSnapshotManager = useCallback(() => {
+    if (!projectPath) return;
+    setSnapshotError(null);
+    setSnapshotStatus(null);
+    setSnapshotManagerOpen(true);
+  }, [projectPath]);
+
+  const handleCreateSnapshot = useCallback(async (label: string, kind: SnapshotInfo['kind'] = 'manual') => {
+    if (!projectPath || snapshotBusy) return;
+    setSnapshotBusy(true);
+    setSnapshotError(null);
+    setSnapshotStatus(null);
+    try {
+      if (dirty && !(await handleSave())) return;
+      const snapshot = await createProjectSnapshot(projectPath, label, kind);
+      setSnapshotStatus(`快照已创建: ${snapshot.label}`);
+      await refreshSnapshots();
+    } catch (e) {
+      setSnapshotError(`创建快照失败: ${e}`);
+    } finally {
+      setSnapshotBusy(false);
+    }
+  }, [projectPath, snapshotBusy, dirty, handleSave, refreshSnapshots]);
+
+  const handleRestoreSnapshot = useCallback(async (snapshot: SnapshotInfo) => {
+    if (!projectPath || snapshotBusy) return;
+    setSnapshotBusy(true);
+    setSnapshotError(null);
+    setSnapshotStatus(null);
+    try {
+      if (dirty && !(await handleSave())) return;
+      await createProjectSnapshot(projectPath, 'before-restore', 'beforeRestore', `回滚到“${snapshot.label}”前自动备份`);
+      await restoreProjectSnapshot(projectPath, snapshot.id);
+      const info = await openProject(projectPath);
+      setProjectInfo(info);
+      void loadSceneHeaders(projectPath, info.scenes);
+      void loadSceneLinkMap(projectPath, info.scenes);
+      const restoredSceneName = info.scenes.includes(currentSceneName)
+        ? currentSceneName
+        : (info.scenes[0] ?? 'start.txt');
+      setCurrentSceneName(restoredSceneName);
+      const scenePath = await getScenePath(projectPath, restoredSceneName);
+      const loaded = await loadScene(scenePath);
+      setNodes(loaded);
+      setScriptSource(await serializeScene(loaded));
+      sceneDraftCache.current.clear();
+      setDirty(false);
+      setSelectedNode(null);
+      setSnapshotStatus(`已回滚到“${snapshot.label}”，并自动创建 before-restore 备份。`);
+      await refreshSnapshots();
+    } catch (e) {
+      setSnapshotError(`回滚快照失败: ${e}`);
+    } finally {
+      setSnapshotBusy(false);
+    }
+  }, [projectPath, snapshotBusy, dirty, handleSave, loadSceneHeaders, loadSceneLinkMap, currentSceneName, refreshSnapshots]);
+
+  const handleRenameSnapshot = useCallback(async (snapshot: SnapshotInfo, label: string) => {
+    if (!projectPath || snapshotBusy) return;
+    setSnapshotBusy(true);
+    setSnapshotError(null);
+    setSnapshotStatus(null);
+    try {
+      const renamed = await renameProjectSnapshot(projectPath, snapshot.id, label);
+      setSnapshotStatus(`快照已重命名: ${renamed.label}`);
+      await refreshSnapshots();
+    } catch (e) {
+      setSnapshotError(`重命名快照失败: ${e}`);
+    } finally {
+      setSnapshotBusy(false);
+    }
+  }, [projectPath, snapshotBusy, refreshSnapshots]);
+
+  const handleDeleteSnapshot = useCallback(async (snapshot: SnapshotInfo) => {
+    if (!projectPath || snapshotBusy) return;
+    setSnapshotBusy(true);
+    setSnapshotError(null);
+    setSnapshotStatus(null);
+    try {
+      await deleteProjectSnapshot(projectPath, snapshot.id);
+      setSnapshotStatus(`快照已删除: ${snapshot.label}`);
+      await refreshSnapshots();
+    } catch (e) {
+      setSnapshotError(`删除快照失败: ${e}`);
+    } finally {
+      setSnapshotBusy(false);
+    }
+  }, [projectPath, snapshotBusy, refreshSnapshots]);
+
+  const handleCreateExportCandidateSnapshot = useCallback(async () => {
+    await handleCreateSnapshot(`candidate-${new Date().toISOString().slice(0, 10)}`, 'exportCandidate');
+  }, [handleCreateSnapshot]);
 
   const handleOpenRuntime = useCallback(async () => {
     try {
@@ -987,15 +1193,27 @@ export function StoryEditor() {
               </button>
               <div className="hidden sm:block h-6 w-px bg-border mx-1" />
               {projectPath && (
-                <button
-                  onClick={handleExportProject}
-                  className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm"
-                  title="导出可运行的 WebGAL 包"
-                  aria-label="导出项目"
-                >
-                  <Package className="w-3.5 h-3.5" />
-                  <span>打包</span>
-                </button>
+                <>
+                  <button
+                    onClick={handleOpenSnapshotManager}
+                    disabled={snapshotBusy}
+                    className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm disabled:opacity-50"
+                    title="历史版本"
+                    aria-label="历史版本"
+                  >
+                    {snapshotBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <History className="w-3.5 h-3.5" />}
+                    <span>历史</span>
+                  </button>
+                  <button
+                    onClick={handleExportProject}
+                    className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm"
+                    title="项目元信息与导出"
+                    aria-label="项目元信息与导出"
+                  >
+                    <Package className="w-3.5 h-3.5" />
+                    <span>交付</span>
+                  </button>
+                </>
               )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -1020,10 +1238,16 @@ export function StoryEditor() {
                     导出场景
                   </DropdownMenuItem>
                   {projectPath && (
-                    <DropdownMenuItem onClick={handleExportProject}>
-                      <Package className="w-4 h-4" />
-                      打包
-                    </DropdownMenuItem>
+                    <>
+                      <DropdownMenuItem onClick={handleOpenSnapshotManager}>
+                        <History className="w-4 h-4" />
+                        历史版本
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleExportProject}>
+                        <Package className="w-4 h-4" />
+                        项目交付
+                      </DropdownMenuItem>
+                    </>
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1327,6 +1551,33 @@ export function StoryEditor() {
         <AiSettingsDialog
           open={aiSettingsOpen}
           onClose={() => setAiSettingsOpen(false)}
+        />
+
+        <ProjectMetadataDialog
+          open={projectMetadataOpen}
+          projectName={projectName}
+          initialMetadata={projectMetadata}
+          saving={metadataSaving}
+          exportTask={exportTask}
+          onClose={() => setProjectMetadataOpen(false)}
+          onSave={handleSaveProjectMetadata}
+          onExport={handleExportProjectWithMetadata}
+          onRetryExport={handleRetryExportProject}
+        />
+
+        <SnapshotManagerDialog
+          open={snapshotManagerOpen}
+          snapshots={snapshots}
+          busy={snapshotBusy}
+          error={snapshotError}
+          status={snapshotStatus}
+          onClose={() => setSnapshotManagerOpen(false)}
+          onRefresh={refreshSnapshots}
+          onCreate={handleCreateSnapshot}
+          onCreateExportCandidate={handleCreateExportCandidateSnapshot}
+          onRestore={handleRestoreSnapshot}
+          onRename={handleRenameSnapshot}
+          onDelete={handleDeleteSnapshot}
         />
 
         <AppSettingsDialog
