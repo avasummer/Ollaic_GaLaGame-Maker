@@ -19,6 +19,8 @@ export interface AiConfig {
   base_url: string;
 }
 
+export type AiProviderConfig = AiConfig;
+
 export interface AiValidationResult {
   ok: boolean;
   provider: string;
@@ -78,6 +80,22 @@ export async function getAiConfig(): Promise<AiConfig> {
 
 export async function setAiConfig(config: AiConfig): Promise<void> {
   return invoke<void>('set_ai_config', { config });
+}
+
+export async function getAiImageConfig(): Promise<AiProviderConfig> {
+  return invoke<AiProviderConfig>('get_ai_image_config');
+}
+
+export async function setAiImageConfig(config: AiProviderConfig): Promise<void> {
+  return invoke<void>('set_ai_image_config', { config });
+}
+
+export async function getAiTtsConfig(): Promise<AiProviderConfig> {
+  return invoke<AiProviderConfig>('get_ai_tts_config');
+}
+
+export async function setAiTtsConfig(config: AiProviderConfig): Promise<void> {
+  return invoke<void>('set_ai_tts_config', { config });
 }
 
 export async function validateAiConfig(config: AiConfig): Promise<AiValidationResult> {

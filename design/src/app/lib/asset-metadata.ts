@@ -13,7 +13,7 @@ const legacyReferencesKey = (projectId: string) => `asset-references-${projectId
 const pendingSaves = new Map<string, Promise<void>>();
 
 export function emptyAssetMetadata(): AssetMetadata {
-  return { aliases: {}, tags: {}, references: {} };
+  return { aliases: {}, descriptions: {}, tags: {}, references: {}, sceneCards: {}, voiceCards: {}, deletedSceneCards: [], deletedVoiceCards: [] };
 }
 
 export function assetMetadataKey(category: string, filename: string): string {
@@ -50,6 +50,7 @@ function parseRecord<T>(key: string): Record<string, T> {
 
 function hasEntries(metadata: AssetMetadata): boolean {
   return Object.keys(metadata.aliases).length > 0
+    || Object.keys(metadata.descriptions).length > 0
     || Object.keys(metadata.tags).length > 0
     || Object.keys(metadata.references).length > 0;
 }
@@ -61,8 +62,13 @@ function loadLegacyMetadata(projectId: string): AssetMetadata {
       const parsed = JSON.parse(unified) as Partial<AssetMetadata>;
       return {
         aliases: parsed.aliases ?? {},
+        descriptions: parsed.descriptions ?? {},
         tags: parsed.tags ?? {},
         references: parsed.references ?? {},
+        sceneCards: parsed.sceneCards ?? {},
+        voiceCards: parsed.voiceCards ?? {},
+        deletedSceneCards: parsed.deletedSceneCards ?? [],
+        deletedVoiceCards: parsed.deletedVoiceCards ?? [],
       };
     }
   } catch {
@@ -70,8 +76,13 @@ function loadLegacyMetadata(projectId: string): AssetMetadata {
   }
   return {
     aliases: parseRecord<string>(legacyAliasKey(projectId)),
+    descriptions: {},
     tags: parseRecord<string[]>(legacyTagsKey(projectId)),
     references: parseRecord<string[]>(legacyReferencesKey(projectId)),
+    sceneCards: {},
+    voiceCards: {},
+    deletedSceneCards: [],
+    deletedVoiceCards: [],
   };
 }
 
@@ -138,6 +149,16 @@ export function setAssetAlias(
 ): AssetMetadata {
   const value = alias.trim() || undefined;
   return { ...metadata, aliases: setEntry(metadata.aliases, category, filename, value) };
+}
+
+export function setAssetDescription(
+  metadata: AssetMetadata,
+  category: string,
+  filename: string,
+  description: string,
+): AssetMetadata {
+  const value = description.trim() || undefined;
+  return { ...metadata, descriptions: setEntry(metadata.descriptions, category, filename, value) };
 }
 
 export function setAssetTags(

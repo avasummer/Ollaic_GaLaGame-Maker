@@ -2221,6 +2221,8 @@ export function StoryEditor() {
           const info = await openProject(storedPath);
           setProjectPath(storedPath);
           setProjectInfo(info);
+          const sceneName = chooseInitialScene(info.scenes, requestedScene);
+          setCurrentSceneName(sceneName);
 
           // Load the scene file
           const scenePath = await getScenePath(storedPath, sceneName);
@@ -2276,6 +2278,7 @@ export function StoryEditor() {
         }
       } else {
         // No project path, just load demo script.
+        setCurrentSceneName(requestedScene || 'start.txt');
         const parsed = await parseScene(DEMO_SCRIPT);
         setNodes(parsed);
       }
@@ -2650,9 +2653,7 @@ export function StoryEditor() {
       localStorage.setItem(`project-path-${projectId}`, selected);
 
       // Load start.txt or first available scene
-      const sceneName = info.scenes.includes('start.txt')
-        ? 'start.txt'
-        : info.scenes[0] || 'start.txt';
+      const sceneName = chooseInitialScene(info.scenes, null);
       setCurrentSceneName(sceneName);
 
       const scenePath = await getScenePath(selected, sceneName);
@@ -2682,7 +2683,7 @@ export function StoryEditor() {
     } catch (e) {
       console.error('Open project failed:', e);
     }
-  }, [projectId, loadSceneHeaders, loadSceneLinkMap]);
+  }, [projectId, loadSceneHeaders, loadSceneLinkMap, chooseInitialScene]);
 
   // ---------------------------------------------------------------------------
   // Switch scene within project

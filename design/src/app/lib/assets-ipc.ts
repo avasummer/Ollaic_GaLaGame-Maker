@@ -15,10 +15,37 @@ export interface AssetUsage {
   command: string;
 }
 
+export interface SceneAssetCard {
+  id: string;
+  title: string;
+  sceneFile?: string | null;
+  imageAsset?: string | null;
+  targetStem: string;
+  prompt: string;
+  style: string;
+  negativePrompt: string;
+}
+
+export interface VoiceAssetCard {
+  id: string;
+  character: string;
+  text: string;
+  emotion: string;
+  voiceAsset?: string | null;
+  targetStem: string;
+  prompt: string;
+  usages?: AssetUsage[];
+}
+
 export interface AssetMetadata {
   aliases: Record<string, string>;
+  descriptions: Record<string, string>;
   tags: Record<string, string[]>;
   references: Record<string, string[]>;
+  sceneCards: Record<string, SceneAssetCard>;
+  voiceCards: Record<string, VoiceAssetCard>;
+  deletedSceneCards: string[];
+  deletedVoiceCards: string[];
 }
 
 /** List media files in a project's asset subdirectory. */
@@ -38,6 +65,16 @@ export async function importAsset(
   category: string,
 ): Promise<AssetInfo> {
   return invoke<AssetInfo>('import_asset', { sourcePath, projectPath, category });
+}
+
+/** Save generated media bytes to a project's asset directory with a fixed filename. */
+export async function saveGeneratedAsset(
+  projectPath: string,
+  category: string,
+  filename: string,
+  base64Data: string,
+): Promise<AssetInfo> {
+  return invoke<AssetInfo>('save_generated_asset', { projectPath, category, filename, base64Data });
 }
 
 /** Delete an asset file from the project. */

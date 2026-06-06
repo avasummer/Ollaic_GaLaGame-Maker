@@ -1,4 +1,5 @@
 use crate::webgal::references;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -28,9 +29,59 @@ pub struct AssetMetadata {
     #[serde(default)]
     pub aliases: HashMap<String, String>,
     #[serde(default)]
+    pub descriptions: HashMap<String, String>,
+    #[serde(default)]
     pub tags: HashMap<String, Vec<String>>,
     #[serde(default)]
     pub references: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub scene_cards: HashMap<String, SceneAssetCard>,
+    #[serde(default)]
+    pub voice_cards: HashMap<String, VoiceAssetCard>,
+    #[serde(default)]
+    pub deleted_scene_cards: Vec<String>,
+    #[serde(default)]
+    pub deleted_voice_cards: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAssetCard {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub scene_file: Option<String>,
+    #[serde(default)]
+    pub image_asset: Option<String>,
+    #[serde(default)]
+    pub target_stem: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub style: String,
+    #[serde(default)]
+    pub negative_prompt: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceAssetCard {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub character: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub emotion: String,
+    #[serde(default)]
+    pub voice_asset: Option<String>,
+    #[serde(default)]
+    pub target_stem: String,
+    #[serde(default)]
+    pub prompt: String,
 }
 
 fn category_to_dir(category: &str) -> Option<String> {
@@ -236,6 +287,7 @@ fn rename_asset_metadata(
     let new_key = asset_metadata_key(category, new_name);
     let legacy_key = owns_asset_metadata(category).then_some(old_name);
     rename_metadata_entry(&mut metadata.aliases, &old_key, legacy_key, new_key.clone());
+    rename_metadata_entry(&mut metadata.descriptions, &old_key, legacy_key, new_key.clone());
     rename_metadata_entry(&mut metadata.tags, &old_key, legacy_key, new_key.clone());
     rename_metadata_entry(&mut metadata.references, &old_key, legacy_key, new_key);
     write_asset_metadata(project_path, &metadata)
@@ -245,10 +297,12 @@ fn delete_asset_metadata(project_path: &str, category: &str, filename: &str) -> 
     let mut metadata = read_asset_metadata(project_path)?;
     let key = asset_metadata_key(category, filename);
     metadata.aliases.remove(&key);
+    metadata.descriptions.remove(&key);
     metadata.tags.remove(&key);
     metadata.references.remove(&key);
     if owns_asset_metadata(category) {
         metadata.aliases.remove(filename);
+        metadata.descriptions.remove(filename);
         metadata.tags.remove(filename);
         metadata.references.remove(filename);
     }
@@ -385,6 +439,45 @@ pub fn import_asset(
             .to_string(),
         path: target.to_string_lossy().to_string(),
         category: subdir.to_string(),
+        size: metadata.len(),
+        extension: ext,
+    })
+}
+
+#[tauri::command]
+pub fn save_generated_asset(
+    project_path: String,
+    category: String,
+    filename: String,
+    base64_data: String,
+) -> Result<AssetInfo, String> {
+    validate_asset_filename(&filename)?;
+    let subdir = category_to_dir(&category).ok_or_else(|| format!("未知素材类型: {category}"))?;
+    let target_dir = PathBuf::from(&project_path).join("game").join(&subdir);
+    fs::create_dir_all(&target_dir).map_err(|e| format!("创建目录失败: {e}"))?;
+
+    let encoded = base64_data
+        .split_once(',')
+        .map(|(_, payload)| payload)
+        .unwrap_or(base64_data.as_str());
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .map_err(|e| format!("解析生成素材失败: {e}"))?;
+
+    let target = target_dir.join(&filename);
+    fs::write(&target, bytes).map_err(|e| format!("写入生成素材失败 {}: {e}", target.display()))?;
+
+    let metadata = target.metadata().map_err(|e| e.to_string())?;
+    let ext = target
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    Ok(AssetInfo {
+        name: filename,
+        path: target.to_string_lossy().to_string(),
+        category: subdir,
         size: metadata.len(),
         extension: ext,
     })

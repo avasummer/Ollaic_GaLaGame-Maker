@@ -190,6 +190,7 @@ export function ProjectHome() {
       const info: ProjectInfo = await openProject(dir);
       const existing = projects.find((p) => p.path === dir);
       if (existing) {
+        localStorage.setItem(`project-path-${existing.id}`, existing.path);
         navigate(`/editor/${existing.id}`);
         return;
       }

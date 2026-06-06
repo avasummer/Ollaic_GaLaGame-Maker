@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   ArrowLeft,
   Upload,
@@ -16,7 +16,6 @@ import {
   Pause,
   Trash2,
   Edit3,
-  Download,
   Plus,
   Sparkles,
   Tag,
@@ -42,6 +41,8 @@ import {
   renameAsset,
   type AssetInfo,
   type AssetUsage,
+  type SceneAssetCard,
+  type VoiceAssetCard,
 } from '../lib/assets-ipc';
 import {
   assetMetadataEntry,
@@ -52,16 +53,29 @@ import {
   referenceFilePath,
   saveAssetMetadata,
   setAssetAlias,
+  setAssetDescription,
   setAssetReferences,
-  setAssetTags,
   type AssetMetadata,
 } from '../lib/asset-metadata';
+import {
+  getAiImageConfig,
+  getAiTtsConfig,
+  type AiProviderConfig,
+} from '../lib/ai-ipc';
+import { getScenePath, loadScene, openProject, saveScene } from '../lib/webgal-ipc';
+import type { WebGalNode } from '../lib/webgal-types';
 import { listCharacters } from '../lib/character-ipc';
 import { CharacterPanel } from './CharacterPanel';
 import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
 
 type TabId = 'scene' | 'cg' | 'music' | 'character';
 type MusicCategory = 'bgm' | 'sfx' | 'vocal';
+type SceneLibraryItem =
+  | { kind: 'sceneCard'; card: SceneAssetCard; asset?: AssetInfo }
+  | { kind: 'asset'; asset: AssetInfo };
+type VoiceLibraryItem =
+  | { kind: 'voiceCard'; card: VoiceAssetCard; asset?: AssetInfo }
+  | { kind: 'asset'; asset: AssetInfo };
 
 const musicTabs: { id: MusicCategory; label: string }[] = [
   { id: 'bgm', label: 'BGM 背景音乐' },
@@ -78,6 +92,28 @@ const musicCategoryLabels: Record<MusicCategory, string> = {
 const sceneTagGroups = [
   { title: '时段', tags: ['白天', '黄昏', '夜晚', '雨天'] },
   { title: '场景类型', tags: ['室内', '室外', '幻想', '战斗'] },
+];
+
+const voiceEmotionOptions = [
+  '默认',
+  '平静',
+  '温柔',
+  '开心',
+  '害羞',
+  '惊讶',
+  '疑惑',
+  '紧张',
+  '害怕',
+  '生气',
+  '悲伤',
+  '哭腔',
+  '低声',
+  '认真',
+  '冷淡',
+  '虚弱',
+  '激动',
+  '撒娇',
+  '嘲讽',
 ];
 
 function tabToCategories(tab: TabId): string[] {
@@ -199,6 +235,12 @@ export function AssetManager() {
   const [metadata, setMetadata] = useState<AssetMetadata>(() => emptyAssetMetadata());
   const metadataRef = useRef<AssetMetadata>(emptyAssetMetadata());
   const [referenceUploading, setReferenceUploading] = useState(false);
+  const [aiGenerateOpen, setAiGenerateOpen] = useState(false);
+  const [editingSceneCard, setEditingSceneCard] = useState<SceneAssetCard | null>(null);
+  const [selectedSceneCard, setSelectedSceneCard] = useState<SceneAssetCard | null>(null);
+  const [voiceCards, setVoiceCards] = useState<VoiceAssetCard[]>([]);
+  const [selectedVoiceCard, setSelectedVoiceCard] = useState<VoiceAssetCard | null>(null);
+  const [aiAssetPrompt, setAiAssetPrompt] = useState('');
 
   // Real data state
   const [projectPath, setProjectPath] = useState<string>('');
@@ -316,10 +358,80 @@ export function AssetManager() {
     return () => { cancelled = true; };
   }, [applyMetadata, projectId, projectPath]);
 
+  useEffect(() => {
+    if (!projectPath || activeTab !== 'music' || musicCategory !== 'vocal') {
+      setVoiceCards([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const info = await openProject(projectPath);
+        const cardMap = new Map<string, VoiceAssetCard>();
+        for (const sceneName of info.scenes) {
+          const scenePath = await getScenePath(projectPath, sceneName);
+          const nodes = await loadScene(scenePath);
+          let sceneChanged = false;
+          nodes.forEach((node: WebGalNode, index: number) => {
+            if (node.type !== 'dialogue') return;
+            const text = node.content.trim();
+            if (!text) return;
+            const character = (node.character ?? '').trim();
+            const storedCards = metadataRef.current.voiceCards ?? {};
+            const legacyId = hashText(`${character}\n${text}`);
+            const legacyStored = storedCards[legacyId];
+            const emotion = legacyStored?.emotion || '默认';
+            const id = voiceCardId(character, text, emotion);
+            if ((metadataRef.current.deletedVoiceCards ?? []).includes(id)) return;
+            const stored = storedCards[id] ?? legacyStored;
+            const targetStem = stored?.targetStem || voiceTargetStem(character, text);
+            const targetVoice = stored?.voiceAsset ?? node.voice ?? `${targetStem}.wav`;
+            if (!node.voice) {
+              node.voice = targetVoice;
+              sceneChanged = true;
+            }
+            const existing = cardMap.get(id);
+            const usage: AssetUsage = {
+              sceneFile: sceneName,
+              lineNumber: index + 1,
+              lineContent: `${character ? `${character}:` : ':'}${text};`,
+              command: 'voice',
+            };
+            if (existing) {
+              existing.usages = [...(existing.usages ?? []), usage];
+              if (!existing.voiceAsset) existing.voiceAsset = targetVoice;
+              return;
+            }
+            cardMap.set(id, {
+              id,
+              character,
+              text,
+              emotion: stored?.emotion || emotion,
+              voiceAsset: targetVoice,
+              targetStem,
+              prompt: stored?.prompt || '',
+              usages: [usage],
+            });
+          });
+          if (sceneChanged) {
+            await saveScene(scenePath, nodes);
+          }
+        }
+        if (!cancelled) setVoiceCards(Array.from(cardMap.values()));
+      } catch (e) {
+        if (!cancelled) {
+          setVoiceCards([]);
+          setError(String(e));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab, musicCategory, projectPath, metadata]);
+
   const aliasForAsset = (asset: Pick<AssetInfo, 'category' | 'name'>): string =>
     assetMetadataEntry(metadata.aliases, asset.category, asset.name) ?? '';
-  const tagsForAsset = (asset: Pick<AssetInfo, 'category' | 'name'>): string[] =>
-    assetMetadataEntry(metadata.tags, asset.category, asset.name) ?? [];
+  const descriptionForAsset = (asset: Pick<AssetInfo, 'category' | 'name'>): string =>
+    assetMetadataEntry(metadata.descriptions, asset.category, asset.name) ?? '';
   const referencesForAsset = (asset: Pick<AssetInfo, 'category' | 'name'>): string[] =>
     assetMetadataEntry(metadata.references, asset.category, asset.name) ?? [];
 
@@ -327,6 +439,54 @@ export function AssetManager() {
     const q = searchQuery.toLowerCase();
     return a.name.toLowerCase().includes(q) || aliasForAsset(a).toLowerCase().includes(q);
   });
+
+  const sceneLibraryItems: SceneLibraryItem[] = (() => {
+    const cards = Object.values(metadata.sceneCards ?? {});
+    const assetByName = new Map(assets.map((asset) => [asset.name, asset]));
+    const usedAssets = new Set<string>();
+    const cardItems = cards.map((card) => {
+      const asset = card.imageAsset ? assetByName.get(card.imageAsset) : undefined;
+      if (asset) usedAssets.add(asset.name);
+      return { kind: 'sceneCard' as const, card, asset };
+    });
+    const looseAssets = assets
+      .filter((asset) => !usedAssets.has(asset.name))
+      .map((asset) => ({ kind: 'asset' as const, asset }));
+    return [...cardItems, ...looseAssets].filter((item) => {
+      const q = searchQuery.toLowerCase();
+      if (!q) return true;
+      if (item.kind === 'sceneCard') {
+        return item.card.title.toLowerCase().includes(q)
+          || item.card.prompt.toLowerCase().includes(q)
+          || (item.card.sceneFile ?? '').toLowerCase().includes(q)
+          || (item.card.imageAsset ?? '').toLowerCase().includes(q);
+      }
+      return item.asset.name.toLowerCase().includes(q) || aliasForAsset(item.asset).toLowerCase().includes(q);
+    });
+  })();
+
+  const voiceLibraryItems: VoiceLibraryItem[] = (() => {
+    const assetByName = new Map(assets.map((asset) => [asset.name, asset]));
+    const usedAssets = new Set<string>();
+    const cardItems = voiceCards.map((card) => {
+      const asset = card.voiceAsset ? assetByName.get(card.voiceAsset) : undefined;
+      if (asset) usedAssets.add(asset.name);
+      return { kind: 'voiceCard' as const, card, asset };
+    });
+    const looseAssets = assets
+      .filter((asset) => !usedAssets.has(asset.name))
+      .map((asset) => ({ kind: 'asset' as const, asset }));
+    const q = searchQuery.toLowerCase();
+    return [...cardItems, ...looseAssets].filter((item) => {
+      if (!q) return true;
+      if (item.kind === 'voiceCard') {
+        return item.card.character.toLowerCase().includes(q)
+          || item.card.text.toLowerCase().includes(q)
+          || (item.card.voiceAsset ?? '').toLowerCase().includes(q);
+      }
+      return item.asset.name.toLowerCase().includes(q) || aliasForAsset(item.asset).toLowerCase().includes(q);
+    });
+  })();
 
   // Tab counts from all assets
   const tabCounts = {
@@ -376,21 +536,22 @@ export function AssetManager() {
     }
   }, [projectPath, activeTab, importConfig, musicCategory, loadAllAssets]);
 
-  const handleDelete = useCallback(async () => {
-    if (!selectedAsset || !projectPath) return;
+  const handleDelete = useCallback(async (asset?: AssetInfo) => {
+    const target = asset ?? selectedAsset;
+    if (!target || !projectPath) return;
 
     try {
-      const usages = await findAssetUsages(projectPath, selectedAsset.name, selectedAsset.category);
+      const usages = await findAssetUsages(projectPath, target.name, target.category);
       const usageWarning = usages.length > 0
         ? `\n该素材仍被 ${usages.length} 处剧本引用，删除后这些引用将失效。`
         : '';
-      if (!confirm(`确定删除 "${selectedAsset.name}"？（不可恢复）${usageWarning}`)) return;
+      if (!confirm(`确定删除 "${target.name}"？（不可恢复）${usageWarning}`)) return;
       await flushAssetMetadataSaves(projectPath);
-      await deleteAsset(projectPath, selectedAsset.category, selectedAsset.name);
-      setAssets(prev => prev.filter(a => a.path !== selectedAsset.path));
-      setAllAssets(prev => prev.filter(a => a.path !== selectedAsset.path));
+      await deleteAsset(projectPath, target.category, target.name);
+      setAssets(prev => prev.filter(a => a.path !== target.path));
+      setAllAssets(prev => prev.filter(a => a.path !== target.path));
       applyMetadata(await loadAssetMetadata(projectPath));
-      setSelectedAsset(null);
+      if (selectedAsset?.path === target.path) setSelectedAsset(null);
     } catch (e) {
       setError(String(e));
     }
@@ -415,33 +576,6 @@ export function AssetManager() {
       setError(String(e));
     }
   }, [applyMetadata, selectedAsset, projectPath]);
-
-  const handleDownload = useCallback(async (asset?: AssetInfo) => {
-    const a = asset || selectedAsset;
-    if (!a) return;
-    const dest = await saveDialog({
-      title: '导出素材到',
-      defaultPath: a.name,
-    });
-    if (!dest) return;
-
-    try {
-      // For MVP: copy file contents via read/write
-      const fileData = await fetch(convertFileSrc(a.path));
-      const blob = await fileData.blob();
-      // Create an object URL and trigger download via a temporary anchor
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = a.name;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      setError(`导出失败: ${e}. 文件路径: ${a.path}`);
-    }
-  }, [selectedAsset]);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -479,13 +613,32 @@ export function AssetManager() {
     void saveAssetMetadata(projectPath, next).catch((e) => setError(String(e)));
   }, [applyMetadata, projectPath]);
 
-  const toggleTag = useCallback((asset: AssetInfo, tag: string) => {
-    const current = assetMetadataEntry(metadata.tags, asset.category, asset.name) ?? [];
-    const nextTags = current.includes(tag)
-      ? current.filter((item) => item !== tag)
-      : [...current, tag];
-    persistMetadata(setAssetTags(metadata, asset.category, asset.name, nextTags));
-  }, [metadata, persistMetadata]);
+  useEffect(() => {
+    if (!projectPath || activeTab !== 'scene') return;
+    const sceneFile = searchParams.get('scene');
+    if (!sceneFile) return;
+    const id = sceneCardId(sceneFile);
+    if (metadataRef.current.sceneCards?.[id]) return;
+    if ((metadataRef.current.deletedSceneCards ?? []).includes(id)) return;
+    const currentMetadata = metadataRef.current;
+    const nextCard: SceneAssetCard = {
+      id,
+      title: sceneTitleFromFile(sceneFile),
+      sceneFile,
+      imageAsset: null,
+      targetStem: defaultSceneTargetStem(Object.keys(metadataRef.current.sceneCards ?? {}).length + 1),
+      prompt: '',
+      style: '',
+      negativePrompt: '',
+    };
+    persistMetadata({
+      ...currentMetadata,
+      sceneCards: {
+        ...(currentMetadata.sceneCards ?? {}),
+        [id]: nextCard,
+      },
+    });
+  }, [activeTab, persistMetadata, projectPath, searchParams]);
 
   const handleReferenceUpload = useCallback(async () => {
     if (!selectedAsset || !projectPath) return;
@@ -601,6 +754,129 @@ export function AssetManager() {
   const handleAliasChange = (asset: AssetInfo, alias: string) => {
     persistMetadata(setAssetAlias(metadata, asset.category, asset.name, alias));
   };
+
+  const handleDescriptionChange = (asset: AssetInfo, description: string) => {
+    persistMetadata(setAssetDescription(metadata, asset.category, asset.name, description));
+  };
+
+  const handleGenerateFromAsset = (asset: AssetInfo) => {
+    if (asset.category === 'background') {
+      const stem = asset.name.replace(/\.[^.]+$/, '');
+      setEditingSceneCard({
+        id: sceneCardId(stem),
+        title: aliasForAsset(asset) || stem,
+        sceneFile: null,
+        imageAsset: asset.name,
+        targetStem: stem,
+        prompt: descriptionForAsset(asset),
+        style: '',
+        negativePrompt: '',
+      });
+      setAiGenerateOpen(true);
+      return;
+    }
+    setEditingSceneCard(null);
+    setAiAssetPrompt(descriptionForAsset(asset));
+    setAiGenerateOpen(true);
+  };
+
+  const handleEditSceneCard = useCallback((card: SceneAssetCard) => {
+    setSelectedSceneCard(card);
+    setEditingSceneCard(card);
+    setSelectedAsset(null);
+    setSelectedVoiceCard(null);
+  }, []);
+
+  const handleSaveSceneCard = useCallback((card: SceneAssetCard) => {
+    const currentMetadata = metadataRef.current;
+    persistMetadata({
+      ...currentMetadata,
+      deletedSceneCards: (currentMetadata.deletedSceneCards ?? []).filter((id) => id !== card.id),
+      sceneCards: {
+        ...(currentMetadata.sceneCards ?? {}),
+        [card.id]: card,
+      },
+    });
+    setSelectedSceneCard(card);
+  }, [persistMetadata]);
+
+  const handleSaveVoiceCard = useCallback((card: VoiceAssetCard) => {
+    const currentMetadata = metadataRef.current;
+    const normalizedCard = {
+      ...card,
+      id: voiceCardId(card.character, card.text, card.emotion || '默认'),
+      emotion: card.emotion || '默认',
+    };
+    const nextVoiceCards = { ...(currentMetadata.voiceCards ?? {}) };
+    if (normalizedCard.id !== card.id) delete nextVoiceCards[card.id];
+    nextVoiceCards[normalizedCard.id] = {
+      id: normalizedCard.id,
+      character: normalizedCard.character,
+      text: normalizedCard.text,
+      emotion: normalizedCard.emotion,
+      voiceAsset: normalizedCard.voiceAsset ?? null,
+      targetStem: normalizedCard.targetStem,
+      prompt: normalizedCard.prompt,
+    };
+    persistMetadata({
+      ...currentMetadata,
+      voiceCards: nextVoiceCards,
+      deletedVoiceCards: (currentMetadata.deletedVoiceCards ?? []).filter((id) => id !== normalizedCard.id && id !== card.id),
+    });
+    setSelectedVoiceCard(normalizedCard);
+    setVoiceCards((current) => current.map((item) => item.id === card.id ? normalizedCard : item));
+  }, [persistMetadata]);
+
+  const handleDeleteSceneCard = useCallback((card: SceneAssetCard) => {
+    if (!confirm(`确定删除 "${card.title || card.targetStem || card.id}"？`)) return;
+    const currentMetadata = metadataRef.current;
+    const nextSceneCards = { ...(currentMetadata.sceneCards ?? {}) };
+    delete nextSceneCards[card.id];
+    const deletedSceneCards = Array.from(new Set([...(currentMetadata.deletedSceneCards ?? []), card.id]));
+    persistMetadata({
+      ...currentMetadata,
+      sceneCards: nextSceneCards,
+      deletedSceneCards,
+    });
+    if (selectedSceneCard?.id === card.id) {
+      setSelectedSceneCard(null);
+      setEditingSceneCard(null);
+    }
+  }, [persistMetadata, selectedSceneCard]);
+
+  const handleDeleteVoiceCard = useCallback((card: VoiceAssetCard) => {
+    if (!confirm(`确定删除 "${card.character || '旁白'}：${card.text}"？`)) return;
+    const currentMetadata = metadataRef.current;
+    const nextVoiceCards = { ...(currentMetadata.voiceCards ?? {}) };
+    delete nextVoiceCards[card.id];
+    const deletedVoiceCards = Array.from(new Set([...(currentMetadata.deletedVoiceCards ?? []), card.id]));
+    persistMetadata({
+      ...currentMetadata,
+      voiceCards: nextVoiceCards,
+      deletedVoiceCards,
+    });
+    setVoiceCards((current) => current.filter((item) => item.id !== card.id));
+    if (selectedVoiceCard?.id === card.id) setSelectedVoiceCard(null);
+  }, [persistMetadata, selectedVoiceCard]);
+
+  const handleNewSceneCard = useCallback(() => {
+    const id = `scene-${Date.now()}`;
+    const index = Object.keys(metadataRef.current.sceneCards ?? {}).length + 1;
+    const card: SceneAssetCard = {
+      id,
+      title: '新场景',
+      sceneFile: null,
+      imageAsset: null,
+      targetStem: defaultSceneTargetStem(index),
+      prompt: '',
+      style: '',
+      negativePrompt: '',
+    };
+    handleSaveSceneCard(card);
+    setSelectedSceneCard(card);
+    setEditingSceneCard(card);
+    setSelectedAsset(null);
+  }, [handleSaveSceneCard]);
 
   return (
     <div className="h-full story-shell">
@@ -723,7 +999,12 @@ export function AssetManager() {
                       <button
                         key={tab.id}
                         type="button"
-                        onClick={() => { setMusicCategory(tab.id); setSelectedAsset(null); }}
+                      onClick={() => {
+                        setMusicCategory(tab.id);
+                        setSelectedAsset(null);
+                        setSelectedSceneCard(null);
+                        setSelectedVoiceCard(null);
+                      }}
                         className={`px-3 py-1.5 rounded text-xs transition-colors ${
                           musicCategory === tab.id ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary'
                         }`}
@@ -784,6 +1065,243 @@ export function AssetManager() {
                 <div className="h-full flex items-center justify-center">
                   <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
                 </div>
+              ) : activeTab === 'scene' ? (
+                sceneLibraryItems.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                    <FolderOpen className="w-16 h-16 mb-4 opacity-50" />
+                    <p className="text-lg mb-2">暂无场景</p>
+                    <p className="text-sm">点击右上角“新建场景”开始设定背景图</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {sceneLibraryItems.map((item) => {
+                      const card = item.kind === 'sceneCard' ? item.card : null;
+                      const asset = item.kind === 'sceneCard' ? item.asset : item.asset;
+                      const thumbnail = asset ? getThumbnail(asset) : null;
+                      const title = card?.title || aliasForAsset(asset) || asset.name;
+                      const subtitle = card
+                        ? [card.sceneFile, card.imageAsset].filter(Boolean).join(' · ') || '尚未生成图片'
+                        : asset.name;
+                      const isSelected = card && !asset
+                        ? selectedSceneCard?.id === card.id
+                        : asset
+                          ? selectedAsset?.path === asset.path
+                          : false;
+                      return (
+                        <div
+                          key={card ? `scene-${card.id}` : `asset-${asset.path}`}
+                          onClick={() => {
+                            if (asset) {
+                              setSelectedAsset(asset);
+                              setSelectedSceneCard(null);
+                              setSelectedVoiceCard(null);
+                              setEditingSceneCard(null);
+                            } else if (card) {
+                              handleEditSceneCard(card);
+                            }
+                          }}
+                          className={`group overflow-hidden rounded-lg bg-card text-left transition-all hover:scale-[1.02] ${
+                            isSelected
+                              ? 'ring-2 ring-primary shadow-[0_0_20px_rgba(212,165,116,0.3)]'
+                              : 'hover:ring-1 hover:ring-border'
+                          }`}
+                        >
+                          <div className="aspect-video bg-secondary/30 relative overflow-hidden">
+                            {thumbnail ? (
+                              <img src={thumbnail} alt={title} className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+                                <Image className="h-10 w-10 opacity-40" />
+                                <span className="text-xs">未生成背景图</span>
+                              </div>
+                            )}
+                            {(asset || card) && (
+                              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (asset) {
+                                      void handleDelete(asset);
+                                    } else if (card) {
+                                      handleDeleteSceneCard(card);
+                                    }
+                                  }}
+                                  className="absolute right-2 top-2 p-2 rounded-full bg-destructive/90 text-destructive-foreground hover:bg-destructive transition-colors"
+                                  aria-label={asset ? '删除素材' : '删除场景'}
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          <div className="border-t border-border p-3">
+                            <div className="truncate text-sm font-medium">{title}</div>
+                            <div className="mt-1 truncate text-xs text-muted-foreground">{subtitle}</div>
+                            {card?.prompt && (
+                              <div className="mt-2 line-clamp-2 text-xs text-muted-foreground">{card.prompt}</div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
+              ) : activeTab === 'music' && musicCategory === 'vocal' ? (
+                voiceLibraryItems.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                    <FolderOpen className="w-16 h-16 mb-4 opacity-50" />
+                    <p className="text-lg mb-2">暂无语音</p>
+                    <p className="text-sm">故事编织室中出现对话后会自动生成待配音条目</p>
+                  </div>
+                ) : (
+                  <div className={viewMode === 'grid' ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4' : 'space-y-2'}>
+                    {voiceLibraryItems.map((item) => {
+                      const card = item.kind === 'voiceCard' ? item.card : null;
+                      const asset = item.kind === 'voiceCard' ? item.asset : item.asset;
+                      const isSelected = card ? selectedVoiceCard?.id === card.id : selectedAsset?.path === asset.path;
+                      const title = card
+                        ? `${card.character || '旁白'}：${card.text}`
+                        : aliasForAsset(asset) || asset.name;
+                      const subtitle = card
+                        ? `${card.emotion || '默认'} · ${card.voiceAsset || '尚未生成语音'}`
+                        : `${asset.extension.toUpperCase()} · ${getAudioDurationLabel(asset.path, audioDurations, audioMetadataErrors)}`;
+                      if (viewMode === 'list') {
+                        return (
+                          <div
+                            key={card ? `voice-${card.id}` : `asset-${asset.path}`}
+                            onClick={() => {
+                              if (card) {
+                                setSelectedVoiceCard(card);
+                                setSelectedAsset(null);
+                                setSelectedSceneCard(null);
+                                setEditingSceneCard(null);
+                              } else {
+                                setSelectedAsset(asset);
+                                setSelectedVoiceCard(null);
+                                setSelectedSceneCard(null);
+                                setEditingSceneCard(null);
+                              }
+                            }}
+                            className={`flex items-center gap-4 p-4 rounded-lg cursor-pointer transition-all ${
+                              isSelected ? 'bg-primary/10 ring-1 ring-primary' : 'bg-card/50 hover:bg-card'
+                            }`}
+                          >
+                            <div className="w-16 h-16 rounded overflow-hidden bg-secondary/30 flex-shrink-0 flex items-center justify-center">
+                              <Music className="w-6 h-6 text-muted-foreground" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h3 className="font-medium truncate">{title}</h3>
+                              <p className="text-sm text-muted-foreground truncate">{subtitle}</p>
+                              {asset && (audioProgress[asset.path] ?? 0) > 0 && (
+                                <div className="mt-2 h-1 rounded bg-secondary overflow-hidden">
+                                  <div className="h-full bg-primary transition-all" style={{ width: `${Math.min((audioProgress[asset.path] ?? 0) * 100, 100)}%` }} />
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {card && (
+                                <span className="rounded-md bg-secondary px-2 py-1 text-xs text-muted-foreground">{card.emotion || '默认'}</span>
+                              )}
+                              {card && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteVoiceCard(card);
+                                  }}
+                                  className="p-2 rounded-full hover:bg-destructive/10 transition-colors"
+                                  aria-label="删除语音"
+                                >
+                                  <Trash2 className="w-4 h-4 text-muted-foreground hover:text-destructive" />
+                                </button>
+                              )}
+                              {asset && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handlePlayToggle(asset.path); }}
+                                  className="p-2 rounded-full hover:bg-secondary transition-colors"
+                                  aria-label="切换音频播放"
+                                >
+                                  {playingAudio === asset.path ? (
+                                    <Pause className="w-4 h-4" />
+                                  ) : (
+                                    <Play className="w-4 h-4" />
+                                  )}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div
+                          key={card ? `voice-${card.id}` : `asset-${asset.path}`}
+                          onClick={() => {
+                            if (card) {
+                              setSelectedVoiceCard(card);
+                              setSelectedAsset(null);
+                              setSelectedSceneCard(null);
+                              setEditingSceneCard(null);
+                            } else {
+                              setSelectedAsset(asset);
+                              setSelectedVoiceCard(null);
+                              setSelectedSceneCard(null);
+                              setEditingSceneCard(null);
+                            }
+                          }}
+                          className={`group relative rounded-lg overflow-hidden cursor-pointer transition-all hover:scale-[1.02] ${
+                            isSelected
+                              ? 'ring-2 ring-primary shadow-[0_0_20px_rgba(212,165,116,0.3)]'
+                              : 'hover:ring-1 hover:ring-border bg-card'
+                          }`}
+                        >
+                          <div className="aspect-square bg-secondary/30 relative overflow-hidden flex flex-col items-center justify-center gap-4">
+                            <Music className="w-10 h-10 text-muted-foreground" />
+                            <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,hsl(var(--primary)/0.25)_0_3px,transparent_3px_7px)]" />
+                            {(asset || card) && (
+                              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="absolute right-2 top-2">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (asset) {
+                                        void handleDelete(asset);
+                                      } else if (card) {
+                                        handleDeleteVoiceCard(card);
+                                      }
+                                    }}
+                                    className="p-2 rounded-full bg-destructive/90 text-destructive-foreground hover:bg-destructive transition-colors"
+                                    aria-label={asset ? '删除素材' : '删除语音'}
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                                {asset && (
+                                  <div className="absolute bottom-0 left-0 right-0 p-3 flex gap-2">
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); handlePlayToggle(asset.path); }}
+                                      className="p-2 rounded-full bg-primary/90 hover:bg-primary transition-colors"
+                                      aria-label="切换音频播放"
+                                    >
+                                      {playingAudio === asset.path ? (
+                                        <Pause className="w-3 h-3 text-primary-foreground" />
+                                      ) : (
+                                        <Play className="w-3 h-3 text-primary-foreground" />
+                                      )}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div className="p-3 bg-card border-t border-border">
+                            <h3 className="text-sm font-medium truncate mb-1">{title}</h3>
+                            <div className="text-xs text-muted-foreground truncate">{subtitle}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
               ) : filteredAssets.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
                   <FolderOpen className="w-16 h-16 mb-4 opacity-50" />
@@ -838,6 +1356,18 @@ export function AssetManager() {
                             </div>
                           )}
                           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="absolute right-2 top-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleDelete(asset);
+                                }}
+                                className="p-2 rounded-full bg-destructive/90 text-destructive-foreground hover:bg-destructive transition-colors"
+                                aria-label="删除素材"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
                             <div className="absolute bottom-0 left-0 right-0 p-3 flex gap-2">
                               {isAudioExt(asset.extension) && (
                                 <button
@@ -852,13 +1382,6 @@ export function AssetManager() {
                                   )}
                                 </button>
                               )}
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleDownload(asset); }}
-                                className="p-2 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-sm transition-colors"
-                                aria-label="导出素材"
-                              >
-                                <Download className="w-3 h-3" />
-                              </button>
                             </div>
                           </div>
                         </div>
@@ -1214,6 +1737,21 @@ export function AssetManager() {
 
                   <div>
                     <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+                      描述
+                    </label>
+                    <textarea
+                      value={descriptionForAsset(selectedAsset)}
+                      onChange={(e) => handleDescriptionChange(selectedAsset, e.target.value)}
+                      rows={6}
+                      placeholder={activeTab === 'scene'
+                        ? '描述要生成或重绘的背景：地点、时间、天气、氛围、镜头角度、画面主体。'
+                        : '描述要生成的音频：情绪、节奏、乐器、用途或台词内容。'}
+                      className="w-full resize-y rounded-md border border-border bg-input-background px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
                       剧本引用
                     </label>
                     <div className="space-y-2">
@@ -1237,27 +1775,19 @@ export function AssetManager() {
                 <div className="space-y-2">
                   <button
                     onClick={handleRename}
-                    className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 rounded-md bg-secondary hover:bg-secondary/70 transition-all flex items-center justify-center gap-2"
                     aria-label="重命名素材"
                   >
                     <Edit3 className="w-4 h-4" />
                     重命名
                   </button>
                   <button
-                    onClick={() => handleDownload()}
-                    className="w-full px-4 py-2 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center justify-center gap-2"
-                    aria-label="复制素材文件路径"
+                    onClick={() => handleGenerateFromAsset(selectedAsset)}
+                    className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2"
+                    aria-label="AI 生成"
                   >
-                    <Copy className="w-4 h-4" />
-                    复制路径
-                  </button>
-                  <button
-                    onClick={handleDelete}
-                    className="w-full px-4 py-2 rounded-md bg-destructive/20 text-destructive hover:bg-destructive/30 transition-colors flex items-center justify-center gap-2"
-                    aria-label="删除素材"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    删除素材
+                    <Sparkles className="w-4 h-4" />
+                    AI 生成
                   </button>
                 </div>
               </div>
@@ -1272,6 +1802,15 @@ export function AssetManager() {
           )}
         </div>
       )}
+      <AssetAiGenerateDialog
+        open={aiGenerateOpen}
+        activeTab={activeTab}
+        musicCategory={musicCategory}
+        initialSceneCard={editingSceneCard}
+        initialVoiceCard={selectedVoiceCard}
+        initialAssetPrompt={aiAssetPrompt}
+        onClose={() => setAiGenerateOpen(false)}
+      />
       <audio
         ref={audioRef}
         onEnded={() => setPlayingAudio(null)}
@@ -1297,6 +1836,502 @@ export function AssetManager() {
         className="hidden"
         aria-label="音频播放器"
       />
+    </div>
+  );
+}
+
+function AssetAiGenerateDialog({
+  open,
+  activeTab,
+  musicCategory,
+  initialSceneCard,
+  initialVoiceCard,
+  initialAssetPrompt,
+  onClose,
+}: {
+  open: boolean;
+  activeTab: TabId;
+  musicCategory: MusicCategory;
+  initialSceneCard?: SceneAssetCard | null;
+  initialVoiceCard?: VoiceAssetCard | null;
+  initialAssetPrompt?: string;
+  onClose: () => void;
+}) {
+  const [config, setConfig] = useState<AiProviderConfig | null>(null);
+  const [loadingConfig, setLoadingConfig] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const isImageGeneration = activeTab === 'scene';
+  const title = isImageGeneration ? 'AI 生成背景素材' : `AI 生成${musicCategoryLabels[musicCategory]}`;
+  const configuredModels = config ? parseConfiguredModels(config.model) : [];
+  const effectiveModel = selectedModel || configuredModels[0] || config?.model.trim() || '';
+  const promptSource = isImageGeneration
+    ? initialSceneCard?.prompt.trim() ?? ''
+    : musicCategory === 'vocal'
+      ? [
+          initialVoiceCard?.text.trim(),
+          initialVoiceCard?.character ? `角色：${initialVoiceCard.character}` : '',
+          initialVoiceCard?.emotion ? `情绪：${initialVoiceCard.emotion}` : '',
+          initialVoiceCard?.prompt.trim(),
+        ].filter(Boolean).join('\n')
+      : (initialAssetPrompt ?? '').trim();
+  const targetCategory = isImageGeneration ? 'background' : musicCategory;
+  const targetFilename = isImageGeneration
+    ? `${initialSceneCard?.targetStem || initialSceneCard?.imageAsset?.replace(/\.[^.]+$/, '') || 'generated_background'}.webp`
+    : musicCategory === 'vocal'
+      ? initialVoiceCard?.voiceAsset || `${initialVoiceCard?.targetStem || initialVoiceCard?.id || 'generated_voice'}.wav`
+      : `generated_${musicCategory}.wav`;
+
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    setLoadingConfig(true);
+    (isImageGeneration ? getAiImageConfig() : getAiTtsConfig())
+      .then((nextConfig) => {
+        setConfig(nextConfig);
+        const models = parseConfiguredModels(nextConfig.model);
+        setSelectedModel(models[0] ?? nextConfig.model.trim());
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoadingConfig(false));
+  }, [initialSceneCard, initialVoiceCard, isImageGeneration, musicCategory, open]);
+
+  if (!open) return null;
+
+  const handleSubmit = () => {
+    if (!config) {
+      setError('未读取到 AI 配置。');
+      return;
+    }
+    if (!effectiveModel) {
+      setError(isImageGeneration ? '请先在图片 AI 设置中选择至少一个模型。' : '请先在音频 AI 设置中选择至少一个模型。');
+      return;
+    }
+    if (!promptSource.trim()) {
+      setError(isImageGeneration ? '请先在右侧详情里填写描述。' : '请先在右侧详情里填写台词或描述。');
+      return;
+    }
+    setError(`生成接口还未接入。当前已选择模型：${effectiveModel || config.model || '未填写模型'}。生成结果将保存到 game/${targetCategory}/${targetFilename}。`);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="w-[680px] max-h-[86vh] overflow-hidden rounded-lg border border-border bg-card shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border p-4">
+          <h2 className="text-lg font-display-family">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-2 py-1 text-sm hover:bg-secondary/60"
+          >
+            关闭
+          </button>
+        </div>
+
+        <div className="max-h-[calc(86vh-120px)] overflow-y-auto p-4 space-y-4">
+          <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+            {loadingConfig
+              ? '正在读取 AI 配置...'
+              : config
+                ? `使用配置：${config.provider} / ${effectiveModel || '未填写模型'}`
+                : '未读取到配置'}
+          </div>
+
+          <FieldBlock label="生成模型">
+            {configuredModels.length > 1 ? (
+              <select
+                value={effectiveModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="w-full rounded-md border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                {configuredModels.map((model) => (
+                  <option key={model} value={model}>{model}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={effectiveModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                placeholder={isImageGeneration ? '先在图片 AI 设置中选择模型' : '先在音频 AI 设置中选择模型'}
+                className="w-full rounded-md border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            )}
+          </FieldBlock>
+
+          {promptSource.trim() ? (
+            <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+              将使用右侧详情中的描述、台词和情绪作为生成提示词。
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+              右侧详情还没有可用于生成的描述。
+            </div>
+          )}
+
+          <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground font-mono-family break-all">
+            game/{targetCategory}/{targetFilename}
+          </div>
+
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-border p-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md bg-secondary px-4 py-2 text-sm hover:bg-secondary/70"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90"
+          >
+            生成素材
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function parseConfiguredModels(value: string): string[] {
+  return Array.from(new Set(
+    value
+      .split(/[\n,，]/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  ));
+}
+
+function VoiceCardDetails({
+  card,
+  projectPath,
+  onSave,
+  onGenerate,
+  onOpenUsage,
+}: {
+  card: VoiceAssetCard;
+  projectPath: string;
+  onSave: (card: VoiceAssetCard) => void;
+  onGenerate: (card: VoiceAssetCard) => void;
+  onOpenUsage: (usage: AssetUsage) => void;
+}) {
+  const [draft, setDraft] = useState<VoiceAssetCard>(card);
+
+  useEffect(() => {
+    setDraft(card);
+  }, [card]);
+
+  const targetStem = draft.targetStem || draft.voiceAsset?.replace(/\.[^.]+$/, '') || draft.id;
+  const targetFilename = draft.voiceAsset || `${targetStem}.wav`;
+  const targetPath = projectPath ? `${projectPath}\\game\\vocal\\${targetFilename}` : targetFilename;
+  const update = (patch: Partial<VoiceAssetCard>) => setDraft((current) => ({ ...current, ...patch }));
+
+  const handleRenameVoice = () => {
+    const currentStem = targetStem.replace(/\.(mp3|ogg|wav|flac|aac)$/i, '');
+    const nextStem = prompt('输入新名称:', currentStem);
+    if (!nextStem || nextStem === currentStem) return;
+    const normalizedStem = nextStem.replace(/\.(mp3|ogg|wav|flac|aac)$/i, '');
+    const next = { ...draft, targetStem: normalizedStem };
+    setDraft(next);
+    onSave(next);
+  };
+
+  return (
+    <div className="p-6">
+      <div className="mb-6">
+        <div className="aspect-square rounded-lg overflow-hidden bg-secondary/30 mb-4 flex flex-col items-center justify-center gap-4">
+          <Music className="w-16 h-16 text-muted-foreground" />
+          <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,hsl(var(--primary)/0.25)_0_3px,transparent_3px_7px)]" />
+        </div>
+        <h2 className="text-xl mb-2 font-display-family">
+          {targetFilename}
+        </h2>
+        <p className="text-xs text-muted-foreground truncate font-mono-family">
+          {targetPath}
+        </p>
+      </div>
+
+      <div className="space-y-4 mb-6">
+        <div>
+          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+            显示名称
+          </label>
+          <input
+            type="text"
+            value={`${draft.character || '旁白'}：${draft.text}`}
+            readOnly
+            className="w-full px-3 py-2 bg-input-background border border-border rounded-md text-sm"
+            aria-label="语音显示名称"
+          />
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            相同角色、台词和情绪会复用同一条语音。
+          </p>
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+            角色
+          </label>
+          <input
+            value={draft.character}
+            onChange={(e) => update({ character: e.target.value })}
+            className="w-full px-3 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
+            placeholder="例：Alice"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+            情绪
+          </label>
+          <select
+            value={draft.emotion || '默认'}
+            onChange={(e) => update({ emotion: e.target.value })}
+            className="w-full px-3 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
+          >
+            {voiceEmotionOptions.map((emotion) => (
+              <option key={emotion} value={emotion}>{emotion}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+            台词文本
+          </label>
+          <textarea
+            value={draft.text}
+            onChange={(e) => update({ text: e.target.value })}
+            rows={4}
+            className="w-full resize-y rounded-md border border-border bg-input-background px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+            描述
+          </label>
+          <textarea
+            value={draft.prompt}
+            onChange={(e) => update({ prompt: e.target.value })}
+            rows={5}
+            placeholder="描述要生成的角色语音：情绪、语气、语速、音色、停顿。"
+            className="w-full resize-y rounded-md border border-border bg-input-background px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+            剧本引用
+          </label>
+          <div className="space-y-2">
+            {(draft.usages ?? []).length === 0 ? (
+              <div className="text-xs text-muted-foreground rounded-md border border-dashed border-border p-3">未在剧本中找到引用。</div>
+            ) : (draft.usages ?? []).map((usage, index) => (
+              <button
+                key={`${usage.sceneFile}-${usage.lineNumber}-${index}`}
+                type="button"
+                onClick={() => onOpenUsage(usage)}
+                className="w-full rounded-md bg-secondary/20 p-2 text-left hover:bg-primary/10 transition-colors"
+              >
+                <div className="text-xs text-primary">{usage.sceneFile} 第 {usage.lineNumber} 行</div>
+                <div className="mt-1 truncate text-[10px] text-muted-foreground font-mono-family">{usage.lineContent}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={handleRenameVoice}
+          className="w-full px-4 py-2 rounded-md bg-secondary hover:bg-secondary/70 transition-all flex items-center justify-center gap-2"
+        >
+          <Edit3 className="w-4 h-4" />
+          重命名
+        </button>
+        <button
+          type="button"
+          onClick={() => onGenerate(draft)}
+          className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2"
+        >
+          <Sparkles className="w-4 h-4" />
+          AI 生成
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SceneCardDetails({
+  card,
+  projectPath,
+  backgroundAssets,
+  getThumbnail,
+  onSave,
+  onGenerate,
+}: {
+  card: SceneAssetCard;
+  projectPath: string;
+  backgroundAssets: AssetInfo[];
+  getThumbnail: (asset: AssetInfo) => string | null;
+  onSave: (card: SceneAssetCard) => void;
+  onGenerate: (card: SceneAssetCard) => void;
+}) {
+  const [draft, setDraft] = useState<SceneAssetCard>(card);
+
+  useEffect(() => {
+    setDraft({ ...card, targetStem: card.targetStem || card.imageAsset?.replace(/\.[^.]+$/, '') || card.id });
+  }, [card]);
+
+  const previewAsset = backgroundAssets.find((asset) => asset.name === draft.imageAsset) ?? null;
+  const previewUrl = previewAsset ? getThumbnail(previewAsset) : null;
+  const targetStem = draft.targetStem || draft.imageAsset?.replace(/\.[^.]+$/, '') || draft.id;
+  const targetFilename = `${targetStem}.webp`;
+  const targetPath = projectPath ? `${projectPath}\\game\\background\\${targetFilename}` : targetFilename;
+
+  const update = (patch: Partial<SceneAssetCard>) => setDraft((current) => ({ ...current, ...patch }));
+  const handleRenameScene = () => {
+    const currentStem = targetStem.replace(/\.(png|jpe?g|webp)$/i, '');
+    const nextStem = prompt('输入新名称:', currentStem);
+    if (!nextStem || nextStem === currentStem) return;
+    const normalizedStem = nextStem.replace(/\.(png|jpe?g|webp)$/i, '');
+    const next = { ...draft, targetStem: normalizedStem };
+    setDraft(next);
+    onSave(next);
+  };
+
+  return (
+    <div className="p-6">
+      <div className="mb-6">
+        <div className="aspect-video rounded-lg overflow-hidden bg-secondary/30 mb-4">
+          {previewUrl ? (
+            <img
+              src={previewUrl}
+              alt={draft.title}
+              className="h-full w-full object-cover"
+              onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }}
+            />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+              <Image className="h-14 w-14 opacity-40" />
+              <span className="text-xs">未生成背景图</span>
+            </div>
+          )}
+        </div>
+        <h2 className="text-xl mb-2 font-display-family">
+          {targetFilename}
+        </h2>
+        <p className="text-xs text-muted-foreground truncate font-mono-family">
+          {targetPath}
+        </p>
+      </div>
+
+      <div className="space-y-4 mb-6">
+        <div>
+          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+            显示名称
+          </label>
+          <input
+            type="text"
+            value={draft.title}
+            onChange={(e) => update({ title: e.target.value })}
+            className="w-full px-3 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50 text-sm"
+            placeholder="例：教室 · 白天"
+            aria-label="场景显示名称"
+          />
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            设置后，剧本编辑器的素材选择弹窗会优先显示这个名称。
+          </p>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs uppercase tracking-wide text-muted-foreground">
+              参考图
+            </label>
+          </div>
+          <select
+            value={draft.imageAsset ?? ''}
+            onChange={(e) => update({ imageAsset: e.target.value || null })}
+            className="w-full rounded-md border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+          >
+            <option value="">暂无参考资料。</option>
+            {backgroundAssets.map((asset) => (
+              <option key={asset.path} value={asset.name}>{asset.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+            描述
+          </label>
+          <textarea
+            value={draft.prompt}
+            onChange={(e) => update({ prompt: e.target.value })}
+            rows={6}
+            placeholder="描述要生成或重绘的背景：地点、时间、天气、氛围、镜头角度、画面主体。"
+            className="w-full resize-y rounded-md border border-border bg-input-background px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-primary/50"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+            剧本引用
+          </label>
+          <div className="space-y-2">
+            {draft.sceneFile ? (
+              <div className="rounded-md bg-secondary/20 p-2 text-left">
+                <div className="text-xs text-primary">{draft.sceneFile}</div>
+                <div className="mt-1 truncate text-[10px] text-muted-foreground font-mono-family">新场景生成后可在剧本中引用。</div>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground rounded-md border border-dashed border-border p-3">未在剧本中找到引用。</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={handleRenameScene}
+          className="w-full px-4 py-2 rounded-md bg-secondary hover:bg-secondary/70 transition-all flex items-center justify-center gap-2"
+        >
+          <Edit3 className="w-4 h-4" />
+          重命名
+        </button>
+        <button
+          type="button"
+          onClick={() => onGenerate(draft)}
+          className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2"
+        >
+          <Sparkles className="w-4 h-4" />
+          AI 生成
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FieldBlock({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-xs uppercase tracking-wide text-muted-foreground">
+        {label}
+      </label>
+      {children}
     </div>
   );
 }

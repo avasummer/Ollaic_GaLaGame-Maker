@@ -183,6 +183,10 @@ fn main() {
             // AI
             ai::commands::get_ai_config,
             ai::commands::set_ai_config,
+            ai::commands::get_ai_image_config,
+            ai::commands::set_ai_image_config,
+            ai::commands::get_ai_tts_config,
+            ai::commands::set_ai_tts_config,
             ai::commands::validate_ai_config,
             ai::commands::ai_chat_stream,
             ai::commands::ai_chat_turn,
@@ -193,6 +197,7 @@ fn main() {
             assets::commands::list_assets,
             assets::commands::list_all_assets,
             assets::commands::import_asset,
+            assets::commands::save_generated_asset,
             assets::commands::delete_asset,
             assets::commands::rename_asset,
             assets::commands::find_asset_usages,

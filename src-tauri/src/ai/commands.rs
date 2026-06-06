@@ -1,4 +1,4 @@
-use super::config::{self, AiConfig};
+use super::config::{self, AiConfig, AiProviderConfig};
 use futures::StreamExt;
 use genai::adapter::AdapterKind;
 use genai::chat::{
@@ -7,6 +7,7 @@ use genai::chat::{
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
@@ -120,6 +121,26 @@ pub fn get_ai_config() -> AiConfig {
 #[tauri::command]
 pub fn set_ai_config(config: AiConfig) -> Result<(), String> {
     config::save_config(&config)
+}
+
+#[tauri::command]
+pub fn get_ai_image_config() -> AiProviderConfig {
+    config::load_image_config()
+}
+
+#[tauri::command]
+pub fn set_ai_image_config(config: AiProviderConfig) -> Result<(), String> {
+    config::save_image_config(&config)
+}
+
+#[tauri::command]
+pub fn get_ai_tts_config() -> AiProviderConfig {
+    config::load_tts_config()
+}
+
+#[tauri::command]
+pub fn set_ai_tts_config(config: AiProviderConfig) -> Result<(), String> {
+    config::save_tts_config(&config)
 }
 
 #[tauri::command]
