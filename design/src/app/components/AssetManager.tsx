@@ -25,6 +25,13 @@ import {
   AlertTriangle,
   Copy,
   X,
+  Award,
+  CheckCircle,
+  Shuffle,
+  Eraser,
+  HardDrive,
+  Eye,
+  Minimize2,
 } from 'lucide-react';
 import {
   listAssets,
@@ -53,7 +60,7 @@ import { listCharacters } from '../lib/character-ipc';
 import { CharacterPanel } from './CharacterPanel';
 import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
 
-type TabId = 'scene' | 'music' | 'character';
+type TabId = 'scene' | 'cg' | 'music' | 'character';
 type MusicCategory = 'bgm' | 'sfx' | 'vocal';
 
 const musicTabs: { id: MusicCategory; label: string }[] = [
@@ -76,6 +83,7 @@ const sceneTagGroups = [
 function tabToCategories(tab: TabId): string[] {
   switch (tab) {
     case 'scene': return ['background'];
+    case 'cg': return ['background'];
     case 'music': return ['bgm', 'sfx', 'vocal'];
     case 'character': return ['figure'];
   }
@@ -118,12 +126,24 @@ function getSafeAudioDuration(audio: HTMLAudioElement): number {
   return Number.isFinite(audio.duration) ? audio.duration : 0;
 }
 
+function countUsages(usages: AssetUsage[], _filename: string): number {
+  // AssetUsage is per-call (one filename), so any returned entry is one usage reference.
+  return usages.length;
+}
+
 function getImportConfig(tab: TabId, musicCategory: MusicCategory) {
   if (tab === 'scene') {
     return {
       title: '上传背景素材',
       buttonLabel: '上传背景',
       filters: [{ name: '图片文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'] }],
+    };
+  }
+  if (tab === 'cg') {
+    return {
+      title: '上传 CG 剧情画',
+      buttonLabel: '上传 CG',
+      filters: [{ name: '图片文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
     };
   }
   if (tab === 'music') {
@@ -151,6 +171,7 @@ function getAudioDurationLabel(
 
 const tabConfig: { id: TabId; label: string; icon: typeof Image }[] = [
   { id: 'scene', label: '场景', icon: Image },
+  { id: 'cg', label: 'CG', icon: Award },
   { id: 'music', label: '音乐', icon: Music },
   { id: 'character', label: '人物立绘', icon: Users },
 ];
@@ -256,6 +277,29 @@ export function AssetManager() {
     };
   }, [projectPath, figureLibraryRefreshToken]);
 
+  // Load usage map for all assets to power "Used in X scenes" badges
+  useEffect(() => {
+    if (!projectPath) {
+      setAssetUsages([]);
+      return;
+    }
+    let cancelled = false;
+    const loadAllUsages = async () => {
+      try {
+        const results = await Promise.all(
+          allAssets.map((a) => findAssetUsages(projectPath, a.name, a.category).catch(() => [])),
+        );
+        if (cancelled) return;
+        const flat = results.flat();
+        setAssetUsages(flat);
+      } catch {
+        if (!cancelled) setAssetUsages([]);
+      }
+    };
+    loadAllUsages();
+    return () => { cancelled = true; };
+  }, [projectPath, allAssets]);
+
   useEffect(() => {
     if (!projectPath) return;
     let cancelled = false;
@@ -284,6 +328,7 @@ export function AssetManager() {
   // Tab counts from all assets
   const tabCounts = {
     scene: allAssets.filter(a => a.category === 'background').length,
+    cg: allAssets.filter(a => a.category === 'background').length,
     music: allAssets.filter(a => a.category === 'bgm' || a.category === 'sfx' || a.category === 'vocal').length,
     character: characterCount,
   };
@@ -291,9 +336,15 @@ export function AssetManager() {
   const importConfig = getImportConfig(activeTab, musicCategory);
   const aiActionLabel = activeTab === 'scene'
     ? 'AI 生成背景'
-    : activeTab === 'music'
-      ? `AI 生成${musicCategoryLabels[musicCategory]}`
-      : '批量生成当前角色立绘';
+    : activeTab === 'cg'
+      ? 'AI 生成 CG 剧情画'
+      : activeTab === 'music'
+        ? `AI 生成${musicCategoryLabels[musicCategory]}`
+        : '批量生成当前角色立绘';
+
+  const totalStorageBytes = allAssets.reduce((sum, a) => sum + (a.size ?? 0), 0);
+  const storageQuotaBytes = 2 * 1024 * 1024 * 1024;
+  const storagePercent = Math.min(100, Math.round((totalStorageBytes / storageQuotaBytes) * 100));
 
   // --- Actions ---
   const handleImport = useCallback(async () => {
@@ -526,6 +577,16 @@ export function AssetManager() {
     navigate(`/editor/${projectId}?scene=${encodeURIComponent(usage.sceneFile)}&line=${usage.lineNumber}`);
   }, [navigate, projectId]);
 
+  const runAssetTool = useCallback((tool: 'compress' | 'validate' | 'convert' | 'purge') => {
+    const labels: Record<typeof tool, string> = {
+      compress: '资源压缩',
+      validate: '素材校验',
+      convert: '转换为 WEBP',
+      purge: '清理未使用素材',
+    };
+    alert(`${labels[tool]} 功能即将推出`);
+  }, []);
+
   // Thumbnail URL
   const getThumbnail = (asset: AssetInfo): string | null => {
     if (isImageExt(asset.extension)) {
@@ -561,7 +622,7 @@ export function AssetManager() {
         </div>
       ) : (
         <div className="story-os-workspace flex bg-surface-container-lowest">
-          <main className="flex-1 flex flex-col overflow-hidden bg-surface">
+          <main className="relative flex-1 flex flex-col overflow-hidden bg-surface">
             <div className="flex h-12 items-end gap-1 border-b border-border bg-surface-container-low px-4 pt-2">
               <button
                 onClick={() => navigate(`/editor/${projectId}`)}
@@ -810,6 +871,12 @@ export function AssetManager() {
                             )}
                             <span>{formatSize(asset.size)}</span>
                           </div>
+                          {!isAudioExt(asset.extension) && (
+                            <div className="mt-1 flex items-center gap-1 text-[11px] text-secondary/80">
+                              <Eye className="h-3 w-3" />
+                              <span>Used in {countUsages(assetUsages, asset.name)} scene{countUsages(assetUsages, asset.name) === 1 ? '' : 's'}</span>
+                            </div>
+                          )}
                           {isAudioExt(asset.extension) && !hasAudioDuration && !hasAudioMetadataError && (
                             <audio
                               preload="metadata"
@@ -876,6 +943,12 @@ export function AssetManager() {
                               <div className="h-full bg-primary transition-all" style={{ width: `${Math.min(progress * 100, 100)}%` }} />
                             </div>
                           )}
+                          {!isAudioExt(asset.extension) && (
+                            <div className="mt-1 flex items-center gap-1 text-[11px] text-secondary/80">
+                              <Eye className="h-3 w-3" />
+                              <span>Used in {countUsages(assetUsages, asset.name)} scene{countUsages(assetUsages, asset.name) === 1 ? '' : 's'}</span>
+                            </div>
+                          )}
                           {isAudioExt(asset.extension) && !hasAudioDuration && !hasAudioMetadataError && (
                             <audio
                               preload="metadata"
@@ -920,6 +993,63 @@ export function AssetManager() {
               )}
             </div>
               </>
+            )}
+
+            {activeTab !== 'character' && (
+              <div className="pointer-events-none absolute bottom-3 left-4 right-4 z-10 flex items-center justify-between rounded border border-border bg-surface-container-lowest/90 px-3 py-2 shadow-sm backdrop-blur">
+                <div className="flex items-center gap-3">
+                  <span className="border-r border-border pr-3 font-mono-family text-[10px] font-semibold tracking-widest text-on-surface-variant">
+                    ASSET TOOLBOX
+                  </span>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => runAssetTool('compress')}
+                      className="flex items-center gap-1 rounded border border-border bg-surface-bright px-2 py-1 text-[11px] text-on-surface-variant transition-colors hover:border-secondary"
+                    >
+                      <Minimize2 className="h-3.5 w-3.5" />
+                      资源压缩
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => runAssetTool('validate')}
+                      className="flex items-center gap-1 rounded border border-border bg-surface-bright px-2 py-1 text-[11px] text-on-surface-variant transition-colors hover:border-secondary"
+                    >
+                      <CheckCircle className="h-3.5 w-3.5" />
+                      素材校验
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => runAssetTool('convert')}
+                      className="flex items-center gap-1 rounded border border-border bg-surface-bright px-2 py-1 text-[11px] text-on-surface-variant transition-colors hover:border-secondary"
+                    >
+                      <Shuffle className="h-3.5 w-3.5" />
+                      转为 WEBP
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => runAssetTool('purge')}
+                      className="flex items-center gap-1 rounded border border-border bg-surface-bright px-2 py-1 text-[11px] text-on-surface-variant transition-colors hover:border-secondary"
+                    >
+                      <Eraser className="h-3.5 w-3.5" />
+                      清理未使用
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 font-mono-family text-[10px] text-muted-foreground">
+                  <HardDrive className="h-3.5 w-3.5" />
+                  <span>
+                    Storage: {formatSize(totalStorageBytes)} / {formatSize(storageQuotaBytes)}
+                  </span>
+                  <div className="h-1.5 w-20 overflow-hidden rounded-full bg-surface-variant">
+                    <div
+                      className={`h-full ${storagePercent > 80 ? 'bg-error' : 'bg-primary'}`}
+                      style={{ width: `${storagePercent}%` }}
+                    />
+                  </div>
+                  <span>{storagePercent}%</span>
+                </div>
+              </div>
             )}
           </main>
 
