@@ -3,25 +3,16 @@ import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import {
-  Sparkles, Save, Play, Image, ArrowLeft, Send,
-  Upload, Download, FileText, FolderOpen, Layers, Check, Loader2, SlidersHorizontal,
-  Undo2, Redo2, Package, MoreHorizontal, PanelRightClose, PanelRightOpen,
-  X, AlertTriangle, History,
+  Save, Image, Search, Plus, Send, X,
+  FileText, FolderOpen, Layers, Check, Loader2, SlidersHorizontal,
+  Package, History, MessageCircle, GitBranch, Users, Music, Wand2, ArrowRight,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { NodePanel } from './NodePanel';
-import { FlowCanvas } from './FlowCanvas';
-import { DetailPanel } from './DetailPanel';
 import { AiSettingsDialog } from './AiSettingsDialog';
 import { AppSettingsDialog, loadAppSettings } from './AppSettingsDialog';
 import { ProjectMetadataDialog, type ExportTaskState } from './ProjectMetadataDialog';
 import { SnapshotManagerDialog } from './SnapshotManagerDialog';
-import { SceneManagerPanel } from './SceneManager';
-import { AiMemoryPanel } from './AiMemoryPanel';
-import { AiMessageBubble } from './AiMessageBubble';
-import { AiPendingCard } from './AiPendingCard';
-import { ConflictCard, ErrorCard, MissingAssetCard } from './AiStatusCard';
 import type { WebGalNode, WebGalCommandType, SceneLink } from '../lib/webgal-types';
 import { extractSceneLinks } from '../lib/webgal-types';
 import {
@@ -33,21 +24,15 @@ import {
   readFileText, parseSceneHeader,
   type ProjectInfo, type SceneHeader, type ProjectMetadata, type SnapshotInfo,
 } from '../lib/webgal-ipc';
-import { listCharacterNames, listCharacters } from '../lib/character-ipc';
+import { listCharacters } from '../lib/character-ipc';
 import type { Character } from '../lib/character-types';
-import { useAiAgent, type AiPanelStatus } from '../hooks/useAiAgent';
-import {
-  insertSceneNode,
-  pasteSceneNode,
-  removeSceneNode,
-  reorderSceneNodes,
-} from '../lib/scene-editing';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from './ui/dropdown-menu';
+import { useAiAgent } from '../hooks/useAiAgent';
+import { insertSceneNode } from '../lib/scene-editing';
+import { AiMemoryPanel } from './AiMemoryPanel';
+import { AiMessageBubble } from './AiMessageBubble';
+import { AiPendingCard } from './AiPendingCard';
+import { ConflictCard, ErrorCard, MissingAssetCard } from './AiStatusCard';
+import { DetailPanel } from './DetailPanel';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -58,20 +43,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './ui/alert-dialog';
+import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-
-const aiStatusLabels: Record<AiPanelStatus, string> = {
-  idle: '等待输入',
-  generating: '生成中',
-  validating: '校验中',
-  pending: '待确认',
-  accepted: '已接受',
-  reverted: '已撤销',
-  conflict: '有冲突',
-  missing_assets: '缺少素材',
-  error: '出错',
-};
 
 const DEMO_SCRIPT = `; 序章 - 安静的午后
 changeBg:afternoon_park.webp -next;
@@ -101,10 +75,460 @@ const IDLE_EXPORT_TASK: ExportTaskState = {
   failureCount: 0,
 };
 
+function getCommandSummary(node: WebGalNode): string {
+  switch (node.type) {
+    case 'dialogue':
+      return node.character ? `${node.character}: ${node.content || '(空对白)'}` : node.content || '(空对白)';
+    case 'narrator':
+      return node.content || '(空旁白)';
+    case 'choose':
+      return node.choices?.map((choice) => `${choice.text} -> ${choice.target}`).join(' / ') || node.content || '(空选项)';
+    case 'changeBg':
+    case 'changeFigure':
+    case 'miniAvatar':
+    case 'bgm':
+    case 'playEffect':
+    case 'playVideo':
+      return node.asset || node.content || '未选择素材';
+    case 'changeScene':
+    case 'callScene':
+      return node.targetScene || node.content || '未选择场景';
+    case 'label':
+    case 'jumpLabel':
+      return node.labelName || node.content || '未命名标签';
+    case 'setVar':
+      return node.varName ? `${node.varName} = ${node.varValue ?? ''}` : node.content || '未设置变量';
+    case 'setAnimation':
+      return `${node.animationName || node.content || '未设置动画'}${node.animationTarget ? ` -> ${node.animationTarget}` : ''}`;
+    case 'intro':
+      return node.introLines?.join(' / ') || node.content || '(空黑屏文字)';
+    case 'end':
+      return '场景结束';
+    default:
+      return node.content || '—';
+  }
+}
+
+function commandIconFor(type: WebGalCommandType) {
+  switch (type) {
+    case 'dialogue':
+      return MessageCircle;
+    case 'choose':
+      return GitBranch;
+    case 'changeBg':
+      return Image;
+    case 'changeFigure':
+    case 'miniAvatar':
+      return Users;
+    case 'bgm':
+    case 'playEffect':
+      return Music;
+    case 'setAnimation':
+    case 'setTransform':
+      return Wand2;
+    case 'changeScene':
+    case 'callScene':
+      return ArrowRight;
+    default:
+      return FileText;
+  }
+}
+
+function commandToneFor(type: WebGalCommandType): string {
+  switch (type) {
+    case 'dialogue':
+      return 'text-primary';
+    case 'choose':
+      return 'text-tertiary';
+    case 'changeBg':
+      return 'text-secondary';
+    case 'bgm':
+    case 'playEffect':
+      return 'text-tertiary';
+    default:
+      return 'text-on-surface-variant';
+  }
+}
+
+interface SceneWorldlinePanelProps {
+  scenes: string[];
+  currentSceneName: string;
+  sceneHeaders: Record<string, SceneHeader>;
+  sceneLinkMap: Record<string, SceneLink[]>;
+  nodes: WebGalNode[];
+  selectedNode: WebGalNode | null;
+  onSelectNode: (node: WebGalNode) => void;
+  onOpenScene: (sceneName: string) => void;
+}
+
+function SceneWorldlinePanel({
+  scenes,
+  currentSceneName,
+  sceneHeaders,
+  sceneLinkMap,
+  nodes,
+  selectedNode,
+  onSelectNode,
+  onOpenScene,
+}: SceneWorldlinePanelProps) {
+  const visibleNodes = nodes.filter((node) => node.type !== 'comment' || node.content?.trim());
+  const outgoing = sceneLinkMap[currentSceneName] ?? [];
+  const worldline = [
+    currentSceneName,
+    ...outgoing.map((link) => link.target).filter(Boolean),
+  ].slice(0, 4);
+
+  return (
+    <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface-container-lowest">
+      <div className="flex h-10 items-center justify-between border-b border-border px-3">
+        <span className="font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">场景关系图</span>
+        <span className="font-mono-family text-[10px] text-muted-foreground">{scenes.length || 1}</span>
+      </div>
+
+      <div className="border-b border-border p-4">
+        <div className="flex flex-col items-center gap-1">
+          {(worldline.length ? worldline : [currentSceneName]).map((scene, index) => (
+            <div key={`${scene}-${index}`} className="flex flex-col items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onOpenScene(scene)}
+                className={`max-w-44 truncate rounded-full border px-3 py-1 font-mono-family text-[10px] ${
+                  scene === currentSceneName
+                    ? 'border-secondary bg-secondary-container/35 text-secondary'
+                    : 'border-border bg-surface-container text-on-surface-variant hover:border-secondary'
+                }`}
+                title={scene}
+              >
+                {scene.replace(/\.txt$/, '')}
+              </button>
+              {index < worldline.length - 1 && <ArrowRight className="h-3.5 w-3.5 rotate-90 text-muted-foreground/60" />}
+            </div>
+          ))}
+        </div>
+        {outgoing.length === 0 && (
+          <p className="mt-3 text-center text-[10px] leading-relaxed text-muted-foreground">当前场景暂无跳转，选择分支会在这里形成世界线。</p>
+        )}
+      </div>
+
+      <div className="flex h-10 items-center justify-between border-b border-border px-3">
+        <span className="font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">当前场景索引</span>
+        <span className="font-mono-family text-[10px] text-muted-foreground">{visibleNodes.length}</span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {visibleNodes.map((node, index) => {
+          const Icon = commandIconFor(node.type);
+          const selected = selectedNode?.id === node.id;
+          return (
+            <button
+              key={node.id}
+              type="button"
+              onClick={() => onSelectNode(node)}
+              className={`flex w-full items-start gap-2 border-l-2 px-3 py-2 text-left transition-colors ${
+                selected
+                  ? 'border-secondary bg-surface-container-low'
+                  : 'border-transparent hover:bg-surface-container-low'
+              }`}
+            >
+              <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${commandToneFor(node.type)}`} />
+              <span className="min-w-0 flex-1">
+                <span className="block font-mono-family text-[10px] text-muted-foreground">{index + 1} {node.type}</span>
+                <span className="block truncate text-xs text-on-surface">{getCommandSummary(node)}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
+function MiniLivePreview({ nodes }: { nodes: WebGalNode[] }) {
+  const dialogue = nodes.find((node) => node.type === 'dialogue');
+  const background = nodes.find((node) => node.type === 'changeBg');
+  return (
+    <div className="absolute right-6 top-14 z-20 flex h-36 w-64 flex-col overflow-hidden rounded-sm border border-border bg-surface-container-highest shadow-[0_0_0_3px_rgba(116,191,253,0.08)]">
+      <div className="flex h-7 items-center justify-between border-b border-border bg-surface-container px-2">
+        <span className="font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">实时预览</span>
+        <ArrowRight className="h-3.5 w-3.5 -rotate-45 text-muted-foreground" />
+      </div>
+      <div className="story-os-blueprint relative flex flex-1 items-center justify-center overflow-hidden bg-inverse-surface">
+        <div className="absolute inset-0 bg-secondary-fixed/15" />
+        <Image className="h-10 w-10 text-secondary-container/60" />
+        <div className="absolute bottom-2 left-2 right-2 border border-border bg-surface-container-lowest/90 p-2 backdrop-blur">
+          <p className="mb-0.5 truncate text-[10px] font-bold text-primary">{dialogue?.character || background?.asset || '预览'}</p>
+          <p className="truncate text-[11px] text-on-surface">“{dialogue?.content || '选择一个对白节点查看演出效果'}”</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface AiAssistantPanelProps {
+  aiAgent: ReturnType<typeof useAiAgent>;
+  projectPath: string | null;
+  onOpenSettings: () => void;
+  onSend: () => void;
+}
+
+function AiAssistantPanel({ aiAgent, projectPath, onOpenSettings, onSend }: AiAssistantPanelProps) {
+  const statusText = aiAgent.busy
+    ? '生成中'
+    : aiAgent.status === 'pending'
+      ? '等待确认'
+      : aiAgent.status === 'error'
+        ? '需要处理'
+        : '等待输入';
+
+  return (
+    <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-surface-container-lowest">
+      <div className="flex h-10 items-center justify-between border-b border-border px-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-secondary-container/35 text-secondary">
+            <Wand2 className="h-3.5 w-3.5" />
+          </div>
+          <span className="truncate text-sm font-semibold text-on-surface">AI 创作助手</span>
+          <span className="flex items-center gap-1 font-mono-family text-[10px] text-muted-foreground">
+            <span className={`block h-1.5 w-1.5 rounded-full ${aiAgent.busy ? 'bg-primary' : 'bg-tertiary-container'}`} />
+            {statusText}
+          </span>
+        </div>
+        <button type="button" onClick={aiAgent.clearConversation} className="story-os-icon-button h-7 w-7" aria-label="清空 AI 对话">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        {aiAgent.messages.map((message) => (
+          <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <AiMessageBubble
+              role={message.role}
+              content={message.content}
+              isStreaming={aiAgent.streamingIdRef.current === message.id && aiAgent.busy}
+              stopped={message.stopped}
+              diff={message.diff}
+            />
+          </div>
+        ))}
+        {aiAgent.pendingChange?.status === 'pending' && (
+          <AiPendingCard
+            summary={aiAgent.pendingChange.summary}
+            status={aiAgent.pendingChange.status}
+            diff={aiAgent.pendingChange.diff}
+            warnings={aiAgent.pendingChange.warnings}
+            onAccept={aiAgent.acceptChange}
+            onRevert={aiAgent.revertChange}
+          />
+        )}
+        {aiAgent.status === 'missing_assets' && (
+          <MissingAssetCard
+            issues={aiAgent.missingIssues}
+            onUseFallback={aiAgent.useFallbackAssets}
+            onOpenAssets={aiAgent.openAssets}
+            onRetryPrompt={aiAgent.retryWithExistingAssets}
+          />
+        )}
+        {aiAgent.status === 'conflict' && (
+          <ConflictCard
+            onKeepManual={aiAgent.revertChange}
+            onApplyAi={() => { void aiAgent.forceApplyChange(); }}
+            onRegenerate={aiAgent.regenerateAfterConflict}
+          />
+        )}
+        {aiAgent.error && aiAgent.status === 'error' && (
+          <ErrorCard
+            message={aiAgent.error.message}
+            canRetry={aiAgent.error.retryable}
+            cooldown={aiAgent.cooldown}
+            showSettings={aiAgent.error.kind === 'auth'}
+            onRetry={aiAgent.retry}
+            onOpenSettings={onOpenSettings}
+          />
+        )}
+      </div>
+
+      <div className="border-t border-border bg-surface-container-low p-4">
+        <AiMemoryPanel
+          memory={aiAgent.memory}
+          disabled={!projectPath}
+          onSave={aiAgent.saveMemory}
+        />
+        <textarea
+          value={aiAgent.input}
+          onChange={(event) => aiAgent.setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              onSend();
+            }
+          }}
+          disabled={aiAgent.busy || aiAgent.pendingChange?.status === 'pending'}
+          className="mt-3 h-20 w-full resize-none rounded-sm border border-border bg-surface-container-lowest p-2 text-sm focus:border-secondary focus:outline-none focus:ring-2 focus:ring-secondary-container/30 disabled:opacity-60"
+          placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChange?.status === 'pending' ? '请先接受或撤销当前 AI 修改...' : '输入你的创作想法...'}
+          aria-label="AI 创作输入"
+        />
+        <button
+          type="button"
+          onClick={aiAgent.busy ? aiAgent.stop : onSend}
+          disabled={!aiAgent.busy && (!aiAgent.input.trim() || aiAgent.pendingChange?.status === 'pending')}
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-sm bg-secondary-container/60 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-secondary-container disabled:opacity-50"
+        >
+          {aiAgent.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          {aiAgent.busy ? '停止' : '发送'}
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+interface ScriptCommandStreamProps {
+  nodes: WebGalNode[];
+  selectedNode: WebGalNode | null;
+  currentSceneName: string;
+  onSelectNode: (node: WebGalNode) => void;
+  onInsertNode: (type: WebGalCommandType, atIndex: number) => void;
+}
+
+function ScriptCommandStream({
+  nodes,
+  selectedNode,
+  currentSceneName,
+  onSelectNode,
+  onInsertNode,
+}: ScriptCommandStreamProps) {
+  return (
+    <section className="relative flex min-w-0 flex-1 flex-col bg-[#F7F9FC]">
+      <div className="pointer-events-none absolute inset-0 opacity-[0.03] story-os-dot-grid" />
+      <MiniLivePreview nodes={nodes} />
+      <div className="relative z-10 flex h-10 shrink-0 items-center justify-between border-b border-outline-variant/20 bg-surface-bright/50 px-4">
+        <div className="flex min-w-0 items-center gap-4">
+          <span className="shrink-0 text-xs font-bold tracking-widest text-on-surface-variant">指令流编辑</span>
+          <div className="flex gap-2">
+            <span className="rounded bg-secondary/10 px-2 py-0.5 text-[10px] font-bold uppercase text-secondary">Act 1</span>
+            <span className="rounded bg-outline-variant/20 px-2 py-0.5 text-[10px] font-bold uppercase text-on-surface-variant">Scene 04</span>
+          </div>
+          <span className="truncate text-[10px] text-muted-foreground">{currentSceneName}</span>
+        </div>
+        <div className="flex gap-2 text-on-surface-variant/50">
+          <Search className="h-4 w-4" />
+          <SlidersHorizontal className="h-4 w-4" />
+        </div>
+      </div>
+
+      <div className="relative z-10 flex-1 overflow-y-auto p-8">
+        <div className="mx-auto max-w-4xl space-y-6 pb-28">
+        {nodes.length === 0 ? (
+          <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 border border-dashed border-outline-variant/50 bg-surface-bright p-8 text-center text-muted-foreground">
+            <FileText className="h-10 w-10 opacity-50" />
+            <div className="text-base text-foreground">当前场景还没有命令</div>
+            <button type="button" onClick={() => onInsertNode('dialogue', 0)} className="bg-primary px-4 py-2 text-sm font-semibold text-on-primary story-os-chamfer-tr">
+              添加第一句对白
+            </button>
+          </div>
+        ) : nodes.map((node, index) => {
+          const Icon = commandIconFor(node.type);
+          const selected = selectedNode?.id === node.id;
+          const isDialogue = node.type === 'dialogue';
+          const isBackground = node.type === 'changeBg';
+          const isBranch = node.type === 'choose';
+          const tag = isBackground ? 'BG_LOAD' : isDialogue ? 'TEXT_CMD' : isBranch ? 'BRANCH_LOGIC' : node.type.toUpperCase();
+          const tagClass = isBackground
+            ? 'bg-secondary text-on-secondary'
+            : isBranch
+            ? 'bg-tertiary text-on-tertiary'
+            : 'bg-primary text-on-primary';
+          return (
+            <div key={node.id} className="group flex gap-4">
+              <div className="flex w-12 shrink-0 flex-col items-center pt-2">
+                <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-[10px] font-bold ${
+                  selected ? 'border-primary text-primary' : 'border-outline-variant/30 text-on-surface-variant/40'
+                }`}>
+                  {String(index + 1).padStart(2, '0')}
+                </div>
+                <div className="my-2 w-px flex-1 bg-outline-variant/20" />
+              </div>
+              <button
+                type="button"
+                onClick={() => onSelectNode(node)}
+                className={`relative w-full max-w-3xl overflow-hidden border p-4 text-left shadow-sm transition-all ${
+                  isBranch
+                    ? `border-2 bg-tertiary/5 ${selected ? 'border-tertiary' : 'border-tertiary/30'} story-os-chamfer-tr`
+                    : `bg-surface-bright ${selected ? 'border-primary ring-1 ring-primary/20' : 'border-outline-variant/40 hover:border-secondary'}`
+                }`}
+              >
+                <div className={`absolute right-0 top-0 px-2 py-1 text-[9px] uppercase tracking-tight ${tagClass}`}>{tag}</div>
+
+                {isBackground ? (
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-16 w-24 shrink-0 items-center justify-center border border-outline-variant/20 bg-surface-container-highest">
+                      <Image className="h-5 w-5 text-on-surface-variant/30" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="mb-1 font-bold text-secondary">设置背景: {node.asset || node.content || '未选择背景'}</p>
+                      <p className="text-sm italic text-on-surface-variant/70">过度效果: 交叉溶解 (2.0s)</p>
+                    </div>
+                  </div>
+                ) : isDialogue ? (
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-container/20">
+                      <Users className="h-5 w-5 text-primary" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="font-bold text-primary">{node.character || '未指定角色'}</span>
+                        <span className="text-[10px] text-on-surface-variant/40">[ 默认 ]</span>
+                      </div>
+                      <div className="border-l-4 border-primary/30 bg-surface-container-low/50 p-3 text-base leading-relaxed text-on-surface">
+                        “{node.content || '……'}”
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {node.voice && <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">语音: {node.voice}</span>}
+                        <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">表情: default</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : isBranch ? (
+                  <>
+                    <div className="mb-4 flex items-center gap-2">
+                      <GitBranch className="h-4 w-4 text-tertiary" />
+                      <span className="font-bold text-tertiary">抉择分支: {node.content || '剧情选择'}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {(node.choices?.length ? node.choices : [{ text: getCommandSummary(node), target: '@next' }]).map((choice, choiceIndex) => (
+                        <div key={`${node.id}-${choiceIndex}`} className="flex items-center justify-between border border-tertiary/20 bg-surface-bright p-2 text-sm">
+                          <span>{choiceIndex + 1}. {choice.text}</span>
+                          <span className="text-[10px] text-tertiary">跳转至: {choice.target}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <Icon className="h-5 w-5 shrink-0 text-primary" />
+                    <span className="min-w-0 truncate text-sm">{getCommandSummary(node)}</span>
+                  </div>
+                )}
+              </button>
+            </div>
+          );
+        })}
+        </div>
+
+        <div className="absolute bottom-8 left-1/2 z-20 -translate-x-1/2">
+          <button type="button" onClick={() => onInsertNode('dialogue', nodes.length)} className="flex items-center gap-2 bg-primary px-6 py-2 font-semibold text-on-primary shadow-lg story-os-chamfer-tr">
+            <Plus className="h-4 w-4" />
+            新增指令流
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function StoryEditor() {
   const navigate = useNavigate();
   const { projectId } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedSceneName = searchParams.get('scene') || 'start.txt';
 
   // Project state
   const [projectPath, setProjectPath] = useState<string | null>(null);
@@ -113,15 +537,12 @@ export function StoryEditor() {
   const [dirty, setDirty] = useState(false);
   const [sceneHeaders, setSceneHeaders] = useState<Record<string, SceneHeader>>({});
   const [sceneLinkMap, setSceneLinkMap] = useState<Record<string, SceneLink[]>>({});
-  const [sceneManagerOpen, setSceneManagerOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
 
   // Editor state
   const [nodes, setNodes] = useState<WebGalNode[]>([]);
   const nodesRef = useRef<WebGalNode[]>([]);
   const [selectedNode, setSelectedNode] = useState<WebGalNode | null>(null);
-  const [assetContextNoticeDismissed, setAssetContextNoticeDismissed] = useState(false);
-  const [clipboardNode, setClipboardNode] = useState<WebGalNode | null>(null);
   const [scriptSource, setScriptSource] = useState(DEMO_SCRIPT);
   const [showScript, setShowScript] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -143,8 +564,6 @@ export function StoryEditor() {
   const [snapshotBusy, setSnapshotBusy] = useState(false);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotStatus, setSnapshotStatus] = useState<string | null>(null);
-  const [characterNames, setCharacterNames] = useState<string[]>([]);
-  const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
   const [aiCollapsed, setAiCollapsed] = useState(() => localStorage.getItem(`story-ai-collapsed-${projectId}`) === '1');
 
@@ -169,8 +588,6 @@ export function StoryEditor() {
       return parts.join('\n');
     }).join('\n\n');
   }, []);
-
-  const aiMessagesListRef = useRef<HTMLDivElement | null>(null);
 
   const loadSceneHeaders = useCallback(async (projectPath: string, scenes: string[]) => {
     const entries = await Promise.all(
@@ -283,7 +700,7 @@ export function StoryEditor() {
     const init = async () => {
       // Try to restore project path from localStorage
       const storedPath = localStorage.getItem(`project-path-${projectId}`);
-      const sceneName = searchParams.get('scene') || 'start.txt';
+      const sceneName = requestedSceneName;
       setCurrentSceneName(sceneName);
 
       if (storedPath) {
@@ -331,18 +748,9 @@ export function StoryEditor() {
 
         // Load character names for autocomplete
         try {
-          const refs = await listCharacterNames(storedPath);
           const chars = await listCharacters(storedPath);
-          setCharacterNames(refs.map(r => r.name));
-          const colors: Record<string, string> = {};
-          for (const c of chars) {
-            if (c.colorTheme) colors[c.name] = c.colorTheme;
-          }
-          setCharacterColors(colors);
           setCharactersForAi(chars);
         } catch {
-          setCharacterNames([]);
-          setCharacterColors({});
           setCharactersForAi([]);
         }
 
@@ -361,7 +769,7 @@ export function StoryEditor() {
       setLoading(false);
     };
     init();
-  }, [projectId, searchParams]);
+  }, [projectId, requestedSceneName]);
 
   // ---------------------------------------------------------------------------
   // 同步节点到脚本文本
@@ -445,56 +853,6 @@ export function StoryEditor() {
   // ---------------------------------------------------------------------------
   // Node CRUD
   // ---------------------------------------------------------------------------
-  const updateNode = useCallback((id: string, updates: Partial<WebGalNode>) => {
-    const current = nodesRef.current;
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    if (!pendingRecordRef.current) pendingRecordRef.current = current;
-    debounceTimerRef.current = setTimeout(() => {
-      if (pendingRecordRef.current) {
-        pushHistory(pendingRecordRef.current);
-        pendingRecordRef.current = null;
-      }
-    }, 500);
-
-    const next = current.map(n => n.id === id ? { ...n, ...updates } : n);
-    commitEditedNodes(next);
-    setSelectedNode(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
-  }, [commitEditedNodes, pushHistory]);
-
-  const deleteNode = useCallback((id: string) => {
-    const current = nodesRef.current;
-    flushPendingHistory();
-    pushHistory(current);
-    commitEditedNodes(removeSceneNode(current, id));
-    setSelectedNode(null);
-  }, [commitEditedNodes, flushPendingHistory, pushHistory]);
-
-  const copyNode = useCallback((node: WebGalNode) => {
-    setClipboardNode({ ...node });
-  }, []);
-
-  const cutNode = useCallback((node: WebGalNode) => {
-    setClipboardNode({ ...node });
-    deleteNode(node.id);
-  }, [deleteNode]);
-
-  const pasteNode = useCallback((atIndex: number) => {
-    if (!clipboardNode) return;
-    const current = nodesRef.current;
-    flushPendingHistory();
-    pushHistory(current);
-    commitEditedNodes(pasteSceneNode(current, clipboardNode, atIndex, Date.now().toString()));
-  }, [clipboardNode, commitEditedNodes, flushPendingHistory, pushHistory]);
-
-  const reorderNodes = useCallback((fromIndex: number, toIndex: number) => {
-    const current = nodesRef.current;
-    const next = reorderSceneNodes(current, fromIndex, toIndex);
-    if (next === current) return;
-    flushPendingHistory();
-    pushHistory(current);
-    commitEditedNodes(next);
-  }, [commitEditedNodes, flushPendingHistory, pushHistory]);
-
   const insertNode = useCallback((type: WebGalCommandType, atIndex: number) => {
     const current = nodesRef.current;
     flushPendingHistory();
@@ -503,6 +861,46 @@ export function StoryEditor() {
     commitEditedNodes(updated);
     setSelectedNode(inserted);
   }, [commitEditedNodes, flushPendingHistory, pushHistory]);
+
+  const updateSelectedNode = useCallback((updates: Partial<WebGalNode>) => {
+    const current = nodesRef.current;
+    const selected = selectedNode;
+    if (!selected) return;
+
+    if (!pendingRecordRef.current) {
+      pendingRecordRef.current = current;
+    }
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      const pending = pendingRecordRef.current;
+      if (pending) pushHistory(pending);
+      pendingRecordRef.current = null;
+    }, 800);
+
+    let nextSelected: WebGalNode | null = null;
+    const updated = current.map((node) => {
+      if (node.id !== selected.id) return node;
+      nextSelected = { ...node, ...updates };
+      return nextSelected;
+    });
+    if (!nextSelected) return;
+    nodesRef.current = updated;
+    setNodes(updated);
+    setSelectedNode(nextSelected);
+    void syncScript(updated);
+    markDirty();
+  }, [markDirty, pushHistory, selectedNode, syncScript]);
+
+  const deleteSelectedNode = useCallback(() => {
+    const selected = selectedNode;
+    if (!selected) return;
+    const current = nodesRef.current;
+    flushPendingHistory();
+    pushHistory(current);
+    const updated = current.filter((node) => node.id !== selected.id);
+    commitEditedNodes(updated);
+    setSelectedNode(null);
+  }, [commitEditedNodes, flushPendingHistory, pushHistory, selectedNode]);
 
   // ---------------------------------------------------------------------------
   // Save
@@ -590,10 +988,16 @@ export function StoryEditor() {
   // Intercept Tauri native window close when dirty
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    getCurrentWindow().onCloseRequested((event) => {
+    let appWindow: ReturnType<typeof getCurrentWindow>;
+    try {
+      appWindow = getCurrentWindow();
+    } catch {
+      return undefined;
+    }
+    appWindow.onCloseRequested((event) => {
       if (dirtyRef.current) {
         event.preventDefault();
-        pendingActionRef.current = () => void getCurrentWindow().destroy();
+        pendingActionRef.current = () => void appWindow.destroy();
         setUnsavedConfirmOpen(true);
       }
     }).then((fn) => { unlisten = fn; });
@@ -680,18 +1084,9 @@ export function StoryEditor() {
 
       // Load character names for autocomplete
       try {
-        const refs = await listCharacterNames(selected);
         const chars = await listCharacters(selected);
-        setCharacterNames(refs.map(r => r.name));
-        const colors: Record<string, string> = {};
-        for (const c of chars) {
-          if (c.colorTheme) colors[c.name] = c.colorTheme;
-        }
-        setCharacterColors(colors);
         setCharactersForAi(chars);
       } catch {
-        setCharacterNames([]);
-        setCharacterColors({});
         setCharactersForAi([]);
       }
 
@@ -1003,6 +1398,30 @@ export function StoryEditor() {
     }
   }, []);
 
+  useEffect(() => {
+    const action = searchParams.get('action');
+    if (!action || loading || !projectPath) return;
+
+    if (action === 'preview') {
+      void handleOpenRuntime();
+    } else if (action === 'export') {
+      handleExportProject();
+    } else {
+      return;
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.delete('action');
+    setSearchParams(next, { replace: true });
+  }, [
+    handleExportProject,
+    handleOpenRuntime,
+    loading,
+    projectPath,
+    searchParams,
+    setSearchParams,
+  ]);
+
   const aiAgent = useAiAgent({
     projectId,
     projectPath,
@@ -1020,11 +1439,6 @@ export function StoryEditor() {
     setShowScript,
     pushHistory,
   });
-
-  useEffect(() => {
-    const list = aiMessagesListRef.current;
-    if (list) list.scrollTop = list.scrollHeight;
-  }, [aiAgent.messages]);
 
   useEffect(() => {
     aiPendingPreviewRef.current = aiAgent.pendingChange?.status === 'pending';
@@ -1046,280 +1460,39 @@ export function StoryEditor() {
   }
 
   const gameName = projectInfo?.config?.Game_name || `项目 ${projectId ?? ''}`;
-  const selectedIndex = selectedNode ? nodes.findIndex((node) => node.id === selectedNode.id) : -1;
-  const suggestedFigureCharacter =
-    selectedNode?.type === 'changeFigure' &&
-    selectedIndex > 0 &&
-    nodes[selectedIndex - 1]?.type === 'dialogue'
-      ? nodes[selectedIndex - 1].character
-      : undefined;
 
   return (
     <DndProvider backend={HTML5Backend}>
-      <div className="h-full flex flex-col bg-background">
-        {/* Header */}
-        <header className="border-b border-border bg-card/50 backdrop-blur-sm">
-          <div className="px-3 sm:px-6 py-3 flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2 xl:gap-4">
-              <button
-                onClick={() => guardedNavigate(() => navigate('/'))}
-                className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
-                aria-label="返回主页"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <div className="hidden xl:block h-6 w-px bg-border" />
-              <h1 className="hidden xl:block text-2xl tracking-tight font-display-family">
-                故事编织室
-              </h1>
-              <div className="hidden xl:block h-6 w-px bg-border" />
-              <span className="min-w-0 max-w-[10rem] truncate text-sm text-muted-foreground font-mono-family">
-                {gameName}
-              </span>
+      <div className="h-full story-shell">
+        <StoryOsTopBar
+          onUndo={undo}
+          onRedo={redo}
+          onRun={handleOpenRuntime}
+          onPublish={handleExportProject}
+          onSettings={() => setAppSettingsOpen(true)}
+        />
+        <StoryOsSideNav
+          active="script"
+          projectId={projectId}
+          projectLabel={gameName}
+          onCreate={handleNewScene}
+        />
 
-              {/* Scene selector */}
-              {projectInfo && projectInfo.scenes.length > 0 && (
-                <>
-                  <div className="hidden xl:block h-6 w-px bg-border" />
-                  <select
-                    value={currentSceneName}
-                    onChange={(e) => handleSwitchScene(e.target.value)}
-                    className="max-w-[9rem] sm:max-w-[12rem] px-2 py-1 text-sm bg-secondary border border-border rounded-md font-mono-family"
-                    aria-label="选择场景"
-                  >
-                    {projectInfo.scenes.map((s) => {
-                      const h = sceneHeaders[s];
-                      const label = h?.chapter
-                        ? (h.outline ? `${h.chapter} — ${h.outline}` : h.chapter)
-                        : (h?.outline ?? s);
-                      return <option key={s} value={s} title={s}>{label}</option>;
-                    })}
-                  </select>
-                  <button
-                    onClick={() => setSceneManagerOpen((v) => !v)}
-                    className={`p-1.5 rounded-md transition-colors ${sceneManagerOpen ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/50 text-muted-foreground'}`}
-                    title="场景管理"
-                    aria-label="场景管理"
-                  >
-                    <Layers className="w-4 h-4" />
-                  </button>
-                </>
-              )}
-
-              {dirty && (
-                <span className="hidden xl:inline text-xs text-muted-foreground">未保存</span>
-              )}
-            </div>
-
-            <div className="flex flex-shrink-0 items-center gap-1 xl:gap-2">
-              <button
-                onClick={handleOpenProject}
-                className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm"
-                title="打开 WebGAL 项目文件夹"
-                aria-label="打开 WebGAL 项目文件夹"
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-                <span>打开</span>
-              </button>
-              <button
-                onClick={handleImport}
-                className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm"
-                aria-label="导入场景文件"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>导入</span>
-              </button>
-              <button
-                onClick={handleExport}
-                className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm"
-                aria-label="导出场景文件"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>导出</span>
-              </button>
-              <button
-                onClick={() => setShowScript(!showScript)}
-                className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 text-sm ${
-                  showScript ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/70'
-                }`}
-                aria-label="切换脚本编辑器"
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>脚本</span>
-              </button>
-              <div className="hidden sm:block h-6 w-px bg-border mx-1" />
-              <button
-                onClick={() => {
-                  if (dirty) {
-                    sessionStorage.setItem(
-                      `scene-draft-${projectId}-${currentSceneName}`,
-                      JSON.stringify(nodes),
-                    );
-                  }
-                  navigate(`/editor/${projectId}/assets`);
-                }}
-                className="px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 text-sm"
-                aria-label="打开素材库"
-              >
-                <Image className="w-3.5 h-3.5" />
-                <span>素材库</span>
-              </button>
-              <button
-                onClick={() => setAppSettingsOpen(true)}
-                className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
-                title="编辑器设置"
-                aria-label="编辑器设置"
-              >
-                <SlidersHorizontal className="w-4 h-4" />
-              </button>
-              {/* Undo / Redo */}
-              <button
-                onClick={undo}
-                disabled={history.length === 0 && pendingRecordRef.current === null}
-                className="p-2 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-30"
-                title="撤销 (Ctrl+Z)"
-                aria-label="撤销"
-              >
-                <Undo2 className="w-4 h-4" />
-              </button>
-              <button
-                onClick={redo}
-                disabled={redoHistory.length === 0}
-                className="p-2 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-30"
-                title="重做 (Ctrl+Shift+Z)"
-                aria-label="重做"
-              >
-                <Redo2 className="w-4 h-4" />
-              </button>
-              <div className="hidden sm:block h-6 w-px bg-border mx-1" />
-              {projectPath && (
-                <>
-                  <button
-                    onClick={handleOpenSnapshotManager}
-                    disabled={snapshotBusy}
-                    className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm disabled:opacity-50"
-                    title="历史版本"
-                    aria-label="历史版本"
-                  >
-                    {snapshotBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <History className="w-3.5 h-3.5" />}
-                    <span>历史</span>
-                  </button>
-                  <button
-                    onClick={handleExportProject}
-                    className="hidden xl:flex px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors items-center gap-2 text-sm"
-                    title="项目元信息与导出"
-                    aria-label="项目元信息与导出"
-                  >
-                    <Package className="w-3.5 h-3.5" />
-                    <span>交付</span>
-                  </button>
-                </>
-              )}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    className="xl:hidden p-2 rounded-md bg-secondary hover:bg-secondary/70 transition-colors"
-                    aria-label="更多操作"
-                  >
-                    <MoreHorizontal className="w-4 h-4" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-40">
-                  <DropdownMenuItem onClick={handleOpenProject}>
-                    <FolderOpen className="w-4 h-4" />
-                    打开文件夹
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleImport}>
-                    <Upload className="w-4 h-4" />
-                    导入场景
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleExport}>
-                    <Download className="w-4 h-4" />
-                    导出场景
-                  </DropdownMenuItem>
-                  {projectPath && (
-                    <>
-                      <DropdownMenuItem onClick={handleOpenSnapshotManager}>
-                        <History className="w-4 h-4" />
-                        历史版本
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={handleExportProject}>
-                        <Package className="w-4 h-4" />
-                        项目交付
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <button
-                onClick={handleOpenRuntime}
-                className="px-3 py-1.5 rounded-md bg-secondary hover:bg-secondary/70 transition-colors flex items-center gap-2 text-sm"
-                title="在浏览器中打开 WebGAL 预览"
-                aria-label="打开预览窗口"
-              >
-                <Play className="w-3.5 h-3.5" />
-                <span>试玩</span>
-              </button>
-
-              {/* Save button with status */}
-              <button
-                onClick={handleSave}
-                disabled={saveStatus === 'saving'}
-                className={`px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 text-sm ${
-                  saveStatus === 'saved'
-                    ? 'bg-chart-5/20 text-chart-5'
-                    : saveStatus === 'error'
-                    ? 'bg-destructive/20 text-destructive'
-                    : dirty
-                    ? 'bg-primary text-primary-foreground hover:opacity-90'
-                    : 'bg-secondary hover:bg-secondary/70'
-                }`}
-              >
-                {saveStatus === 'saving' ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : saveStatus === 'saved' ? (
-                  <Check className="w-3.5 h-3.5" />
-                ) : (
-                  <Save className="w-3.5 h-3.5" />
-                )}
-                <span>
-                  {saveStatus === 'saving' ? '保存中' : saveStatus === 'saved' ? '已保存' : saveStatus === 'error' ? '保存失败' : '保存'}
-                </span>
-              </button>
-            </div>
-          </div>
-        </header>
-
+        <div className="story-os-workspace flex flex-col">
         {/* Main Content */}
         <div className="relative flex-1 flex overflow-hidden">
-          {/* Left Panel - Node List */}
-          <div className="min-w-[200px] max-w-[260px] flex-shrink-0">
-            <NodePanel
-              nodes={nodes}
-              selectedNode={selectedNode}
-              onSelectNode={setSelectedNode}
-              onInsertNode={insertNode}
-              onReorderNodes={reorderNodes}
-              characterColors={characterColors}
-              onJumpToIndex={(i) =>
-                jumpToSentence(currentSceneName, i + 1).catch((e) =>
-                  console.warn('[runtime] jumpToSentence failed:', e),
-                )
-              }
-              onDeleteNode={deleteNode}
-              onCopyNode={copyNode}
-              onCutNode={cutNode}
-              onPasteNode={pasteNode}
-              clipboardNode={clipboardNode}
-              currentSceneName={currentSceneName}
-              availableScenes={projectInfo?.scenes}
-              sceneLinkMap={sceneLinkMap}
-              sceneHeaders={sceneHeaders}
-              onSwitchScene={stableSwitchScene}
-            />
-          </div>
+          <SceneWorldlinePanel
+            scenes={projectInfo?.scenes ?? [currentSceneName]}
+            currentSceneName={currentSceneName}
+            sceneHeaders={sceneHeaders}
+            sceneLinkMap={sceneLinkMap}
+            nodes={nodes}
+            selectedNode={selectedNode}
+            onSelectNode={setSelectedNode}
+            onOpenScene={stableSwitchScene}
+          />
 
-          {/* Center - Detail Panel / Flow Canvas / Script Editor */}
+          {/* Center - Script Command Stream / Script Source */}
           {showScript ? (
             <div className="flex-1 flex flex-col bg-background/50">
               <div className="p-3 border-b border-border flex items-center justify-between">
@@ -1342,210 +1515,64 @@ export function StoryEditor() {
               />
             </div>
           ) : (
-            <>
-              {selectedNode && (
-                <DetailPanel
-                  node={selectedNode}
-                  onUpdateNode={(updates) => updateNode(selectedNode.id, updates)}
-                  onDeleteNode={() => deleteNode(selectedNode.id)}
-                  onClose={() => setSelectedNode(null)}
-                  characterNames={characterNames}
-                  projectPath={projectPath || undefined}
-                  characters={charactersForAi}
-                  projectId={projectId}
-                  suggestedFigureCharacter={suggestedFigureCharacter}
-                />
-              )}
-              {/* Keep FlowCanvas always mounted to preserve scroll position */}
-              <div className={selectedNode ? 'hidden' : 'flex-1 flex overflow-hidden'}>
-                <FlowCanvas
-                  nodes={nodes}
-                  selectedNode={selectedNode}
-                  onSelectNode={setSelectedNode}
-                  onReorderNodes={reorderNodes}
-                  characterColors={characterColors}
-                  onDeleteNode={deleteNode}
-                  onCopyNode={copyNode}
-                  onCutNode={cutNode}
-                  onPasteNode={pasteNode}
-                  clipboardNode={clipboardNode}
-                />
-              </div>
-            </>
+            <ScriptCommandStream
+              nodes={nodes}
+              selectedNode={selectedNode}
+              currentSceneName={currentSceneName}
+              onSelectNode={setSelectedNode}
+              onInsertNode={insertNode}
+            />
           )}
 
-          {/* Right Panel: Scene Manager or AI Chat */}
-          {sceneManagerOpen && projectPath && projectInfo ? (
-            <div className="w-80 border-l border-border flex flex-col">
-              <SceneManagerPanel
-                projectPath={projectPath}
-                projectInfo={projectInfo}
-                currentSceneName={currentSceneName}
-                sceneHeaders={sceneHeaders}
-                onSwitchScene={(name) => { void handleSwitchScene(name); }}
-                onHeaderUpdated={handleHeaderUpdated}
-                onSceneCreated={refreshProjectInfo}
-                onClose={() => setSceneManagerOpen(false)}
+          <AiAssistantPanel
+            aiAgent={aiAgent}
+            projectPath={projectPath}
+            onOpenSettings={() => setAiSettingsOpen(true)}
+            onSend={handleAiSend}
+          />
+
+          {selectedNode && !showScript && (
+            <div className="absolute bottom-0 right-80 top-0 z-30 w-80 border-l border-border bg-surface-container-lowest shadow-[-8px_0_24px_rgba(25,28,30,0.06)]">
+              <DetailPanel
+                node={selectedNode}
+                onUpdateNode={updateSelectedNode}
+                onDeleteNode={deleteSelectedNode}
+                onClose={() => setSelectedNode(null)}
+                characterNames={charactersForAi.map((character) => character.name)}
+                projectPath={projectPath ?? undefined}
+                characters={charactersForAi}
+                projectId={projectId}
               />
             </div>
-          ) : (
-          <div className={`${aiCollapsed ? 'w-10' : 'w-80'} border-l border-border bg-card/30 backdrop-blur-sm flex flex-col transition-[width] duration-200`}>
-            <div className={`${aiCollapsed ? 'p-2 justify-center' : 'p-4'} border-b border-border flex items-center gap-3`}>
-              <button
-                type="button"
-                onClick={() => setAiCollapsed((value) => !value)}
-                className="p-1.5 rounded-md hover:bg-secondary/50 transition-colors"
-                title={aiCollapsed ? '展开 AI 助手' : '折叠 AI 助手'}
-                aria-label={aiCollapsed ? '展开 AI 助手' : '折叠 AI 助手'}
-              >
-                {aiCollapsed ? <PanelRightOpen className="w-4 h-4" /> : <PanelRightClose className="w-4 h-4" />}
+          )}
+        </div>
+
+          <footer className="flex h-10 shrink-0 items-center justify-between border-t border-outline-variant bg-surface-container px-4">
+            <div className="flex h-full items-center gap-6">
+              <button type="button" className="flex h-8 items-center gap-2 rounded-xl bg-tertiary-container/20 px-4 font-bold text-tertiary">
+                <SlidersHorizontal className="h-4 w-4" />
+                <span className="text-xs">时间轴 (Timeline)</span>
               </button>
-              {!aiCollapsed && (
-                <>
-                  <div className="p-2 rounded-full bg-primary/20">
-                    <Sparkles className="w-4 h-4 text-primary" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-sm uppercase tracking-widest text-muted-foreground font-mono-family">
-                      AI 创作助手
-                    </h3>
-                    <div className="mt-1 flex items-center gap-2">
-                      <span className={`h-2 w-2 rounded-full ${
-                        aiAgent.status === 'error' || aiAgent.status === 'conflict'
-                          ? 'bg-destructive'
-                          : aiAgent.status === 'pending'
-                          ? 'bg-primary'
-                          : aiAgent.status === 'accepted'
-                          ? 'bg-chart-5'
-                          : 'bg-muted-foreground/50'
-                      }`} />
-                      <span className="text-[10px] text-muted-foreground">
-                        {aiStatusLabels[aiAgent.status]}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={aiAgent.clearConversation}
-                    disabled={aiAgent.busy}
-                    className="p-1.5 rounded-md hover:bg-secondary/50 transition-colors disabled:opacity-40"
-                    title="清空对话"
-                    aria-label="清空 AI 对话"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </>
-              )}
+              <span className="flex items-center gap-2 text-xs text-on-surface-variant/60">
+                <FileText className="h-4 w-4" />
+                控制台
+              </span>
+              <span className="flex items-center gap-2 text-xs text-on-surface-variant/60">
+                <Layers className="h-4 w-4" />
+                变量表
+              </span>
+              <span className="flex items-center gap-2 text-xs text-on-surface-variant/60">
+                <History className="h-4 w-4" />
+                日志记录
+              </span>
             </div>
-
-            {/* Messages */}
-            {!aiCollapsed && <div ref={aiMessagesListRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-              {aiAgent.hasAssetTruncation && !assetContextNoticeDismissed && (
-                <div className="flex items-start gap-2 rounded-md border border-border bg-secondary/35 px-3 py-2 text-xs text-muted-foreground">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <div className="min-w-0 flex-1">素材库素材过多，AI 上下文中每类仅包含前 24 个，其余素材 AI 暂不可见。</div>
-                  <button
-                    type="button"
-                    onClick={() => setAssetContextNoticeDismissed(true)}
-                    className="rounded p-0.5 hover:bg-secondary"
-                    aria-label="关闭素材提示"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              )}
-              {aiAgent.messages.map((msg) => {
-                const isStreaming = aiAgent.busy && aiAgent.streamingIdRef.current === msg.id;
-                return (
-                  <div
-                    key={msg.id}
-                    className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-                  >
-                    <AiMessageBubble role={msg.role} content={msg.content} isStreaming={isStreaming} stopped={msg.stopped} diff={msg.diff} />
-                  </div>
-                );
-              })}
-              {aiAgent.pendingChange && aiAgent.status !== 'conflict' && (
-                <AiPendingCard
-                  summary={aiAgent.pendingChange.summary}
-                  status={aiAgent.pendingChange.status}
-                  diff={aiAgent.pendingChange.diff}
-                  warnings={aiAgent.pendingChange.warnings}
-                  onAccept={() => { void aiAgent.acceptChange(); }}
-                  onRevert={aiAgent.revertChange}
-                />
-              )}
-              {aiAgent.status === 'missing_assets' && (
-                <MissingAssetCard
-                  issues={aiAgent.missingIssues}
-                  onUseFallback={aiAgent.useFallbackAssets}
-                  onOpenAssets={aiAgent.openAssets}
-                  onRetryPrompt={aiAgent.retryWithExistingAssets}
-                />
-              )}
-              {aiAgent.status === 'conflict' && (
-                <ConflictCard
-                  onKeepManual={aiAgent.revertChange}
-                  onApplyAi={() => { void aiAgent.forceApplyChange(); }}
-                  onRegenerate={aiAgent.regenerateAfterConflict}
-                />
-              )}
-              {aiAgent.error && aiAgent.status === 'error' && (
-                <ErrorCard
-                  message={aiAgent.error.message}
-                  canRetry={aiAgent.error.retryable}
-                  cooldown={aiAgent.cooldown}
-                  showSettings={aiAgent.error.kind === 'auth'}
-                  onRetry={aiAgent.retry}
-                  onOpenSettings={() => setAiSettingsOpen(true)}
-                />
-              )}
-            </div>}
-
-            {/* Input */}
-            {!aiCollapsed && (
-              <AiMemoryPanel
-                memory={aiAgent.memory}
-                disabled={!projectPath}
-                onSave={aiAgent.saveMemory}
-              />
-            )}
-            {!aiCollapsed && <div className="p-3 border-t border-border">
-              <textarea
-                value={aiAgent.input}
-                onChange={(e) => aiAgent.setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleAiSend();
-                  }
-                }}
-                disabled={aiAgent.busy || aiAgent.pendingChange?.status === 'pending'}
-                className="w-full h-20 bg-input-background border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none disabled:opacity-60"
-                placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChange?.status === 'pending' ? '请先接受或撤销当前 AI 修改...' : '输入你的创作想法...'}
-                aria-label="AI 创作输入"
-              />
-              {aiAgent.busy ? (
-                <button
-                  onClick={aiAgent.stop}
-                  className="mt-2 w-full px-3 py-2 rounded-md bg-secondary hover:bg-secondary/70 transition-all flex items-center justify-center gap-2 text-sm"
-                >
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>停止</span>
-                </button>
-              ) : (
-                <button
-                  onClick={handleAiSend}
-                  disabled={!aiAgent.input.trim() || aiAgent.pendingChange?.status === 'pending'}
-                  className="mt-2 w-full px-3 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>发送</span>
-                </button>
-              )}
-            </div>}
-          </div>
-          )}
+            <div className="flex items-center gap-4 text-[10px] text-on-surface-variant/40">
+              <span>{scriptSource.length.toLocaleString()} 字</span>
+              <span>约 {Math.max(1, Math.ceil(scriptSource.length / 380))} 分钟阅读量</span>
+              <span className="h-4 w-px bg-outline-variant/30" />
+              <span>UTF-8 | LF | Engine: WebGAL</span>
+            </div>
+          </footer>
         </div>
 
         <AiSettingsDialog
