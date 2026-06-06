@@ -4,7 +4,7 @@ import { useDrag, useDrop } from 'react-dnd';
 import {
   MessageCircle, GitBranch, Image as ImageIcon, User, Music, Film, Tag,
   ArrowRight, Type, Monitor, Variable, Keyboard, Wand2, Move, Award,
-  GripVertical, ArrowDown, Copy, Scissors, Trash2, Clipboard,
+  GripVertical, ArrowDown, Copy, Scissors, Trash2, Clipboard, ZoomIn, ZoomOut, LocateFixed,
 } from 'lucide-react';
 import type { WebGalNode, WebGalCommandType } from '../lib/webgal-types';
 import { commandLabels, isMetadataComment } from '../lib/webgal-types';
@@ -225,11 +225,11 @@ function FlowNodeCard({
           >
             <div
               className={`
-                px-4 py-3 rounded-lg border backdrop-blur-sm transition-all
+                px-4 py-3 rounded border bg-surface-container-lowest/92 backdrop-blur-sm transition-all
                 ${colors}
                 ${isSelected
-                  ? 'border-primary shadow-[0_0_20px_rgba(212,165,116,0.25)] ring-1 ring-primary/40'
-                  : 'hover:border-primary/40'
+                  ? 'border-secondary shadow-[0_0_0_3px_rgba(116,191,253,0.16)] ring-1 ring-secondary/40'
+                  : 'hover:border-secondary/60'
                 }
               `}
             >
@@ -268,7 +268,7 @@ function FlowNodeCard({
                   </PopoverContent>
                 </Popover>
 
-                <div className={`p-1.5 rounded ${isSelected ? 'bg-primary/20' : 'bg-background/50'}`}>
+                <div className={`rounded border border-border/60 p-1.5 ${isSelected ? 'bg-secondary-container/30 text-secondary' : 'bg-surface-container-lowest text-muted-foreground'}`}>
                   <Icon className="w-4 h-4" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -279,7 +279,7 @@ function FlowNodeCard({
                 </div>
                 {node.type === 'dialogue' && node.character && (
                   <span
-                    className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 flex items-center gap-1 bg-accent/20 text-accent"
+                    className="flex shrink-0 items-center gap-1 rounded border border-border bg-surface-container-low px-1.5 py-0.5 text-[10px] text-secondary"
                     style={characterColors?.[node.character] ? {
                       backgroundColor: `${characterColors[node.character]}20`,
                       color: characterColors[node.character],
@@ -303,7 +303,7 @@ function FlowNodeCard({
               {node.type === 'choose' && node.choices && node.choices.length > 0 && (
                 <div className="mt-2 space-y-1">
                   {node.choices.map((choice, idx) => (
-                    <div key={idx} className="text-xs px-2 py-1 rounded bg-primary/10 text-primary/80 truncate">
+                    <div key={idx} className="truncate rounded border border-tertiary/20 bg-tertiary/5 px-2 py-1 text-xs text-tertiary">
                       → {choice.text}{choice.target ? ` → ${choice.target}` : ''}
                     </div>
                   ))}
@@ -377,7 +377,7 @@ export function FlowCanvas({
 
   return (
     <div
-      className="flex-1 relative overflow-hidden bg-background/50"
+      className="flex-1 relative overflow-hidden bg-surface-container-low"
       onContextMenu={(e) => {
         if ((e.target as HTMLElement).closest('[data-node-item]')) return;
         e.preventDefault();
@@ -403,9 +403,27 @@ export function FlowCanvas({
         });
       }}
     >
-      <div className="absolute inset-0 opacity-30 flow-grid" />
-      <div className="absolute top-0 left-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-0 right-0 w-96 h-96 bg-accent/5 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute inset-0 opacity-70 flow-grid" />
+
+      <div className="absolute left-4 top-4 z-20 flex items-center gap-2 rounded border border-border bg-surface-container-lowest/90 px-3 py-2 backdrop-blur">
+        <GitBranch className="h-4 w-4 text-secondary" />
+        <span className="text-xs font-semibold text-foreground">剧情流程图</span>
+        <span className="h-4 w-px bg-border" />
+        <span className="font-mono-family text-[10px] text-muted-foreground">{nodes.filter(n => !isMetadataComment(n)).length} nodes</span>
+      </div>
+
+      <div className="absolute right-4 top-4 z-20 flex items-center gap-1 rounded border border-border bg-surface-container-lowest/90 p-1 backdrop-blur">
+        <button type="button" className="story-os-icon-button h-7 w-7" aria-label="缩小流程图">
+          <ZoomOut className="h-4 w-4" />
+        </button>
+        <span className="px-2 font-mono-family text-[10px] text-muted-foreground">100%</span>
+        <button type="button" className="story-os-icon-button h-7 w-7" aria-label="放大流程图">
+          <ZoomIn className="h-4 w-4" />
+        </button>
+        <button type="button" className="story-os-icon-button h-7 w-7" aria-label="定位当前节点">
+          <LocateFixed className="h-4 w-4" />
+        </button>
+      </div>
 
       {areaMenu && createPortal(
         <div
@@ -429,7 +447,7 @@ export function FlowCanvas({
         <div className="min-h-full flex flex-col items-center px-6 pt-10 pb-32">
           {nodes.length === 0 ? (
             <div className="m-auto text-center">
-              <div className="text-5xl mb-4 opacity-20">📖</div>
+              <BookOpenFallback />
               <p className="text-lg text-muted-foreground mb-2 font-display-family">
                 开始编织你的故事
               </p>
@@ -478,6 +496,14 @@ export function FlowCanvas({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function BookOpenFallback() {
+  return (
+    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded border border-border bg-surface-container-lowest text-primary">
+      <MessageCircle className="h-7 w-7" />
     </div>
   );
 }
