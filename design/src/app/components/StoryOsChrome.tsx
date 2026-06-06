@@ -197,8 +197,10 @@ export function StoryOsSideNav({ active, projectId, projectLabel = 'ALPHA', onCr
       navigate(`/editor/${projectId}?action=preview`);
     } else if (target === 'build') {
       navigate(`/editor/${projectId}?action=export`);
+    } else if (target === 'world') {
+      navigate(`/editor/${projectId}#worldline`);
     } else {
-      alert('世界线模块尚未接入客户端页面，当前可在场景管理中维护剧本分支。');
+      alert('该模块尚未接入。');
     }
   };
 

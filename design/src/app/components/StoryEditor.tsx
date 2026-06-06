@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -7,6 +7,7 @@ import {
   FileText, FolderOpen, Layers, Check, Loader2, SlidersHorizontal,
   Package, History, MessageCircle, GitBranch, Users, Music, Wand2, ArrowRight,
   GripVertical, MoreHorizontal, Copy, Trash2, Clipboard, Pencil,
+  ZoomIn, ZoomOut, Maximize2, BookOpen, CornerDownRight, Split, StickyNote, Heart, AlertTriangle, Quote, Rocket, Edit,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -170,6 +171,105 @@ interface SceneWorldlinePanelProps {
   onOpenScene: (sceneName: string) => void;
 }
 
+interface WorldNodeLayout {
+  scene: string;
+  column: number;
+  row: number;
+  x: number;
+  y: number;
+  kind: 'start' | 'choice' | 'branch' | 'orphan';
+  outgoing: SceneLink[];
+  incoming: number;
+  isCurrent: boolean;
+  isOrphan: boolean;
+}
+
+const NODE_WIDTH = 168;
+const NODE_HEIGHT = 78;
+const COLUMN_GAP = 96;
+const ROW_GAP = 32;
+const PADDING = 32;
+
+function buildWorldLayout(
+  scenes: string[],
+  currentSceneName: string,
+  sceneLinkMap: Record<string, SceneLink[]>,
+): { nodes: WorldNodeLayout[]; width: number; height: number } {
+  const incomingCount: Record<string, number> = {};
+  for (const links of Object.values(sceneLinkMap)) {
+    for (const link of links) {
+      if (!link.target) continue;
+      incomingCount[link.target] = (incomingCount[link.target] ?? 0) + 1;
+    }
+  }
+
+  const visited = new Set<string>();
+  const columns: string[][] = [];
+  const queue: Array<{ scene: string; depth: number }> = [{ scene: currentSceneName, depth: 0 }];
+  visited.add(currentSceneName);
+
+  while (queue.length) {
+    const { scene, depth } = queue.shift()!;
+    if (!columns[depth]) columns[depth] = [];
+    columns[depth].push(scene);
+    const links = sceneLinkMap[scene] ?? [];
+    for (const link of links) {
+      const target = link.target;
+      if (!target || visited.has(target)) continue;
+      visited.add(target);
+      queue.push({ scene: target, depth: depth + 1 });
+    }
+  }
+
+  const orphanScenes = scenes.filter((s) => s !== currentSceneName && !visited.has(s));
+  if (orphanScenes.length) {
+    const orphanCol = columns.length;
+    columns[orphanCol] = orphanScenes;
+  }
+
+  const layout: WorldNodeLayout[] = [];
+  let maxRows = 0;
+  columns.forEach((column, colIdx) => {
+    if (!column) return;
+    maxRows = Math.max(maxRows, column.length);
+    column.forEach((scene, rowIdx) => {
+      const outgoing = sceneLinkMap[scene] ?? [];
+      const isCurrent = scene === currentSceneName;
+      const outgoingValid = outgoing.filter((l) => l.target);
+      let kind: WorldNodeLayout['kind'] = 'branch';
+      if (isCurrent) kind = 'start';
+      else if (outgoingValid.length >= 2) kind = 'choice';
+      else if (outgoingValid.length === 0) kind = 'orphan';
+      layout.push({
+        scene,
+        column: colIdx,
+        row: rowIdx,
+        x: PADDING + colIdx * (NODE_WIDTH + COLUMN_GAP),
+        y: PADDING + rowIdx * (NODE_HEIGHT + ROW_GAP),
+        kind,
+        outgoing: outgoingValid,
+        incoming: incomingCount[scene] ?? 0,
+        isCurrent,
+        isOrphan: !visited.has(scene) || kind === 'orphan',
+      });
+    });
+  });
+
+  const totalCols = columns.length;
+  const width = PADDING * 2 + totalCols * NODE_WIDTH + Math.max(0, totalCols - 1) * COLUMN_GAP;
+  const height = PADDING * 2 + Math.max(1, maxRows) * NODE_HEIGHT + Math.max(0, maxRows - 1) * ROW_GAP;
+  return { nodes: layout, width, height };
+}
+
+function buildEdgePath(from: WorldNodeLayout, to: WorldNodeLayout): string {
+  const x1 = from.x + NODE_WIDTH;
+  const y1 = from.y + NODE_HEIGHT / 2;
+  const x2 = to.x;
+  const y2 = to.y + NODE_HEIGHT / 2;
+  const midX = (x1 + x2) / 2;
+  return `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+}
+
 function SceneWorldlinePanel({
   scenes,
   currentSceneName,
@@ -181,41 +281,200 @@ function SceneWorldlinePanel({
   onOpenScene,
 }: SceneWorldlinePanelProps) {
   const visibleNodes = nodes.filter((node) => node.type !== 'comment' || node.content?.trim());
-  const outgoing = sceneLinkMap[currentSceneName] ?? [];
-  const worldline = [
-    currentSceneName,
-    ...outgoing.map((link) => link.target).filter(Boolean),
-  ].slice(0, 4);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const { nodes: layout, width, height } = useMemo(
+    () => buildWorldLayout(scenes, currentSceneName, sceneLinkMap),
+    [scenes, currentSceneName, sceneLinkMap],
+  );
+
+  const layoutMap = useMemo(() => {
+    const map = new Map<string, WorldNodeLayout>();
+    for (const n of layout) map.set(n.scene, n);
+    return map;
+  }, [layout]);
+
+  const edges = useMemo(() => {
+    const result: Array<{ from: WorldNodeLayout; to: WorldNodeLayout; active: boolean; label?: string }> = [];
+    for (const node of layout) {
+      for (const link of node.outgoing) {
+        const target = layoutMap.get(link.target);
+        if (!target) continue;
+        result.push({
+          from: node,
+          to: target,
+          active: node.isCurrent,
+          label: link.label,
+        });
+      }
+    }
+    return result;
+  }, [layout, layoutMap]);
+
+  const adjustZoom = useCallback((delta: number) => {
+    setZoom((z) => Math.min(1.4, Math.max(0.5, +(z + delta).toFixed(2))));
+  }, []);
+
+  const resetView = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-worldline-node]')) return;
+      setDragging({ startX: e.clientX, startY: e.clientY, baseX: pan.x, baseY: pan.y });
+    },
+    [pan],
+  );
+
+  const onMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!dragging) return;
+      setPan({ x: dragging.baseX + (e.clientX - dragging.startX), y: dragging.baseY + (e.clientY - dragging.startY) });
+    },
+    [dragging],
+  );
+
+  const onMouseUp = useCallback(() => setDragging(null), []);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const stop = () => setDragging(null);
+    window.addEventListener('mouseup', stop);
+    return () => window.removeEventListener('mouseup', stop);
+  }, [dragging]);
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface-container-lowest">
+    <aside className="flex w-80 shrink-0 flex-col border-r border-border bg-surface-container-lowest">
       <div className="flex h-10 items-center justify-between border-b border-border px-3">
-        <span className="font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">场景关系图</span>
-        <span className="font-mono-family text-[10px] text-muted-foreground">{scenes.length || 1}</span>
+        <span className="flex items-center gap-1.5 font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">
+          <GitBranch className="h-3 w-3 text-secondary" /> 世界线 · 场景关系图
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => adjustZoom(-0.1)}
+            className="story-os-icon-button h-6 w-6"
+            aria-label="缩小世界线"
+            title="缩小"
+          >
+            <ZoomOut className="h-3 w-3" />
+          </button>
+          <span className="min-w-[28px] text-center font-mono-family text-[9px] text-muted-foreground">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={() => adjustZoom(0.1)}
+            className="story-os-icon-button h-6 w-6"
+            aria-label="放大世界线"
+            title="放大"
+          >
+            <ZoomIn className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={resetView}
+            className="story-os-icon-button h-6 w-6"
+            aria-label="重置视图"
+            title="重置视图"
+          >
+            <Maximize2 className="h-3 w-3" />
+          </button>
+        </div>
       </div>
 
-      <div className="border-b border-border p-4">
-        <div className="flex flex-col items-center gap-1">
-          {(worldline.length ? worldline : [currentSceneName]).map((scene, index) => (
-            <div key={`${scene}-${index}`} className="flex flex-col items-center gap-1">
+      <div
+        ref={containerRef}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+        className={`relative h-72 shrink-0 overflow-hidden border-b border-border bg-surface-container-low ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+      >
+        <div className="absolute inset-0 opacity-60 flow-grid pointer-events-none" />
+        <div
+          className="absolute inset-0"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transformOrigin: '0 0',
+            width,
+            height,
+          }}
+        >
+          <svg
+            className="pointer-events-none absolute inset-0"
+            style={{ width, height, overflow: 'visible' }}
+          >
+            {edges.map((edge, idx) => (
+              <path
+                key={`${edge.from.scene}-${edge.to.scene}-${idx}`}
+                d={buildEdgePath(edge.from, edge.to)}
+                fill="none"
+                stroke={edge.active ? 'var(--color-primary, #a43758)' : 'var(--color-outline-variant, #c8c2bf)'}
+                strokeWidth={edge.active ? 2 : 1.5}
+                strokeDasharray={edge.active ? undefined : '4 4'}
+                opacity={edge.active ? 1 : 0.6}
+              />
+            ))}
+          </svg>
+          {layout.map((node) => {
+            const isCurrent = node.isCurrent;
+            const isChoice = node.kind === 'choice';
+            return (
               <button
+                key={node.scene}
                 type="button"
-                onClick={() => onOpenScene(scene)}
-                className={`max-w-44 truncate rounded-full border px-3 py-1 font-mono-family text-[10px] ${
-                  scene === currentSceneName
-                    ? 'border-secondary bg-secondary-container/35 text-secondary'
-                    : 'border-border bg-surface-container text-on-surface-variant hover:border-secondary'
+                data-worldline-node
+                onClick={() => onOpenScene(node.scene)}
+                style={{ left: node.x, top: node.y, position: 'absolute', width: NODE_WIDTH, height: NODE_HEIGHT, zIndex: isCurrent ? 3 : 1 }}
+                className={`flex flex-col rounded border bg-surface-container-lowest px-2.5 py-1.5 text-left shadow-sm transition-colors ${
+                  isCurrent
+                    ? 'border-primary ring-2 ring-primary/30'
+                    : isChoice
+                      ? 'border-primary/40 hover:border-primary'
+                      : node.isOrphan
+                        ? 'border-dashed border-outline-variant/40 opacity-70 hover:opacity-100'
+                        : 'border-outline-variant/40 hover:border-secondary'
                 }`}
-                title={scene}
+                title={node.scene}
               >
-                {scene.replace(/\.txt$/, '')}
+                <div className="flex items-center gap-1">
+                  {isCurrent ? (
+                    <BookOpen className="h-3 w-3 text-primary" />
+                  ) : isChoice ? (
+                    <Split className="h-3 w-3 text-primary" />
+                  ) : (
+                    <CornerDownRight className="h-3 w-3 text-on-surface-variant" />
+                  )}
+                  <span className="truncate font-mono-family text-[9px] uppercase tracking-widest text-on-surface-variant">
+                    {isCurrent ? '当前' : isChoice ? `选择点 · ${node.outgoing.length}` : sceneHeaders[node.scene]?.chapter || '场景'}
+                  </span>
+                  {node.incoming > 0 && (
+                    <span className="ml-auto rounded bg-secondary-container/30 px-1 font-mono text-[8px] text-secondary">
+                      ←{node.incoming}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 truncate font-display-family text-xs font-semibold text-foreground">
+                  {sceneHeaders[node.scene]?.chapter?.replace(/[;：:]\s.*$/, '').trim() || node.scene.replace(/\.txt$/, '')}
+                </div>
+                <div className="truncate font-mono text-[9px] text-muted-foreground">
+                  {node.scene}
+                </div>
               </button>
-              {index < worldline.length - 1 && <ArrowRight className="h-3.5 w-3.5 rotate-90 text-muted-foreground/60" />}
-            </div>
-          ))}
+            );
+          })}
         </div>
-        {outgoing.length === 0 && (
-          <p className="mt-3 text-center text-[10px] leading-relaxed text-muted-foreground">当前场景暂无跳转，选择分支会在这里形成世界线。</p>
+        {layout.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center text-center text-[10px] text-muted-foreground">
+            加载世界线…
+          </div>
         )}
       </div>
 
