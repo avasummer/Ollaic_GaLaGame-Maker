@@ -24,6 +24,7 @@ import {
   Loader2,
   AlertTriangle,
   Copy,
+  X,
 } from 'lucide-react';
 import {
   listAssets,
@@ -50,6 +51,7 @@ import {
 } from '../lib/asset-metadata';
 import { listCharacters } from '../lib/character-ipc';
 import { CharacterPanel } from './CharacterPanel';
+import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
 
 type TabId = 'scene' | 'music' | 'character';
 type MusicCategory = 'bgm' | 'sfx' | 'vocal';
@@ -537,133 +539,107 @@ export function AssetManager() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm">
-        <div className="px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => navigate(`/editor/${projectId}`)}
-              className="p-2 rounded-md hover:bg-secondary/50 transition-colors"
-              aria-label="返回编辑器"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-            <div className="h-6 w-px bg-border" />
-            <h1 className="text-3xl tracking-tight font-display-family">
-              素材库
-            </h1>
-            {projectPath && (
-              <span className="text-xs text-muted-foreground truncate max-w-xs font-mono-family">
-                {projectPath}
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => {
-                if (activeTab === 'character') {
-                  setCharacterGenerationRequestToken((value) => value + 1);
-                  return;
-                }
-                alert(`${aiActionLabel} 即将推出`);
-              }}
-              className="px-4 py-2 rounded-md bg-primary/10 text-primary flex items-center gap-2 hover:bg-primary/20 transition-all border border-primary/30"
-            >
-              <Sparkles className="w-4 h-4" />
-              <span>{aiActionLabel}</span>
-            </button>
-            {importConfig && (
-              <button
-                onClick={handleImport}
-                disabled={!projectPath || importing}
-                className="px-4 py-2 rounded-md bg-primary text-primary-foreground flex items-center gap-2 hover:opacity-90 transition-all hover:shadow-[0_0_20px_rgba(212,165,116,0.4)] disabled:opacity-50"
-              >
-                {importing ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Upload className="w-4 h-4" />
-                )}
-                <span>{importing ? '导入中…' : importConfig.buttonLabel}</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
+    <div className="h-full story-shell">
+      <StoryOsTopBar
+        title="素材库"
+        onRun={() => navigate(`/editor/${projectId}?action=preview`)}
+        onPublish={() => navigate(`/editor/${projectId}?action=export`)}
+      />
+      <StoryOsSideNav
+        active={activeTab === 'character' ? 'characters' : 'assets'}
+        projectId={projectId}
+        projectLabel={projectPath ? projectPath.split('/').pop() : 'ALPHA'}
+        onCreate={handleImport}
+      />
 
       {!projectPath ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
+        <div className="story-os-workspace flex items-center justify-center text-muted-foreground">
           <div className="text-center">
             <AlertTriangle className="w-12 h-12 mx-auto mb-3 opacity-40" />
             <p>未找到项目路径，请从编辑器重新进入素材库</p>
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex overflow-hidden">
-          {/* Left Sidebar */}
-          <aside className="w-64 border-r border-border bg-card/30 flex flex-col">
-            <div className="p-4 border-b border-border">
-              <h2 className="text-sm uppercase tracking-wide text-muted-foreground mb-3 font-mono-family">
-                素材类型
-              </h2>
-              <div className="space-y-1">
-                {tabConfig.map(({ id, label, icon: Icon }) => (
-                  <button
-                    key={id}
-                    onClick={() => { setActiveTab(id); setSelectedAsset(null); }}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-md transition-all ${
-                      activeTab === id
-                        ? 'bg-primary/20 text-primary border border-primary/30'
-                        : 'hover:bg-secondary/50 text-foreground'
-                    }`}
-                    aria-label={`筛选${label}`}
-                  >
-                    <Icon className="w-4 h-4" />
-                    <span>{label}</span>
-                    <span className="ml-auto text-xs text-muted-foreground">
-                      {tabCounts[id]}
-                    </span>
-                  </button>
-                ))}
-              </div>
+        <div className="story-os-workspace flex bg-surface-container-lowest">
+          <main className="flex-1 flex flex-col overflow-hidden bg-surface">
+            <div className="flex h-12 items-end gap-1 border-b border-border bg-surface-container-low px-4 pt-2">
+              <button
+                onClick={() => navigate(`/editor/${projectId}`)}
+                className="story-os-command mb-1 mr-2 text-muted-foreground"
+                aria-label="返回编辑器"
+              >
+                <ArrowLeft className="mr-1 inline h-3.5 w-3.5" />
+                编辑器
+              </button>
+              {tabConfig.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => { setActiveTab(id); setSelectedAsset(null); }}
+                  className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold tracking-wide transition-colors ${
+                    activeTab === id
+                      ? 'story-os-layered-tab-active text-foreground'
+                      : 'rounded-t text-muted-foreground hover:bg-surface-container-highest hover:text-foreground'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                  <span className="rounded border border-border px-1 text-[10px] text-muted-foreground">{tabCounts[id]}</span>
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  if (activeTab === 'character') {
+                    setCharacterGenerationRequestToken((value) => value + 1);
+                    return;
+                  }
+                  alert(`${aiActionLabel} 即将推出`);
+                }}
+                className="story-os-command mb-1 ml-auto border-primary/30 bg-primary/10 text-primary"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {aiActionLabel}
+              </button>
+              {importConfig && (
+                <button
+                  onClick={handleImport}
+                  disabled={!projectPath || importing}
+                  className="story-os-command story-os-command-primary story-os-chamfer-tr mb-1 disabled:opacity-50"
+                >
+                  {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                  {importing ? '导入中...' : importConfig.buttonLabel}
+                </button>
+              )}
             </div>
-
-            <div className="p-4">
-              <h3 className="text-sm uppercase tracking-wide text-muted-foreground mb-3 font-mono-family">
-                快捷操作
-              </h3>
-              <div className="space-y-1">
-                <button
-                  onClick={() => alert('文件夹浏览即将推出')}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-secondary/50 transition-colors"
-                  aria-label="浏览所有文件夹"
-                >
-                  <FolderOpen className="w-4 h-4" />
-                  <span>所有文件夹</span>
-                </button>
-                <button
-                  onClick={() => alert('标签管理即将推出')}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-secondary/50 transition-colors"
-                  aria-label="管理素材标签"
-                >
-                  <Tag className="w-4 h-4" />
-                  <span>标签管理</span>
-                </button>
-                <button
-                  onClick={() => alert('筛选器即将推出')}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-secondary/50 transition-colors"
-                  aria-label="使用筛选器筛选素材"
-                >
-                  <Filter className="w-4 h-4" />
-                  <span>筛选器</span>
-                </button>
-              </div>
+            <div className="flex h-10 items-center gap-2 border-b border-border bg-surface-container-lowest px-4">
+              <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
+                {projectPath}
+              </span>
+              <button
+                onClick={() => alert('文件夹浏览即将推出')}
+                className="story-os-command"
+                aria-label="浏览所有文件夹"
+              >
+                <FolderOpen className="mr-1 inline h-3.5 w-3.5" />
+                所有文件夹
+              </button>
+              <button
+                onClick={() => alert('标签管理即将推出')}
+                className="story-os-command"
+                aria-label="管理素材标签"
+              >
+                <Tag className="mr-1 inline h-3.5 w-3.5" />
+                标签管理
+              </button>
+              <button
+                onClick={() => alert('筛选器即将推出')}
+                className="story-os-command"
+                aria-label="使用筛选器筛选素材"
+              >
+                <Filter className="mr-1 inline h-3.5 w-3.5" />
+                筛选器
+              </button>
             </div>
-          </aside>
-
-          {/* Main Content */}
-          <main className="flex-1 flex flex-col overflow-hidden">
             {activeTab === 'character' ? (
               <CharacterPanel
                 projectPath={projectPath}
@@ -675,7 +651,7 @@ export function AssetManager() {
             ) : (
               <>
             {/* Toolbar */}
-            <div className="px-6 py-4 border-b border-border bg-card/20 flex items-center justify-between gap-4">
+            <div className="px-4 py-3 border-b border-border bg-surface-container-lowest flex items-center justify-between gap-4">
               <div className="flex items-center gap-4 flex-1">
                 {activeTab === 'music' && (
                   <div className="flex items-center gap-1 bg-secondary/50 rounded-md p-1 flex-shrink-0">
@@ -700,7 +676,7 @@ export function AssetManager() {
                     placeholder="搜索素材名称..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    className="w-full pl-10 pr-4 py-2 bg-input-background border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/50"
                   />
                 </div>
               </div>
@@ -739,7 +715,7 @@ export function AssetManager() {
             )}
 
             {/* Assets Display */}
-            <div className="flex-1 overflow-auto p-6">
+            <div className="flex-1 overflow-auto p-4">
               {loading ? (
                 <div className="h-full flex items-center justify-center">
                   <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -766,13 +742,13 @@ export function AssetManager() {
                       <div
                         key={asset.path}
                         onClick={() => setSelectedAsset(asset)}
-                        className={`group relative rounded-lg overflow-hidden cursor-pointer transition-all hover:scale-[1.02] ${
+                        className={`story-os-interactive group relative cursor-pointer overflow-hidden rounded border bg-surface-container-low ${
                           isSelected
-                            ? 'ring-2 ring-primary shadow-[0_0_20px_rgba(212,165,116,0.3)]'
-                            : 'hover:ring-1 hover:ring-border'
+                            ? 'border-secondary ring-1 ring-secondary story-os-hard-shadow'
+                            : 'border-border hover:border-secondary'
                         }`}
                       >
-                        <div className={`${activeTab === 'scene' ? 'aspect-video' : 'aspect-square'} bg-secondary/30 relative overflow-hidden`}>
+                        <div className={`${activeTab === 'scene' ? 'aspect-video' : 'aspect-square'} story-os-blueprint bg-surface-dim relative overflow-hidden`}>
                           {thumbnail ? (
                             <img
                               src={thumbnail}
@@ -822,7 +798,7 @@ export function AssetManager() {
                             </div>
                           </div>
                         </div>
-                        <div className="p-3 bg-card border-t border-border">
+                        <div className="p-2 bg-surface-container-lowest border-t border-border">
                           <h3 className="text-sm font-medium truncate mb-1">{aliasForAsset(asset) || asset.name}</h3>
                           {aliasForAsset(asset) && (
                             <div className="mb-1 truncate text-[11px] text-muted-foreground font-mono-family">{asset.name}</div>
@@ -871,10 +847,10 @@ export function AssetManager() {
                       <div
                         key={asset.path}
                         onClick={() => setSelectedAsset(asset)}
-                        className={`flex items-center gap-4 p-4 rounded-lg cursor-pointer transition-all ${
+                        className={`story-os-interactive flex cursor-pointer items-center gap-4 rounded border p-4 ${
                           isSelected
-                            ? 'bg-primary/10 ring-1 ring-primary'
-                            : 'bg-card/50 hover:bg-card'
+                            ? 'bg-secondary/10 border-secondary'
+                            : 'bg-surface-container-lowest border-border hover:border-secondary'
                         }`}
                       >
                         <div className="w-16 h-16 rounded overflow-hidden bg-secondary/30 flex-shrink-0">
@@ -949,11 +925,18 @@ export function AssetManager() {
 
           {/* Right Sidebar - Details */}
           {activeTab !== 'character' && (
-          <aside className="w-80 border-l border-border bg-card/30 overflow-auto">
+          <aside className="my-4 mr-4 w-80 overflow-hidden rounded border border-border bg-surface-bright/90 shadow-[-4px_0_24px_rgba(0,0,0,0.02)] backdrop-blur-xl">
             {selectedAsset ? (
-              <div className="p-6">
+              <div className="h-full overflow-auto">
+                <div className="flex h-10 items-center justify-between border-b border-border bg-surface-container-high px-4">
+                  <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">属性检视器</span>
+                  <button type="button" onClick={() => setSelectedAsset(null)} className="text-muted-foreground hover:text-foreground" aria-label="关闭素材详情">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              <div className="p-4">
                 <div className="mb-6">
-                  <div className="aspect-video rounded-lg overflow-hidden bg-secondary/30 mb-4">
+                  <div className="story-os-blueprint story-os-hard-shadow aspect-video rounded overflow-hidden bg-surface-dim mb-4 border border-border">
                     {getThumbnail(selectedAsset) ? (
                       <img
                         src={getThumbnail(selectedAsset)!}
@@ -1003,16 +986,16 @@ export function AssetManager() {
                     <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
                       文件信息
                     </label>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
+                    <div className="space-y-0 text-sm">
+                      <div className="flex justify-between border-b border-border/40 py-2">
                         <span className="text-muted-foreground">类型</span>
                         <span>{formatCategory(selectedAsset.category)}</span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex justify-between border-b border-border/40 py-2">
                         <span className="text-muted-foreground">格式</span>
                         <span>{selectedAsset.extension.toUpperCase()}</span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex justify-between border-b border-border/40 py-2">
                         <span className="text-muted-foreground">大小</span>
                         <span>{formatSize(selectedAsset.size)}</span>
                       </div>
@@ -1144,6 +1127,7 @@ export function AssetManager() {
                     删除素材
                   </button>
                 </div>
+              </div>
               </div>
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-6 text-center">
