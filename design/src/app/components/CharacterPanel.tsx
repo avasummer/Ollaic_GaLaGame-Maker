@@ -412,15 +412,16 @@ export function CharacterPanel({
   }, [generationRequestToken, triggerBatchSpriteGeneration]);
 
   return (
-    <div className={containerClass}>
-      <div className="p-4 border-b border-border flex items-center justify-between">
+    <div className={`${containerClass} story-os-blueprint bg-surface-container-lowest`}>
+      <div className="h-12 border-b border-border bg-surface-container-lowest px-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-full bg-primary/20">
+          <div className="story-os-chamfer-tr p-2 rounded bg-primary/15 border border-primary/30">
             <Users className="w-4 h-4 text-primary" />
           </div>
-          <h3 className="text-sm uppercase tracking-widest text-muted-foreground font-mono-family">
-            人物管理
-          </h3>
+          <div>
+            <h3 className="text-xs uppercase tracking-widest text-primary font-bold">角色空间</h3>
+            <div className="text-[10px] text-muted-foreground">Character node matrix</div>
+          </div>
         </div>
         <div className="flex items-center gap-1">
           {onClose && (
@@ -444,11 +445,11 @@ export function CharacterPanel({
         </div>
       ) : (
         <div className="flex-1 min-h-0 flex overflow-hidden">
-          <aside className={`${embedded ? 'w-80' : 'w-52'} border-r border-border bg-card/20 flex flex-col`}>
-            <div className="p-3 border-b border-border">
+          <aside className={`${embedded ? 'w-72' : 'w-56'} border-r border-border bg-surface-bright/85 backdrop-blur flex flex-col`}>
+            <div className="p-3 border-b border-border bg-surface-container-low">
               <button
                 onClick={handleCreate}
-                className="mb-3 w-full px-3 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-colors text-sm flex items-center justify-center gap-2"
+                className="story-os-chamfer-tr mb-3 w-full px-3 py-2 rounded bg-primary text-primary-foreground hover:opacity-90 transition-colors text-sm flex items-center justify-center gap-2"
               >
                 <Plus className="w-4 h-4" />
                 添加新角色
@@ -476,8 +477,8 @@ export function CharacterPanel({
                 return (
                   <div
                     key={ch.id}
-                    className={`rounded-md border transition-all ${
-                      active ? 'border-primary/40 bg-primary/10' : 'border-border/60 bg-card/30'
+                    className={`rounded border transition-all ${
+                      active ? 'border-secondary bg-secondary/10 story-os-hard-shadow' : 'border-border/60 bg-surface-container-lowest/80'
                     }`}
                   >
                     <button
@@ -537,7 +538,24 @@ export function CharacterPanel({
             </div>
           </aside>
 
-          <main className="flex-1 min-w-0 overflow-y-auto">
+          <main className="relative flex-1 min-w-0 overflow-y-auto">
+            {selected && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden opacity-40">
+                <div className="relative h-[78%] w-full max-w-2xl rounded-t-[220px] border border-dashed border-primary/30 bg-primary/5">
+                  <svg className="mx-auto h-full max-h-[620px] fill-none stroke-primary/45" strokeWidth="0.5" viewBox="0 0 400 600" aria-hidden="true">
+                    <path d="M200,50 C150,50 120,100 120,150 C120,200 150,250 200,250 C250,250 280,200 280,150 C280,100 250,50 200,50 Z" />
+                    <path d="M120,250 C80,250 50,400 50,600 L350,600 C350,400 320,250 280,250" />
+                    <line strokeDasharray="2,2" x1="50" x2="350" y1="300" y2="300" />
+                    <line strokeDasharray="2,2" x1="50" x2="350" y1="450" y2="450" />
+                    <line strokeDasharray="2,2" x1="200" x2="200" y1="50" y2="600" />
+                  </svg>
+                  <div className="absolute bottom-1/4 left-0 border-l-2 border-primary pl-2 text-primary">
+                    <div className="text-[10px] uppercase opacity-70">Node ID</div>
+                    <div className="text-xs font-semibold">{selected.id}</div>
+                  </div>
+                </div>
+              </div>
+            )}
             {!selected ? (
               <div className="h-full flex flex-col items-center justify-center gap-3 text-muted-foreground">
                 <Users className="w-12 h-12 opacity-40" />
@@ -550,8 +568,8 @@ export function CharacterPanel({
                 </button>
               </div>
             ) : mode === 'info' ? (
-              <div className="p-4 space-y-4 max-w-5xl">
-                <section className="rounded-md border border-border bg-card/30 p-4">
+              <div className="relative z-10 p-4 space-y-4 max-w-5xl">
+                <section className="story-os-panel p-4">
                   <h4 className="mb-3 text-xs uppercase tracking-wide text-muted-foreground font-mono-family">基本信息</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
@@ -653,7 +671,7 @@ export function CharacterPanel({
                   </div>
                 </section>
 
-                <section className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-md border border-border bg-card/30 p-4">
+                <section className="story-os-panel grid grid-cols-1 md:grid-cols-2 gap-3 p-4">
                   <h4 className="md:col-span-2 text-xs uppercase tracking-wide text-muted-foreground font-mono-family">语音设置</h4>
                   <div>
                     <label className={labelClass}>默认语音</label>
@@ -676,7 +694,7 @@ export function CharacterPanel({
                   </div>
                 </section>
 
-                <section className="space-y-2 rounded-md border border-border bg-card/30 p-4">
+                <section className="story-os-panel space-y-2 p-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">人物关系</h4>
                     <button
@@ -721,7 +739,7 @@ export function CharacterPanel({
                   ))}
                 </section>
 
-                <section className="rounded-md border border-border bg-card/30 p-4">
+                <section className="story-os-panel p-4">
                   <label className={labelClass}>备注</label>
                   <textarea
                     value={selected.notes}
@@ -731,8 +749,8 @@ export function CharacterPanel({
                 </section>
               </div>
             ) : (
-              <div className="p-4 space-y-4 max-w-6xl">
-                <section className="rounded-md border border-border bg-card/30 p-4">
+              <div className="relative z-10 p-4 space-y-4 max-w-6xl">
+                <section className="story-os-panel p-4">
                   <div className="mb-3 flex items-center justify-between">
                     <div>
                       <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">主体立绘素材</h4>
@@ -812,7 +830,7 @@ export function CharacterPanel({
                   </div>
                 </section>
 
-                <section className="rounded-md border border-border bg-card/30 p-4">
+                <section className="story-os-panel p-4">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
                       <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">立绘素材库</h4>
@@ -884,7 +902,7 @@ export function CharacterPanel({
                   )}
                 </section>
 
-                <section className="rounded-md border border-border bg-card/30 p-4">
+                <section className="story-os-panel p-4">
                   <div className="mb-3 flex items-center justify-between">
                     <div>
                       <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">剧本分析出的形态与表情</h4>
@@ -950,7 +968,7 @@ export function CharacterPanel({
                   </div>
                 </section>
 
-                <section className="space-y-2 rounded-md border border-border bg-card/30 p-4">
+                <section className="story-os-panel space-y-2 p-4">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">立绘结果与映射</h4>
                     <button
@@ -1017,7 +1035,7 @@ export function CharacterPanel({
                   </div>
                 </section>
 
-                <section className="rounded-md border border-border bg-card/30 p-4">
+                <section className="story-os-panel p-4">
                   <button
                     type="button"
                     onClick={() => setUsageOpen((value) => !value)}
