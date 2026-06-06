@@ -342,6 +342,30 @@ export function FlowCanvas({
   const scrollRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [areaMenu, setAreaMenu] = useState<{ x: number; y: number; atIndex: number } | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [zoomTick, setZoomTick] = useState(0);
+
+  const adjustZoom = useCallback((delta: number) => {
+    setZoom((current) => {
+      const next = Math.min(1.6, Math.max(0.5, +(current + delta).toFixed(2)));
+      setZoomTick((t) => t + 1);
+      return next;
+    });
+  }, []);
+
+  const centerOnSelected = useCallback(() => {
+    setZoomTick((t) => t + 1);
+    if (!selectedNode || !scrollRef.current) return;
+    const card = cardRefs.current[selectedNode.id];
+    if (!card) return;
+    const container = scrollRef.current;
+    const targetTop = card.offsetTop - container.clientHeight / 2 + card.offsetHeight / 2;
+    container.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+  }, [selectedNode]);
+
+  const handleNewBranch = useCallback(() => {
+    onPasteNode?.(-1);
+  }, [onPasteNode]);
 
   useEffect(() => {
     if (!areaMenu) return;
@@ -413,15 +437,46 @@ export function FlowCanvas({
       </div>
 
       <div className="absolute right-4 top-4 z-20 flex items-center gap-1 rounded border border-border bg-surface-container-lowest/90 p-1 backdrop-blur">
-        <button type="button" className="story-os-icon-button h-7 w-7" aria-label="缩小流程图">
+        <button
+          type="button"
+          onClick={() => adjustZoom(-0.1)}
+          className="story-os-icon-button h-7 w-7"
+          aria-label="缩小流程图"
+        >
           <ZoomOut className="h-4 w-4" />
         </button>
-        <span className="px-2 font-mono-family text-[10px] text-muted-foreground">100%</span>
-        <button type="button" className="story-os-icon-button h-7 w-7" aria-label="放大流程图">
+        <span className="min-w-[36px] text-center font-mono-family text-[10px] text-muted-foreground">
+          {Math.round(zoom * 100)}%
+        </span>
+        <button
+          type="button"
+          onClick={() => adjustZoom(0.1)}
+          className="story-os-icon-button h-7 w-7"
+          aria-label="放大流程图"
+        >
           <ZoomIn className="h-4 w-4" />
         </button>
-        <button type="button" className="story-os-icon-button h-7 w-7" aria-label="定位当前节点">
+        <button
+          type="button"
+          onClick={centerOnSelected}
+          className="story-os-icon-button h-7 w-7"
+          aria-label="定位当前节点"
+          title="定位当前节点"
+        >
           <LocateFixed className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="absolute bottom-4 left-4 z-20 flex flex-col gap-2">
+        <button
+          type="button"
+          onClick={handleNewBranch}
+          className="story-os-chamfer-tr flex items-center gap-1 rounded bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-md hover:opacity-90"
+          title="新建分支"
+          aria-label="新建分支"
+        >
+          <GitBranch className="h-3.5 w-3.5" />
+          新建分支
         </button>
       </div>
 
@@ -444,7 +499,10 @@ export function FlowCanvas({
         document.body,
       )}
       <div ref={scrollRef} className="relative size-full overflow-auto scroll-pb-32">
-        <div className="min-h-full flex flex-col items-center px-6 pt-10 pb-32">
+        <div
+          className="min-h-full flex flex-col items-center px-6 pt-10 pb-32 transition-transform"
+          style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+        >
           {nodes.length === 0 ? (
             <div className="m-auto text-center">
               <BookOpenFallback />
