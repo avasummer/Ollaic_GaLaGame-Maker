@@ -16,13 +16,6 @@ export const router = createHashRouter([
     },
   },
   {
-    path: "/editor/:projectId/world",
-    lazy: async () => {
-      const mod = await import("./components/WorldLineView");
-      return { Component: mod.default };
-    },
-  },
-  {
     path: "/editor/:projectId/assets",
     lazy: async () => {
       const { AssetManager } = await import("./components/AssetManager");
