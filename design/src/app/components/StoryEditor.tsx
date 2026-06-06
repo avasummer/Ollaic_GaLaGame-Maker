@@ -6,6 +6,7 @@ import {
   Save, Image, Search, Plus, Send, X,
   FileText, FolderOpen, Layers, Check, Loader2, SlidersHorizontal,
   Package, History, MessageCircle, GitBranch, Users, Music, Wand2, ArrowRight,
+  GripVertical, MoreHorizontal, Copy, Trash2, Clipboard, Pencil,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -43,7 +44,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './ui/alert-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
+import { PerformanceTimeline } from './PerformanceTimeline';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -386,6 +395,10 @@ interface ScriptCommandStreamProps {
   currentSceneName: string;
   onSelectNode: (node: WebGalNode) => void;
   onInsertNode: (type: WebGalCommandType, atIndex: number) => void;
+  onDeleteNode?: (nodeId: string) => void;
+  onCopyNode?: (nodeId: string) => void;
+  onJumpToIndex?: (index: number) => void;
+  searchQuery?: string;
 }
 
 function ScriptCommandStream({
@@ -394,7 +407,24 @@ function ScriptCommandStream({
   currentSceneName,
   onSelectNode,
   onInsertNode,
+  onDeleteNode,
+  onCopyNode,
+  onJumpToIndex,
+  searchQuery,
 }: ScriptCommandStreamProps) {
+  const query = searchQuery?.trim().toLowerCase() ?? '';
+  const visibleNodes = query
+    ? nodes
+        .map((node, index) => ({ node, index }))
+        .filter(({ node }) => {
+          const haystack = [node.type, node.character, node.content, node.asset, node.voice]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          return haystack.includes(query);
+        })
+    : nodes.map((node, index) => ({ node, index }));
+
   return (
     <section className="relative flex min-w-0 flex-1 flex-col bg-[#F7F9FC]">
       <div className="pointer-events-none absolute inset-0 opacity-[0.03] story-os-dot-grid" />
@@ -408,8 +438,12 @@ function ScriptCommandStream({
           </div>
           <span className="truncate text-[10px] text-muted-foreground">{currentSceneName}</span>
         </div>
-        <div className="flex gap-2 text-on-surface-variant/50">
-          <Search className="h-4 w-4" />
+        <div className="flex items-center gap-3 text-on-surface-variant/50">
+          {query && (
+            <span className="rounded-full bg-primary-container/40 px-2 py-0.5 text-[10px] font-semibold text-primary">
+              {visibleNodes.length} / {nodes.length}
+            </span>
+          )}
           <SlidersHorizontal className="h-4 w-4" />
         </div>
       </div>
@@ -424,7 +458,12 @@ function ScriptCommandStream({
               添加第一句对白
             </button>
           </div>
-        ) : nodes.map((node, index) => {
+        ) : visibleNodes.length === 0 ? (
+          <div className="flex min-h-[240px] flex-col items-center justify-center gap-2 border border-dashed border-outline-variant/40 bg-surface-bright p-6 text-center text-muted-foreground">
+            <Search className="h-6 w-6 opacity-50" />
+            <div className="text-sm">没有匹配 “{query}” 的指令</div>
+          </div>
+        ) : visibleNodes.map(({ node, index }) => {
           const Icon = commandIconFor(node.type);
           const selected = selectedNode?.id === node.id;
           const isDialogue = node.type === 'dialogue';
@@ -437,7 +476,7 @@ function ScriptCommandStream({
             ? 'bg-tertiary text-on-tertiary'
             : 'bg-primary text-on-primary';
           return (
-            <div key={node.id} className="group flex gap-4">
+            <div key={node.id} className="group flex gap-3">
               <div className="flex w-12 shrink-0 flex-col items-center pt-2">
                 <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-[10px] font-bold ${
                   selected ? 'border-primary text-primary' : 'border-outline-variant/30 text-on-surface-variant/40'
@@ -446,68 +485,123 @@ function ScriptCommandStream({
                 </div>
                 <div className="my-2 w-px flex-1 bg-outline-variant/20" />
               </div>
-              <button
-                type="button"
-                onClick={() => onSelectNode(node)}
-                className={`relative w-full max-w-3xl overflow-hidden border p-4 text-left shadow-sm transition-all ${
+              <div
+                className={`relative w-full max-w-3xl overflow-hidden border shadow-sm transition-all ${
                   isBranch
                     ? `border-2 bg-tertiary/5 ${selected ? 'border-tertiary' : 'border-tertiary/30'} story-os-chamfer-tr`
                     : `bg-surface-bright ${selected ? 'border-primary ring-1 ring-primary/20' : 'border-outline-variant/40 hover:border-secondary'}`
                 }`}
               >
-                <div className={`absolute right-0 top-0 px-2 py-1 text-[9px] uppercase tracking-tight ${tagClass}`}>{tag}</div>
+                <button
+                  type="button"
+                  onClick={() => onSelectNode(node)}
+                  className="w-full p-4 text-left"
+                >
+                  <div className={`absolute right-0 top-0 px-2 py-1 text-[9px] uppercase tracking-tight ${tagClass}`}>{tag}</div>
 
-                {isBackground ? (
-                  <div className="flex items-center gap-4">
-                    <div className="flex h-16 w-24 shrink-0 items-center justify-center border border-outline-variant/20 bg-surface-container-highest">
-                      <Image className="h-5 w-5 text-on-surface-variant/30" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="mb-1 font-bold text-secondary">设置背景: {node.asset || node.content || '未选择背景'}</p>
-                      <p className="text-sm italic text-on-surface-variant/70">过度效果: 交叉溶解 (2.0s)</p>
-                    </div>
-                  </div>
-                ) : isDialogue ? (
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-container/20">
-                      <Users className="h-5 w-5 text-primary" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span className="font-bold text-primary">{node.character || '未指定角色'}</span>
-                        <span className="text-[10px] text-on-surface-variant/40">[ 默认 ]</span>
+                  {isBackground ? (
+                    <div className="flex items-center gap-4">
+                      <div className="flex h-16 w-24 shrink-0 items-center justify-center border border-outline-variant/20 bg-surface-container-highest">
+                        <Image className="h-5 w-5 text-on-surface-variant/30" />
                       </div>
-                      <div className="border-l-4 border-primary/30 bg-surface-container-low/50 p-3 text-base leading-relaxed text-on-surface">
-                        “{node.content || '……'}”
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {node.voice && <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">语音: {node.voice}</span>}
-                        <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">表情: default</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="mb-1 font-bold text-secondary">设置背景: {node.asset || node.content || '未选择背景'}</p>
+                        <p className="text-sm italic text-on-surface-variant/70">过度效果: 交叉溶解 (2.0s)</p>
                       </div>
                     </div>
-                  </div>
-                ) : isBranch ? (
-                  <>
-                    <div className="mb-4 flex items-center gap-2">
-                      <GitBranch className="h-4 w-4 text-tertiary" />
-                      <span className="font-bold text-tertiary">抉择分支: {node.content || '剧情选择'}</span>
-                    </div>
-                    <div className="space-y-2">
-                      {(node.choices?.length ? node.choices : [{ text: getCommandSummary(node), target: '@next' }]).map((choice, choiceIndex) => (
-                        <div key={`${node.id}-${choiceIndex}`} className="flex items-center justify-between border border-tertiary/20 bg-surface-bright p-2 text-sm">
-                          <span>{choiceIndex + 1}. {choice.text}</span>
-                          <span className="text-[10px] text-tertiary">跳转至: {choice.target}</span>
+                  ) : isDialogue ? (
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-container/20">
+                        <Users className="h-5 w-5 text-primary" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-2 flex items-center gap-2">
+                          <span className="font-bold text-primary">{node.character || '未指定角色'}</span>
+                          <span className="text-[10px] text-on-surface-variant/40">[ 默认 ]</span>
                         </div>
-                      ))}
+                        <div className="border-l-4 border-primary/30 bg-surface-container-low/50 p-3 text-base leading-relaxed text-on-surface">
+                          “{node.content || '……'}”
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {node.voice && <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">语音: {node.voice}</span>}
+                          <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">表情: default</span>
+                        </div>
+                      </div>
                     </div>
-                  </>
-                ) : (
-                  <div className="flex items-center gap-3">
-                    <Icon className="h-5 w-5 shrink-0 text-primary" />
-                    <span className="min-w-0 truncate text-sm">{getCommandSummary(node)}</span>
-                  </div>
-                )}
-              </button>
+                  ) : isBranch ? (
+                    <>
+                      <div className="mb-4 flex items-center gap-2">
+                        <GitBranch className="h-4 w-4 text-tertiary" />
+                        <span className="font-bold text-tertiary">抉择分支: {node.content || '剧情选择'}</span>
+                      </div>
+                      <div className="space-y-2">
+                        {(node.choices?.length ? node.choices : [{ text: getCommandSummary(node), target: '@next' }]).map((choice, choiceIndex) => (
+                          <div key={`${node.id}-${choiceIndex}`} className="flex items-center justify-between border border-tertiary/20 bg-surface-bright p-2 text-sm">
+                            <span>{choiceIndex + 1}. {choice.text}</span>
+                            <span className="text-[10px] text-tertiary">跳转至: {choice.target}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-3">
+                      <Icon className="h-5 w-5 shrink-0 text-primary" />
+                      <span className="min-w-0 truncate text-sm">{getCommandSummary(node)}</span>
+                    </div>
+                  )}
+                </button>
+                <div className="absolute right-2 top-2 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <button
+                    type="button"
+                    onClick={(e) => e.stopPropagation()}
+                    className="rounded p-1 text-outline-variant/60 hover:bg-surface-container-low hover:text-foreground"
+                    title="拖拽排序"
+                    aria-label="拖拽排序"
+                  >
+                    <GripVertical className="h-3.5 w-3.5" />
+                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={(e) => e.stopPropagation()}
+                        className="rounded p-1 text-outline-variant/60 hover:bg-surface-container-low hover:text-foreground"
+                        title="更多操作"
+                        aria-label="更多操作"
+                      >
+                        <MoreHorizontal className="h-3.5 w-3.5" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-44">
+                      {onCopyNode && (
+                        <DropdownMenuItem onClick={() => onCopyNode(node.id)}>
+                          <Copy className="h-4 w-4" /> 复制
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem onClick={() => onInsertNode(node.type, index + 1)}>
+                        <Plus className="h-4 w-4" /> 在下方插入
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => onInsertNode(node.type, index)}>
+                        <ArrowRight className="h-4 w-4 -rotate-180" /> 在上方插入
+                      </DropdownMenuItem>
+                      {onJumpToIndex && (
+                        <DropdownMenuItem onClick={() => onJumpToIndex(index)}>
+                          <ArrowRight className="h-4 w-4" /> 跳到运行时
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuSeparator />
+                      {onDeleteNode && (
+                        <DropdownMenuItem
+                          onClick={() => onDeleteNode(node.id)}
+                          className="text-error focus:text-error"
+                        >
+                          <Trash2 className="h-4 w-4" /> 删除
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
             </div>
           );
         })}
@@ -545,6 +639,8 @@ export function StoryEditor() {
   const [selectedNode, setSelectedNode] = useState<WebGalNode | null>(null);
   const [scriptSource, setScriptSource] = useState(DEMO_SCRIPT);
   const [showScript, setShowScript] = useState(false);
+  const [commandSearchQuery, setCommandSearchQuery] = useState('');
+  const [clipboardNode, setClipboardNode] = useState<WebGalNode | null>(null);
   const [loading, setLoading] = useState(true);
 
   // AI state
@@ -901,6 +997,32 @@ export function StoryEditor() {
     commitEditedNodes(updated);
     setSelectedNode(null);
   }, [commitEditedNodes, flushPendingHistory, pushHistory, selectedNode]);
+
+  // ---------------------------------------------------------------------------
+  // Per-node operations (for context menu / drag handle)
+  // ---------------------------------------------------------------------------
+  const deleteNode = useCallback((nodeId: string) => {
+    const current = nodesRef.current;
+    flushPendingHistory();
+    pushHistory(current);
+    const updated = current.filter((node) => node.id !== nodeId);
+    commitEditedNodes(updated);
+    if (selectedNode?.id === nodeId) setSelectedNode(null);
+  }, [commitEditedNodes, flushPendingHistory, pushHistory, selectedNode]);
+
+  const copyNode = useCallback((nodeId: string) => {
+    const current = nodesRef.current;
+    const target = current.find((node) => node.id === nodeId);
+    if (!target) return;
+    setClipboardNode({ ...target, id: `${target.id}__copy__${Date.now().toString()}` });
+  }, []);
+
+  const jumpToNode = useCallback((index: number) => {
+    if (!currentSceneName) return;
+    void jumpToSentence(currentSceneName, index + 1).catch((e) =>
+      console.warn('[runtime] jumpToSentence failed:', e),
+    );
+  }, [currentSceneName]);
 
   // ---------------------------------------------------------------------------
   // Save
@@ -1469,6 +1591,11 @@ export function StoryEditor() {
           onRedo={redo}
           onRun={handleOpenRuntime}
           onPublish={handleExportProject}
+          onSave={handleSave}
+          onSearchChange={setCommandSearchQuery}
+          searchValue={commandSearchQuery}
+          searchPlaceholder="搜索指令 / 角色 / 内容..."
+          saveStatus={saveStatus}
           onSettings={() => setAppSettingsOpen(true)}
         />
         <StoryOsSideNav
@@ -1521,6 +1648,10 @@ export function StoryEditor() {
               currentSceneName={currentSceneName}
               onSelectNode={setSelectedNode}
               onInsertNode={insertNode}
+              onDeleteNode={deleteNode}
+              onCopyNode={copyNode}
+              onJumpToIndex={jumpToNode}
+              searchQuery={commandSearchQuery}
             />
           )}
 
@@ -1547,29 +1678,19 @@ export function StoryEditor() {
           )}
         </div>
 
-          <footer className="flex h-10 shrink-0 items-center justify-between border-t border-outline-variant bg-surface-container px-4">
-            <div className="flex h-full items-center gap-6">
-              <button type="button" className="flex h-8 items-center gap-2 rounded-xl bg-tertiary-container/20 px-4 font-bold text-tertiary">
-                <SlidersHorizontal className="h-4 w-4" />
-                <span className="text-xs">时间轴 (Timeline)</span>
-              </button>
-              <span className="flex items-center gap-2 text-xs text-on-surface-variant/60">
-                <FileText className="h-4 w-4" />
-                控制台
-              </span>
-              <span className="flex items-center gap-2 text-xs text-on-surface-variant/60">
-                <Layers className="h-4 w-4" />
-                变量表
-              </span>
-              <span className="flex items-center gap-2 text-xs text-on-surface-variant/60">
-                <History className="h-4 w-4" />
-                日志记录
-              </span>
-            </div>
-            <div className="flex items-center gap-4 text-[10px] text-on-surface-variant/40">
+          <PerformanceTimeline
+            nodes={nodes}
+            selectedNodeId={selectedNode?.id}
+            onSelectNode={(id) => {
+              const found = nodes.find((node) => node.id === id);
+              if (found) setSelectedNode(found);
+            }}
+          />
+          <footer className="flex h-8 shrink-0 items-center justify-between border-t border-outline-variant bg-surface-container px-4 text-[10px] text-on-surface-variant/40">
+            <div className="flex items-center gap-4">
               <span>{scriptSource.length.toLocaleString()} 字</span>
               <span>约 {Math.max(1, Math.ceil(scriptSource.length / 380))} 分钟阅读量</span>
-              <span className="h-4 w-px bg-outline-variant/30" />
+              <span className="h-3 w-px bg-outline-variant/30" />
               <span>UTF-8 | LF | Engine: WebGAL</span>
             </div>
           </footer>
