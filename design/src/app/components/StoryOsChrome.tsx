@@ -3,14 +3,19 @@ import type * as React from 'react';
 import {
   BookOpen,
   Boxes,
+  Cloud,
+  CloudOff,
   Eye,
   GitBranch,
   Home,
+  Loader2,
   Play,
   Plus,
   Rocket,
   RotateCcw,
   RotateCw,
+  Save,
+  Search,
   Settings,
   Upload,
   UserCircle,
@@ -20,12 +25,19 @@ import {
 
 type StoryOsSection = 'home' | 'script' | 'world' | 'characters' | 'assets' | 'preview' | 'build';
 
+export type StoryOsSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
 interface StoryOsTopBarProps {
   title?: string;
   onUndo?: () => void;
   onRedo?: () => void;
   onRun?: () => void;
   onPublish?: () => void;
+  onSave?: () => void;
+  onSearchChange?: (value: string) => void;
+  searchValue?: string;
+  searchPlaceholder?: string;
+  saveStatus?: StoryOsSaveStatus;
   onSettings?: () => void;
 }
 
@@ -60,6 +72,11 @@ export function StoryOsTopBar({
   onRedo,
   onRun,
   onPublish,
+  onSave,
+  onSearchChange,
+  searchValue,
+  searchPlaceholder,
+  saveStatus = 'idle',
   onSettings,
 }: StoryOsTopBarProps) {
   const topActions = [
@@ -67,7 +84,29 @@ export function StoryOsTopBar({
     { label: '重做', icon: RotateCw, handler: onRedo },
     { label: '运行预览', icon: Play, handler: onRun },
     { label: '导出/发布', icon: Upload, handler: onPublish },
+    { label: '保存', icon: Save, handler: onSave, primary: true },
   ].filter((action) => action.handler);
+
+  const SaveIndicatorIcon =
+    saveStatus === 'saving'
+      ? Loader2
+      : saveStatus === 'error'
+        ? CloudOff
+        : Cloud;
+  const saveIndicatorTitle =
+    saveStatus === 'saving'
+      ? '保存中...'
+      : saveStatus === 'saved'
+        ? '已保存'
+        : saveStatus === 'error'
+          ? '保存失败'
+          : '未保存';
+  const saveIndicatorTone =
+    saveStatus === 'error'
+      ? 'text-error'
+      : saveStatus === 'saved'
+        ? 'text-tertiary'
+        : 'text-muted-foreground';
 
   return (
     <header className="story-os-topbar">
@@ -83,13 +122,17 @@ export function StoryOsTopBar({
         )}
       </div>
 
-      <nav className="hidden items-center gap-4 md:flex">
-        {topActions.map(({ label, icon: Icon, handler }) => (
+      <nav className="hidden items-center gap-1 md:flex">
+        {topActions.map(({ label, icon: Icon, handler, primary }) => (
           <button
             key={label}
             type="button"
             onClick={handler}
-            className="story-os-top-action"
+            className={
+              primary
+                ? 'story-os-top-action text-primary hover:text-primary'
+                : 'story-os-top-action'
+            }
           >
             <Icon className="h-4 w-4" />
             {label}
@@ -98,6 +141,30 @@ export function StoryOsTopBar({
       </nav>
 
       <div className="flex items-center gap-2">
+        {onSearchChange && (
+          <div className="story-os-top-search">
+            <Search className="h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              value={searchValue ?? ''}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder={searchPlaceholder ?? '搜索...'}
+              className="story-os-top-search-input"
+              aria-label="搜索"
+            />
+          </div>
+        )}
+        {saveStatus !== 'idle' && (
+          <span
+            className={`flex h-8 w-8 items-center justify-center rounded ${saveIndicatorTone}`}
+            title={saveIndicatorTitle}
+            aria-label={saveIndicatorTitle}
+          >
+            <SaveIndicatorIcon
+              className={`h-4 w-4 ${saveStatus === 'saving' ? 'animate-spin' : ''}`}
+            />
+          </span>
+        )}
         {onSettings && (
           <button type="button" onClick={onSettings} className="story-os-icon-button" aria-label="设置">
             <Settings className="h-5 w-5" />

@@ -375,6 +375,37 @@
     transition: background 160ms ease, color 160ms ease, transform 120ms ease;
   }
 
+  .story-os-top-search {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 8px;
+    border-radius: 4px;
+    background: var(--surface-container-low);
+    border-bottom: 1px solid var(--outline-variant);
+    transition: border-color 160ms ease, background 160ms ease;
+  }
+
+  .story-os-top-search:focus-within {
+    border-bottom-color: var(--secondary);
+    background: var(--surface-container-lowest);
+  }
+
+  .story-os-top-search-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    width: 12rem;
+    font-size: 13px;
+    color: var(--foreground);
+    padding: 0;
+  }
+
+  .story-os-top-search-input::placeholder {
+    color: var(--outline);
+  }
+
   .story-os-sidenav {
     position: fixed;
     left: 0;
