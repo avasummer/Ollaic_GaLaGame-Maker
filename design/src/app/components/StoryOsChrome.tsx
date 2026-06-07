@@ -158,22 +158,21 @@ export function StoryOsTopBar({
             {label}
           </button>
         ))}
-        {secondaryActions.length > 0 && (
-          <>
-            <div className="mx-1 h-4 w-px bg-border/40" />
-            {secondaryActions.map(({ label, icon: Icon, handler }) => (
-              <button
-                key={label}
-                type="button"
-                onClick={handler}
-                className="story-os-top-action text-muted-foreground hover:text-foreground"
-              >
-                <Icon className="h-4 w-4" />
-                <span className="hidden xl:inline">{label}</span>
-              </button>
-            ))}
-          </>
+        {secondaryActions.length > 0 && topActions.length > 0 && (
+          <div className="mx-1 h-4 w-px bg-border/40" />
         )}
+        {secondaryActions.map(({ label, icon: Icon, handler }) => (
+          <button
+            key={label}
+            type="button"
+            onClick={handler}
+            className="story-os-top-action text-muted-foreground hover:text-foreground"
+            aria-label={label}
+          >
+            <Icon className="h-4 w-4" />
+            <span className="hidden xl:inline">{label}</span>
+          </button>
+        ))}
       </nav>
 
       <div className="flex items-center gap-2">

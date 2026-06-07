@@ -2972,9 +2972,9 @@ export function StoryEditor() {
           onRun={handleOpenRuntime}
           onPublish={handleExportProject}
           onSave={handleSave}
-          onImport={handleImport}
+          onImport={() => guardedNavigate(handleImport)}
           onExport={handleExport}
-          onOpenProject={handleOpenProject}
+          onOpenProject={() => guardedNavigate(handleOpenProject)}
           onSnapshots={handleOpenSnapshotManager}
           onSearchChange={setCommandSearchQuery}
           searchValue={commandSearchQuery}
