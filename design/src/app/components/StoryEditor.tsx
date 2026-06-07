@@ -2976,6 +2976,8 @@ export function StoryEditor() {
           onExport={handleExport}
           onOpenProject={() => guardedNavigate(handleOpenProject)}
           onSnapshots={handleOpenSnapshotManager}
+          onToggleScript={() => setShowScript(!showScript)}
+          scriptMode={showScript}
           onSearchChange={setCommandSearchQuery}
           searchValue={commandSearchQuery}
           searchPlaceholder="搜索指令 / 角色 / 内容..."

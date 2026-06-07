@@ -42,6 +42,8 @@ interface StoryOsTopBarProps {
   onExport?: () => void;
   onOpenProject?: () => void;
   onSnapshots?: () => void;
+  onToggleScript?: () => void;
+  scriptMode?: boolean;
   onSearchChange?: (value: string) => void;
   searchValue?: string;
   searchPlaceholder?: string;
@@ -86,6 +88,8 @@ export function StoryOsTopBar({
   onExport,
   onOpenProject,
   onSnapshots,
+  onToggleScript,
+  scriptMode,
   onSearchChange,
   searchValue,
   searchPlaceholder,
@@ -176,6 +180,17 @@ export function StoryOsTopBar({
       </nav>
 
       <div className="flex items-center gap-2">
+        {onToggleScript && (
+          <button
+            type="button"
+            onClick={onToggleScript}
+            className={`story-os-top-action text-xs ${scriptMode ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+            aria-label={scriptMode ? '切换到指令流视图' : '切换到脚本编辑器'}
+            title={scriptMode ? '指令流视图' : '脚本编辑器'}
+          >
+            {scriptMode ? '指令流' : '脚本'}
+          </button>
+        )}
         {onSearchChange && (
           <div className="story-os-top-search">
             <Search className="h-4 w-4 text-muted-foreground" />
