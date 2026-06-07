@@ -1897,29 +1897,6 @@ export function StoryEditor() {
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
   const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
   const [worldNodePositions, setWorldNodePositions] = useState<Record<string, { x: number; y: number }>>({});
-  const [aiCollapsed, setAiCollapsed] = useState(() => localStorage.getItem(`story-ai-collapsed-${projectId}`) === '1');
-
-  // Build character context for AI system prompt
-  const buildCharacterContext = useCallback((chars: Character[]): string => {
-    if (chars.length === 0) return '';
-    return chars.map(c => {
-      const parts: string[] = [];
-      parts.push(`- ${c.name}`);
-      if (c.aliases.length > 0) parts.push(`  别名: ${c.aliases.join(', ')}`);
-      if (c.gender) parts.push(`  性别: ${c.gender}`);
-      if (c.age) parts.push(`  年龄: ${c.age}`);
-      if (c.personality) parts.push(`  性格: ${c.personality}`);
-      if (c.stance) parts.push(`  立场: ${c.stance}`);
-      if (c.keywords.length > 0) parts.push(`  关键词: ${c.keywords.join(', ')}`);
-      if (c.description) parts.push(`  简介: ${c.description}`);
-      if (c.dialogueStyle) parts.push(`  对话风格: ${c.dialogueStyle}`);
-      if (c.relations.length > 0) {
-        const rels = c.relations.map(r => `${r.relationType}->${r.targetId}`).join(', ');
-        if (rels) parts.push(`  关系: ${rels}`);
-      }
-      return parts.join('\n');
-    }).join('\n\n');
-  }, []);
 
   const loadSceneHeaders = useCallback(async (projectPath: string, scenes: string[]) => {
     const entries = await Promise.all(
@@ -2103,10 +2080,6 @@ export function StoryEditor() {
         setProjectMetadata(EMPTY_PROJECT_METADATA);
       });
   }, [projectPath]);
-
-  useEffect(() => {
-    localStorage.setItem(`story-ai-collapsed-${projectId}`, aiCollapsed ? '1' : '0');
-  }, [aiCollapsed, projectId]);
 
   // ---------------------------------------------------------------------------
   // Initialization: try to load project from localStorage or URL params
