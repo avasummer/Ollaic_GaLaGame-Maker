@@ -1047,7 +1047,7 @@ function ScriptCommandStream({
       </div>
 
       <div className="relative z-10 flex-1 overflow-y-auto p-8">
-        <div className="mx-auto max-w-4xl space-y-6 pb-28">
+        <div className="mx-auto max-w-4xl space-y-6 pb-20">
         {nodes.length === 0 ? (
           <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 border border-dashed border-outline-variant/50 bg-surface-bright p-8 text-center text-muted-foreground">
             <FileText className="h-10 w-10 opacity-50" />
@@ -1144,7 +1144,7 @@ function ScriptCommandStream({
           />
         )}
 
-        <div className="absolute bottom-8 left-1/2 z-20 -translate-x-1/2">
+        <div className="sticky bottom-0 z-20 flex justify-center py-3 bg-gradient-to-t from-[#F7F9FC] via-[#F7F9FC]/80 to-transparent">
           <button type="button" onClick={() => onInsertNode('dialogue', nodes.length)} className="flex items-center gap-2 bg-primary px-6 py-2 font-semibold text-on-primary shadow-lg story-os-chamfer-tr">
             <Plus className="h-4 w-4" />
             新增指令流
