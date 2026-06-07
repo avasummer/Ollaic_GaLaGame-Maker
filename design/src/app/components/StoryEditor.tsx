@@ -1,13 +1,13 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, Fragment } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { DndProvider } from 'react-dnd';
+import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import {
-  Save, Image, Search, Plus, Send, X,
-  FileText, FolderOpen, Layers, Check, Loader2, SlidersHorizontal,
-  Package, History, MessageCircle, GitBranch, Users, Music, Wand2, ArrowRight,
-  GripVertical, MoreHorizontal, Copy, Trash2, Clipboard, Pencil,
-  ZoomIn, ZoomOut, Maximize2, BookOpen, CornerDownRight, Split, StickyNote, Heart, AlertTriangle, Quote, Rocket, Edit,
+  Image, Search, Plus, Send, X,
+  FileText, FolderOpen, Loader2,
+  MessageCircle, GitBranch, Users, Music, Wand2, ArrowRight,
+  GripVertical, MoreHorizontal, Copy, Trash2, Clipboard, Scissors,
+  ZoomIn, ZoomOut, Maximize2, BookOpen, CornerDownRight, Split,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -15,8 +15,9 @@ import { AiSettingsDialog } from './AiSettingsDialog';
 import { AppSettingsDialog, loadAppSettings } from './AppSettingsDialog';
 import { ProjectMetadataDialog, type ExportTaskState } from './ProjectMetadataDialog';
 import { SnapshotManagerDialog } from './SnapshotManagerDialog';
+import { SceneManagerPanel } from './SceneManagerPanel';
 import type { WebGalNode, WebGalCommandType, SceneLink } from '../lib/webgal-types';
-import { extractSceneLinks } from '../lib/webgal-types';
+import { extractSceneLinks, commandCategories, commandLabels, categoryLabels } from '../lib/webgal-types';
 import {
   parseScene, serializeScene, saveScene, loadScene,
   openProject, getScenePath, createScene,
@@ -26,10 +27,11 @@ import {
   readFileText, parseSceneHeader,
   type ProjectInfo, type SceneHeader, type ProjectMetadata, type SnapshotInfo,
 } from '../lib/webgal-ipc';
-import { listCharacters } from '../lib/character-ipc';
+import { listCharacters, listCharacterNames } from '../lib/character-ipc';
 import type { Character } from '../lib/character-types';
+import { characterColor } from '../lib/character-editing';
 import { useAiAgent } from '../hooks/useAiAgent';
-import { insertSceneNode } from '../lib/scene-editing';
+import { insertSceneNode, reorderSceneNodes, pasteSceneNode } from '../lib/scene-editing';
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
 import { AiPendingCard } from './AiPendingCard';
@@ -169,6 +171,8 @@ interface SceneWorldlinePanelProps {
   selectedNode: WebGalNode | null;
   onSelectNode: (node: WebGalNode) => void;
   onOpenScene: (sceneName: string) => void;
+  onOpenSceneManager?: () => void;
+  characterColors?: Record<string, string>;
 }
 
 interface WorldNodeLayout {
@@ -279,6 +283,8 @@ function SceneWorldlinePanel({
   selectedNode,
   onSelectNode,
   onOpenScene,
+  onOpenSceneManager,
+  characterColors,
 }: SceneWorldlinePanelProps) {
   const visibleNodes = nodes.filter((node) => node.type !== 'comment' || node.content?.trim());
   const [zoom, setZoom] = useState(1);
@@ -387,6 +393,17 @@ function SceneWorldlinePanel({
           >
             <Maximize2 className="h-3 w-3" />
           </button>
+          {onOpenSceneManager && (
+            <button
+              type="button"
+              onClick={onOpenSceneManager}
+              className="story-os-icon-button h-6 w-6"
+              aria-label="场景管理"
+              title="场景管理"
+            >
+              <FolderOpen className="h-3 w-3" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -486,6 +503,9 @@ function SceneWorldlinePanel({
         {visibleNodes.map((node, index) => {
           const Icon = commandIconFor(node.type);
           const selected = selectedNode?.id === node.id;
+          const charColor = node.type === 'dialogue' && node.character && characterColors?.[node.character]
+            ? characterColors[node.character]
+            : undefined;
           return (
             <button
               key={node.id}
@@ -502,6 +522,9 @@ function SceneWorldlinePanel({
                 <span className="block font-mono-family text-[10px] text-muted-foreground">{index + 1} {node.type}</span>
                 <span className="block truncate text-xs text-on-surface">{getCommandSummary(node)}</span>
               </span>
+              {charColor && (
+                <span className="ml-auto mt-1 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: charColor }} />
+              )}
             </button>
           );
         })}
@@ -524,7 +547,7 @@ function MiniLivePreview({ nodes }: { nodes: WebGalNode[] }) {
         <Image className="h-10 w-10 text-secondary-container/60" />
         <div className="absolute bottom-2 left-2 right-2 border border-border bg-surface-container-lowest/90 p-2 backdrop-blur">
           <p className="mb-0.5 truncate text-[10px] font-bold text-primary">{dialogue?.character || background?.asset || '预览'}</p>
-          <p className="truncate text-[11px] text-on-surface">“{dialogue?.content || '选择一个对白节点查看演出效果'}”</p>
+          <p className="truncate text-[11px] text-on-surface">"{dialogue?.content || '选择一个对白节点查看演出效果'}"</p>
         </div>
       </div>
     </div>
@@ -652,11 +675,17 @@ interface ScriptCommandStreamProps {
   nodes: WebGalNode[];
   selectedNode: WebGalNode | null;
   currentSceneName: string;
+  sceneHeaders?: Record<string, SceneHeader>;
   onSelectNode: (node: WebGalNode) => void;
   onInsertNode: (type: WebGalCommandType, atIndex: number) => void;
   onDeleteNode?: (nodeId: string) => void;
   onCopyNode?: (nodeId: string) => void;
+  onCutNode?: (nodeId: string) => void;
+  onPasteNode?: (atIndex: number) => void;
+  onReorderNodes?: (fromIndex: number, toIndex: number) => void;
   onJumpToIndex?: (index: number) => void;
+  clipboardNode?: WebGalNode | null;
+  characterColors?: Record<string, string>;
   searchQuery?: string;
 }
 
@@ -664,11 +693,17 @@ function ScriptCommandStream({
   nodes,
   selectedNode,
   currentSceneName,
+  sceneHeaders,
   onSelectNode,
   onInsertNode,
   onDeleteNode,
   onCopyNode,
+  onCutNode,
+  onPasteNode,
+  onReorderNodes,
   onJumpToIndex,
+  clipboardNode,
+  characterColors,
   searchQuery,
 }: ScriptCommandStreamProps) {
   const query = searchQuery?.trim().toLowerCase() ?? '';
@@ -684,6 +719,296 @@ function ScriptCommandStream({
         })
     : nodes.map((node, index) => ({ node, index }));
 
+  // --- Sub-components for DnD and insert zones ---
+
+  const CMD_ITEM = 'script-command';
+
+  function InsertZone({ atIndex, onInsert }: { atIndex: number; onInsert: (type: WebGalCommandType, atIndex: number) => void }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <div
+        className="group relative mx-auto flex h-2 max-w-3xl items-center justify-center hover:h-8"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+      >
+        <div className="absolute inset-x-0 top-1/2 h-px bg-outline-variant/20 group-hover:bg-secondary/40 transition-colors" />
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="relative z-10 flex h-5 w-5 items-center justify-center rounded-full border border-outline-variant/30 bg-surface-bright text-[10px] text-muted-foreground opacity-0 shadow-sm transition-all group-hover:opacity-100 hover:border-secondary hover:text-secondary"
+          title="插入指令"
+          aria-label="插入指令"
+        >
+          <Plus className="h-3 w-3" />
+        </button>
+        {open && (
+          <div
+            className="absolute left-1/2 top-full z-50 mt-1 w-72 -translate-x-1/2 rounded border border-border bg-surface-container-high p-3 shadow-lg"
+            onMouseEnter={() => setOpen(true)}
+          >
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">插入指令</div>
+            {Object.entries(commandCategories).map(([category, types]) => (
+              <div key={category} className="mb-2 last:mb-0">
+                <div className="mb-1 text-[9px] font-semibold uppercase text-on-surface-variant/60">
+                  {categoryLabels[category] || category}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {types.map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => { onInsert(type, atIndex); setOpen(false); }}
+                      className="rounded-sm border border-outline-variant/30 px-2 py-1 text-[10px] text-on-surface-variant hover:border-secondary hover:text-secondary transition-colors"
+                    >
+                      {commandLabels[type]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  interface ScriptCommandCardProps {
+    node: WebGalNode;
+    index: number;
+    selected: boolean;
+    Icon: ReturnType<typeof commandIconFor>;
+    tag: string;
+    tagClass: string;
+    isDialogue: boolean;
+    isBackground: boolean;
+    isBranch: boolean;
+    charColor?: string;
+    onSelectNode: (node: WebGalNode) => void;
+    onInsertNode: (type: WebGalCommandType, atIndex: number) => void;
+    onDeleteNode?: (nodeId: string) => void;
+    onCopyNode?: (nodeId: string) => void;
+    onCutNode?: (nodeId: string) => void;
+    onPasteNode?: (atIndex: number) => void;
+    onReorderNodes?: (fromIndex: number, toIndex: number) => void;
+    onJumpToIndex?: (index: number) => void;
+    clipboardNode?: WebGalNode | null;
+  }
+
+  function ScriptCommandCard({
+    node,
+    index,
+    selected,
+    Icon,
+    tag,
+    tagClass,
+    isDialogue,
+    isBackground,
+    isBranch,
+    charColor,
+    onSelectNode,
+    onInsertNode,
+    onDeleteNode,
+    onCopyNode,
+    onCutNode,
+    onPasteNode,
+    onReorderNodes,
+    onJumpToIndex,
+    clipboardNode,
+  }: ScriptCommandCardProps) {
+    const ref = useRef<HTMLDivElement>(null);
+
+    const [{ isDragging }, drag, preview] = useDrag({
+      type: CMD_ITEM,
+      item: () => ({ index, id: node.id }),
+      canDrag: () => Boolean(onReorderNodes) && !query,
+      collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+    });
+
+    const [, drop] = useDrop({
+      accept: CMD_ITEM,
+      hover: (item: { index: number; id: string }, monitor) => {
+        if (!ref.current || !onReorderNodes) return;
+        const dragIndex = item.index;
+        const hoverIndex = index;
+        if (dragIndex === hoverIndex) return;
+        const hoverBoundingRect = ref.current.getBoundingClientRect();
+        const hoverMiddleY = (hoverBoundingRect.bottom - hoverBoundingRect.top) / 2;
+        const clientOffset = monitor.getClientOffset();
+        if (!clientOffset) return;
+        const hoverClientY = clientOffset.y - hoverBoundingRect.top;
+        if (dragIndex < hoverIndex && hoverClientY < hoverMiddleY) return;
+        if (dragIndex > hoverIndex && hoverClientY > hoverMiddleY) return;
+        onReorderNodes(dragIndex, hoverIndex);
+        item.index = hoverIndex;
+      },
+    });
+
+    drag(drop(ref));
+
+    return (
+      <div ref={preview} key={node.id} className="group flex gap-3" style={{ opacity: isDragging ? 0.4 : 1 }}>
+        <div className="flex w-12 shrink-0 flex-col items-center pt-2">
+          <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-[10px] font-bold ${
+            selected ? 'border-primary text-primary' : 'border-outline-variant/30 text-on-surface-variant/40'
+          }`}>
+            {String(index + 1).padStart(2, '0')}
+          </div>
+          <div className="my-2 w-px flex-1 bg-outline-variant/20" />
+        </div>
+        <div
+          ref={ref}
+          className={`relative w-full max-w-3xl overflow-hidden border shadow-sm transition-all ${
+            isBranch
+              ? `border-2 bg-tertiary/5 ${selected ? 'border-tertiary' : 'border-tertiary/30'} story-os-chamfer-tr`
+              : `bg-surface-bright ${selected ? 'border-primary ring-1 ring-primary/20' : 'border-outline-variant/40 hover:border-secondary'}`
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => onSelectNode(node)}
+            className="w-full p-4 text-left"
+          >
+            <div className={`absolute right-0 top-0 px-2 py-1 text-[9px] uppercase tracking-tight ${tagClass}`}>{tag}</div>
+
+            {isBackground ? (
+              <div className="flex items-center gap-4">
+                <div className="flex h-16 w-24 shrink-0 items-center justify-center border border-outline-variant/20 bg-surface-container-highest">
+                  <Image className="h-5 w-5 text-on-surface-variant/30" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="mb-1 font-bold text-secondary">设置背景: {node.asset || node.content || '未选择背景'}</p>
+                </div>
+              </div>
+            ) : isDialogue ? (
+              <div className="flex items-start gap-3">
+                {charColor ? (
+                  <div
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                    style={{ backgroundColor: `${charColor}20` }}
+                  >
+                    <span
+                      className="h-5 w-5 rounded-full"
+                      style={{ backgroundColor: charColor }}
+                    />
+                  </div>
+                ) : (
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-container/20">
+                    <Users className="h-5 w-5 text-primary" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="mb-2 flex items-center gap-2">
+                    <span
+                      className="font-bold"
+                      style={charColor ? { color: charColor } : { color: 'var(--color-primary)' }}
+                    >
+                      {node.character || '未指定角色'}
+                    </span>
+                  </div>
+                  <div className="border-l-4 border-primary/30 bg-surface-container-low/50 p-3 text-base leading-relaxed text-on-surface">
+                    "{node.content || '……'}"
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {node.voice && <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">语音: {node.voice}</span>}
+                    {node.figureEmotion && (
+                      <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">表情: {node.figureEmotion}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : isBranch ? (
+              <>
+                <div className="mb-4 flex items-center gap-2">
+                  <GitBranch className="h-4 w-4 text-tertiary" />
+                  <span className="font-bold text-tertiary">抉择分支: {node.content || '剧情选择'}</span>
+                </div>
+                <div className="space-y-2">
+                  {(node.choices?.length ? node.choices : [{ text: getCommandSummary(node), target: '@next' }]).map((choice, choiceIndex) => (
+                    <div key={`${node.id}-${choiceIndex}`} className="flex items-center justify-between border border-tertiary/20 bg-surface-bright p-2 text-sm">
+                      <span>{choiceIndex + 1}. {choice.text}</span>
+                      <span className="text-[10px] text-tertiary">跳转至: {choice.target}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center gap-3">
+                <Icon className="h-5 w-5 shrink-0 text-primary" />
+                <span className="min-w-0 truncate text-sm">{getCommandSummary(node)}</span>
+              </div>
+            )}
+          </button>
+          <div className="absolute right-2 top-2 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            <button
+              type="button"
+              ref={onReorderNodes ? drag : undefined}
+              onClick={(e) => e.stopPropagation()}
+              className="rounded p-1 text-outline-variant/60 hover:bg-surface-container-low hover:text-foreground cursor-grab active:cursor-grabbing"
+              title="拖拽排序"
+              aria-label="拖拽排序"
+            >
+              <GripVertical className="h-3.5 w-3.5" />
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => e.stopPropagation()}
+                  className="rounded p-1 text-outline-variant/60 hover:bg-surface-container-low hover:text-foreground"
+                  title="更多操作"
+                  aria-label="更多操作"
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                {onCopyNode && (
+                  <DropdownMenuItem onClick={() => onCopyNode(node.id)}>
+                    <Copy className="h-4 w-4" /> 复制
+                  </DropdownMenuItem>
+                )}
+                {onCutNode && (
+                  <DropdownMenuItem onClick={() => onCutNode(node.id)}>
+                    <Scissors className="h-4 w-4" /> 剪切
+                  </DropdownMenuItem>
+                )}
+                {onPasteNode && (
+                  <DropdownMenuItem
+                    onClick={() => onPasteNode(index)}
+                    disabled={!clipboardNode}
+                  >
+                    <Clipboard className="h-4 w-4" /> 粘贴到此处
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => onInsertNode(node.type, index + 1)}>
+                  <Plus className="h-4 w-4" /> 在下方插入
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onInsertNode(node.type, index)}>
+                  <ArrowRight className="h-4 w-4 -rotate-180" /> 在上方插入
+                </DropdownMenuItem>
+                {onJumpToIndex && (
+                  <DropdownMenuItem onClick={() => onJumpToIndex(index)}>
+                    <ArrowRight className="h-4 w-4" /> 跳到运行时
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                {onDeleteNode && (
+                  <DropdownMenuItem
+                    onClick={() => onDeleteNode(node.id)}
+                    className="text-error focus:text-error"
+                  >
+                    <Trash2 className="h-4 w-4" /> 删除
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <section className="relative flex min-w-0 flex-1 flex-col bg-[#F7F9FC]">
       <div className="pointer-events-none absolute inset-0 opacity-[0.03] story-os-dot-grid" />
@@ -692,10 +1017,22 @@ function ScriptCommandStream({
         <div className="flex min-w-0 items-center gap-4">
           <span className="shrink-0 text-xs font-bold tracking-widest text-on-surface-variant">指令流编辑</span>
           <div className="flex gap-2">
-            <span className="rounded bg-secondary/10 px-2 py-0.5 text-[10px] font-bold uppercase text-secondary">Act 1</span>
-            <span className="rounded bg-outline-variant/20 px-2 py-0.5 text-[10px] font-bold uppercase text-on-surface-variant">Scene 04</span>
+            {(() => {
+              const header = sceneHeaders?.[currentSceneName];
+              const chapter = header?.chapter?.trim() || '';
+              if (chapter) {
+                return (
+                  <span className="rounded bg-secondary/10 px-2 py-0.5 text-[10px] font-bold uppercase text-secondary">
+                    {chapter}
+                  </span>
+                );
+              }
+              return null;
+            })()}
+            <span className="rounded bg-outline-variant/20 px-2 py-0.5 text-[10px] font-bold uppercase text-on-surface-variant">
+              {currentSceneName.replace(/\.txt$/, '')}
+            </span>
           </div>
-          <span className="truncate text-[10px] text-muted-foreground">{currentSceneName}</span>
         </div>
         <div className="flex items-center gap-3 text-on-surface-variant/50">
           {query && (
@@ -703,7 +1040,9 @@ function ScriptCommandStream({
               {visibleNodes.length} / {nodes.length}
             </span>
           )}
-          <SlidersHorizontal className="h-4 w-4" />
+          <span className="font-mono-family text-[10px] text-muted-foreground">
+            {nodes.length} 条指令
+          </span>
         </div>
       </div>
 
@@ -720,7 +1059,7 @@ function ScriptCommandStream({
         ) : visibleNodes.length === 0 ? (
           <div className="flex min-h-[240px] flex-col items-center justify-center gap-2 border border-dashed border-outline-variant/40 bg-surface-bright p-6 text-center text-muted-foreground">
             <Search className="h-6 w-6 opacity-50" />
-            <div className="text-sm">没有匹配 “{query}” 的指令</div>
+            <div className="text-sm">没有匹配 "{query}" 的指令</div>
           </div>
         ) : visibleNodes.map(({ node, index }) => {
           const Icon = commandIconFor(node.type);
@@ -734,137 +1073,76 @@ function ScriptCommandStream({
             : isBranch
             ? 'bg-tertiary text-on-tertiary'
             : 'bg-primary text-on-primary';
-          return (
-            <div key={node.id} className="group flex gap-3">
-              <div className="flex w-12 shrink-0 flex-col items-center pt-2">
-                <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-[10px] font-bold ${
-                  selected ? 'border-primary text-primary' : 'border-outline-variant/30 text-on-surface-variant/40'
-                }`}>
-                  {String(index + 1).padStart(2, '0')}
-                </div>
-                <div className="my-2 w-px flex-1 bg-outline-variant/20" />
-              </div>
-              <div
-                className={`relative w-full max-w-3xl overflow-hidden border shadow-sm transition-all ${
-                  isBranch
-                    ? `border-2 bg-tertiary/5 ${selected ? 'border-tertiary' : 'border-tertiary/30'} story-os-chamfer-tr`
-                    : `bg-surface-bright ${selected ? 'border-primary ring-1 ring-primary/20' : 'border-outline-variant/40 hover:border-secondary'}`
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => onSelectNode(node)}
-                  className="w-full p-4 text-left"
-                >
-                  <div className={`absolute right-0 top-0 px-2 py-1 text-[9px] uppercase tracking-tight ${tagClass}`}>{tag}</div>
+          const charColor = isDialogue && node.character && characterColors?.[node.character]
+            ? characterColors[node.character]
+            : undefined;
 
-                  {isBackground ? (
-                    <div className="flex items-center gap-4">
-                      <div className="flex h-16 w-24 shrink-0 items-center justify-center border border-outline-variant/20 bg-surface-container-highest">
-                        <Image className="h-5 w-5 text-on-surface-variant/30" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="mb-1 font-bold text-secondary">设置背景: {node.asset || node.content || '未选择背景'}</p>
-                        <p className="text-sm italic text-on-surface-variant/70">过度效果: 交叉溶解 (2.0s)</p>
-                      </div>
-                    </div>
-                  ) : isDialogue ? (
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-container/20">
-                        <Users className="h-5 w-5 text-primary" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="mb-2 flex items-center gap-2">
-                          <span className="font-bold text-primary">{node.character || '未指定角色'}</span>
-                          <span className="text-[10px] text-on-surface-variant/40">[ 默认 ]</span>
-                        </div>
-                        <div className="border-l-4 border-primary/30 bg-surface-container-low/50 p-3 text-base leading-relaxed text-on-surface">
-                          “{node.content || '……'}”
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {node.voice && <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">语音: {node.voice}</span>}
-                          <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">表情: default</span>
-                        </div>
-                      </div>
-                    </div>
-                  ) : isBranch ? (
-                    <>
-                      <div className="mb-4 flex items-center gap-2">
-                        <GitBranch className="h-4 w-4 text-tertiary" />
-                        <span className="font-bold text-tertiary">抉择分支: {node.content || '剧情选择'}</span>
-                      </div>
-                      <div className="space-y-2">
-                        {(node.choices?.length ? node.choices : [{ text: getCommandSummary(node), target: '@next' }]).map((choice, choiceIndex) => (
-                          <div key={`${node.id}-${choiceIndex}`} className="flex items-center justify-between border border-tertiary/20 bg-surface-bright p-2 text-sm">
-                            <span>{choiceIndex + 1}. {choice.text}</span>
-                            <span className="text-[10px] text-tertiary">跳转至: {choice.target}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex items-center gap-3">
-                      <Icon className="h-5 w-5 shrink-0 text-primary" />
-                      <span className="min-w-0 truncate text-sm">{getCommandSummary(node)}</span>
-                    </div>
-                  )}
-                </button>
-                <div className="absolute right-2 top-2 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                  <button
-                    type="button"
-                    onClick={(e) => e.stopPropagation()}
-                    className="rounded p-1 text-outline-variant/60 hover:bg-surface-container-low hover:text-foreground"
-                    title="拖拽排序"
-                    aria-label="拖拽排序"
-                  >
-                    <GripVertical className="h-3.5 w-3.5" />
-                  </button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={(e) => e.stopPropagation()}
-                        className="rounded p-1 text-outline-variant/60 hover:bg-surface-container-low hover:text-foreground"
-                        title="更多操作"
-                        aria-label="更多操作"
-                      >
-                        <MoreHorizontal className="h-3.5 w-3.5" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-44">
-                      {onCopyNode && (
-                        <DropdownMenuItem onClick={() => onCopyNode(node.id)}>
-                          <Copy className="h-4 w-4" /> 复制
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuItem onClick={() => onInsertNode(node.type, index + 1)}>
-                        <Plus className="h-4 w-4" /> 在下方插入
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onInsertNode(node.type, index)}>
-                        <ArrowRight className="h-4 w-4 -rotate-180" /> 在上方插入
-                      </DropdownMenuItem>
-                      {onJumpToIndex && (
-                        <DropdownMenuItem onClick={() => onJumpToIndex(index)}>
-                          <ArrowRight className="h-4 w-4" /> 跳到运行时
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuSeparator />
-                      {onDeleteNode && (
-                        <DropdownMenuItem
-                          onClick={() => onDeleteNode(node.id)}
-                          className="text-error focus:text-error"
-                        >
-                          <Trash2 className="h-4 w-4" /> 删除
-                        </DropdownMenuItem>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-            </div>
+          return (
+            <Fragment key={node.id}>
+              {/* Insert zone before each node */}
+              {onInsertNode && (
+                <InsertZone atIndex={index} onInsert={onInsertNode} />
+              )}
+              <ScriptCommandCard
+                node={node}
+                index={index}
+                selected={selected}
+                Icon={Icon}
+                tag={tag}
+                tagClass={tagClass}
+                isDialogue={isDialogue}
+                isBackground={isBackground}
+                isBranch={isBranch}
+                charColor={charColor}
+                onSelectNode={onSelectNode}
+                onInsertNode={onInsertNode}
+                onDeleteNode={onDeleteNode}
+                onCopyNode={onCopyNode}
+                onCutNode={onCutNode}
+                onPasteNode={onPasteNode}
+                onReorderNodes={onReorderNodes}
+                onJumpToIndex={onJumpToIndex}
+                clipboardNode={clipboardNode}
+              />
+            </Fragment>
           );
         })}
+        {/* Insert zone at end */}
+        {onInsertNode && nodes.length > 0 && (
+          <InsertZone atIndex={nodes.length} onInsert={onInsertNode} />
+        )}
         </div>
+
+        {/* Right-click context menu on empty area for paste */}
+        {clipboardNode && onPasteNode && (
+          <div
+            className="pointer-events-none absolute inset-0 z-20"
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const menu = document.createElement('div');
+              menu.className = 'fixed z-50 min-w-[140px] rounded border border-border bg-surface-container-high p-1 shadow-lg';
+              menu.style.left = `${e.clientX}px`;
+              menu.style.top = `${e.clientY}px`;
+              menu.innerHTML = '';
+              const btn = document.createElement('button');
+              btn.className = 'flex w-full items-center gap-2 rounded px-3 py-2 text-sm hover:bg-surface-container-low';
+              btn.innerHTML = '<span style="display:flex;align-items:center;gap:0.5rem"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>粘贴到此处</span>';
+              btn.onclick = () => {
+                onPasteNode(nodes.length);
+                menu.remove();
+              };
+              menu.appendChild(btn);
+              document.body.appendChild(menu);
+              const close = (ev: MouseEvent) => {
+                if (!menu.contains(ev.target as Node)) {
+                  menu.remove();
+                  document.removeEventListener('click', close);
+                }
+              };
+              setTimeout(() => document.addEventListener('click', close), 0);
+            }}
+          />
+        )}
 
         <div className="absolute bottom-8 left-1/2 z-20 -translate-x-1/2">
           <button type="button" onClick={() => onInsertNode('dialogue', nodes.length)} className="flex items-center gap-2 bg-primary px-6 py-2 font-semibold text-on-primary shadow-lg story-os-chamfer-tr">
@@ -919,7 +1197,9 @@ export function StoryEditor() {
   const [snapshotBusy, setSnapshotBusy] = useState(false);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotStatus, setSnapshotStatus] = useState<string | null>(null);
+  const [sceneManagerOpen, setSceneManagerOpen] = useState(false);
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
+  const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
   const [aiCollapsed, setAiCollapsed] = useState(() => localStorage.getItem(`story-ai-collapsed-${projectId}`) === '1');
 
   // Build character context for AI system prompt
@@ -972,6 +1252,19 @@ export function StoryEditor() {
       }),
     );
     setSceneLinkMap(Object.fromEntries(entries));
+  }, []);
+
+  const loadCharacterColors = useCallback(async (projectPath: string) => {
+    try {
+      const refs = await listCharacterNames(projectPath);
+      const map: Record<string, string> = {};
+      refs.forEach((ref, idx) => {
+        map[ref.name] = characterColor(idx);
+      });
+      setCharacterColors(map);
+    } catch {
+      setCharacterColors({});
+    }
   }, []);
 
   const handleHeaderUpdated = useCallback((name: string, header: SceneHeader) => {
@@ -1108,6 +1401,7 @@ export function StoryEditor() {
         } catch {
           setCharactersForAi([]);
         }
+        void loadCharacterColors(storedPath);
 
         // Load scene header comments + outgoing scene-jump map for the graph view
         const info = await openProject(storedPath).catch(() => null);
@@ -1276,6 +1570,31 @@ export function StoryEditor() {
     setClipboardNode({ ...target, id: `${target.id}__copy__${Date.now().toString()}` });
   }, []);
 
+  const cutNode = useCallback((nodeId: string) => {
+    const current = nodesRef.current;
+    const target = current.find((node) => node.id === nodeId);
+    if (!target) return;
+    setClipboardNode({ ...target, id: `${target.id}__cut__${Date.now().toString()}` });
+    deleteNode(nodeId);
+  }, [deleteNode]);
+
+  const reorderNodes = useCallback((fromIndex: number, toIndex: number) => {
+    const current = nodesRef.current;
+    flushPendingHistory();
+    pushHistory(current);
+    const updated = reorderSceneNodes(current, fromIndex, toIndex);
+    commitEditedNodes(updated);
+  }, [commitEditedNodes, flushPendingHistory, pushHistory]);
+
+  const pasteNode = useCallback((atIndex: number) => {
+    if (!clipboardNode) return;
+    const current = nodesRef.current;
+    flushPendingHistory();
+    pushHistory(current);
+    const updated = pasteSceneNode(current, clipboardNode, atIndex, Date.now().toString());
+    commitEditedNodes(updated);
+  }, [clipboardNode, commitEditedNodes, flushPendingHistory, pushHistory]);
+
   const jumpToNode = useCallback((index: number) => {
     if (!currentSceneName) return;
     void jumpToSentence(currentSceneName, index + 1).catch((e) =>
@@ -1414,6 +1733,27 @@ export function StoryEditor() {
     return () => window.removeEventListener('keydown', handler);
   }, [undo, redo]);
 
+  // Clipboard shortcuts (Ctrl+C/X/V)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        if (e.key === 'c' && selectedNode) {
+          e.preventDefault();
+          copyNode(selectedNode.id);
+        } else if (e.key === 'x' && selectedNode) {
+          e.preventDefault();
+          cutNode(selectedNode.id);
+        } else if (e.key === 'v' && clipboardNode) {
+          e.preventDefault();
+          const currentIndex = nodes.findIndex((n) => n.id === selectedNode?.id);
+          pasteNode(currentIndex >= 0 ? currentIndex : nodes.length);
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [selectedNode, clipboardNode, nodes, copyNode, cutNode, pasteNode]);
+
   // Auto-save: periodic save when dirty
   useEffect(() => {
     if (autoSaveInterval <= 0 || !projectPath) return;
@@ -1470,6 +1810,7 @@ export function StoryEditor() {
       } catch {
         setCharactersForAi([]);
       }
+      void loadCharacterColors(selected);
 
       void loadSceneHeaders(selected, info.scenes);
       void loadSceneLinkMap(selected, info.scenes);
@@ -1707,7 +2048,7 @@ export function StoryEditor() {
     setSnapshotStatus(null);
     try {
       if (dirty && !(await handleSave())) return;
-      await createProjectSnapshot(projectPath, 'before-restore', 'beforeRestore', `回滚到“${snapshot.label}”前自动备份`);
+      await createProjectSnapshot(projectPath, 'before-restore', 'beforeRestore', `回滚到"${snapshot.label}"前自动备份`);
       await restoreProjectSnapshot(projectPath, snapshot.id);
       const info = await openProject(projectPath);
       setProjectInfo(info);
@@ -1724,7 +2065,7 @@ export function StoryEditor() {
       sceneDraftCache.current.clear();
       setDirty(false);
       setSelectedNode(null);
-      setSnapshotStatus(`已回滚到“${snapshot.label}”，并自动创建 before-restore 备份。`);
+      setSnapshotStatus(`已回滚到"${snapshot.label}"，并自动创建 before-restore 备份。`);
       await refreshSnapshots();
     } catch (e) {
       setSnapshotError(`回滚快照失败: ${e}`);
@@ -1876,6 +2217,8 @@ export function StoryEditor() {
             selectedNode={selectedNode}
             onSelectNode={setSelectedNode}
             onOpenScene={stableSwitchScene}
+            onOpenSceneManager={() => setSceneManagerOpen(true)}
+            characterColors={characterColors}
           />
 
           {/* Center - Script Command Stream / Script Source */}
@@ -1905,11 +2248,17 @@ export function StoryEditor() {
               nodes={nodes}
               selectedNode={selectedNode}
               currentSceneName={currentSceneName}
+              sceneHeaders={sceneHeaders}
               onSelectNode={setSelectedNode}
               onInsertNode={insertNode}
               onDeleteNode={deleteNode}
               onCopyNode={copyNode}
+              onCutNode={cutNode}
+              onPasteNode={pasteNode}
+              onReorderNodes={reorderNodes}
               onJumpToIndex={jumpToNode}
+              clipboardNode={clipboardNode}
+              characterColors={characterColors}
               searchQuery={commandSearchQuery}
             />
           )}
@@ -1985,6 +2334,19 @@ export function StoryEditor() {
           onRestore={handleRestoreSnapshot}
           onRename={handleRenameSnapshot}
           onDelete={handleDeleteSnapshot}
+        />
+
+        <SceneManagerPanel
+          open={sceneManagerOpen}
+          onClose={() => setSceneManagerOpen(false)}
+          projectPath={projectPath ?? ''}
+          projectInfo={projectInfo}
+          currentSceneName={currentSceneName}
+          sceneHeaders={sceneHeaders}
+          onSwitchScene={stableSwitchScene}
+          onHeaderUpdated={handleHeaderUpdated}
+          onRefreshProject={refreshProjectInfo}
+          onNewScene={handleNewScene}
         />
 
         <AppSettingsDialog

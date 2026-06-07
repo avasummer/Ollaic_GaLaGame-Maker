@@ -263,7 +263,7 @@ export function ProjectHome() {
       <StoryOsSideNav
         active="script"
         projectId={activeProject?.id}
-        projectLabel="阿尔法计划"
+        projectLabel={activeProject?.name || '工作台'}
         onCreate={openCreateDialog}
       />
 
@@ -334,10 +334,10 @@ export function ProjectHome() {
                   <div className="mt-4">
                     <div className="mb-1 flex justify-between text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                       <span>剧本完成度</span>
-                      <span>{activeProject ? '64%' : '0%'}</span>
+                      <span>{activeProject ? `${Math.min(99, Math.round((activeProject.sceneCount || 0) * 12))}%` : '0%'}</span>
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-surface-container-highest">
-                      <div className="h-full rounded-full bg-primary-container" style={{ width: activeProject ? '64%' : '0%' }} />
+                      <div className="h-full rounded-full bg-primary-container" style={{ width: activeProject ? `${Math.min(99, Math.round((activeProject.sceneCount || 0) * 12))}%` : '0%' }} />
                     </div>
                   </div>
                 </div>

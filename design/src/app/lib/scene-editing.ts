@@ -2,11 +2,11 @@ import type { WebGalCommandType, WebGalNode } from './webgal-types';
 
 const TERMINAL_TYPES = new Set<WebGalCommandType>(['choose', 'changeScene', 'end', 'jumpLabel']);
 
-export function isTerminalNode(type: WebGalCommandType): boolean {
+function isTerminalNode(type: WebGalCommandType): boolean {
   return TERMINAL_TYPES.has(type);
 }
 
-export function reconnectSequentialNodes(nodes: WebGalNode[]): WebGalNode[] {
+function reconnectSequentialNodes(nodes: WebGalNode[]): WebGalNode[] {
   return nodes.map((node, index) => {
     const next = nodes[index + 1];
     const connections = next && !isTerminalNode(node.type) ? [next.id] : [];
@@ -41,10 +41,6 @@ function createSceneNode(type: WebGalCommandType, id: string, index: number): We
     node.varValue = '';
   }
   return node;
-}
-
-export function removeSceneNode(nodes: WebGalNode[], id: string): WebGalNode[] {
-  return reconnectSequentialNodes(nodes.filter((node) => node.id !== id));
 }
 
 export function insertSceneNode(
@@ -89,20 +85,4 @@ export function reorderSceneNodes(
   const [node] = moved.splice(fromIndex, 1);
   moved.splice(clampedTo, 0, node);
   return reconnectSequentialNodes(moved);
-}
-
-export function appendGeneratedNodes(
-  nodes: WebGalNode[],
-  generated: WebGalNode[],
-  idPrefix: string,
-): WebGalNode[] {
-  const lastNode = nodes[nodes.length - 1];
-  const startX = lastNode?.position.x ?? 100;
-  const startY = lastNode ? lastNode.position.y + 130 : 60;
-  const appended = generated.map((node, index) => ({
-    ...node,
-    id: `${idPrefix}-${index}`,
-    position: { x: startX, y: startY + index * 110 },
-  }));
-  return reconnectSequentialNodes([...nodes, ...appended]);
 }
