@@ -55,19 +55,11 @@ const CHAT_PROVIDERS: ProviderPreset[] = [
 const IMAGE_PROVIDERS: ProviderPreset[] = [
   { value: 'openai', label: 'OpenAI Images', defaultModel: 'gpt-image-1', models: ['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'chatgpt-image-latest', 'dall-e-3', 'dall-e-2'], defaultBaseUrl: '', needsBaseUrl: false },
   { value: 'gemini', label: 'Google Gemini / Imagen', defaultModel: 'gemini-2.5-flash-image', models: ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview', 'nano-banana-pro-preview', 'gemini-3.1-flash-image-preview', 'imagen-4.0-generate-001', 'imagen-4.0-ultra-generate-001', 'imagen-4.0-fast-generate-001'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'stability', label: 'Stability AI', defaultModel: 'stable-image-core', models: ['stable-image-core', 'stable-image-ultra', 'stable-diffusion-3.5-large', 'stable-diffusion-3.5-large-turbo', 'stable-diffusion-3.5-medium', 'stable-diffusion-3.5-flash', 'sdxl-1.0'], defaultBaseUrl: '', needsBaseUrl: false },
   { value: 'aliyun', label: '阿里云 DashScope / 通义万相', defaultModel: 'wanx2.1-t2i-turbo', models: ['wanx2.1-t2i-turbo', 'wanx2.1-t2i-plus', 'wanx2.1-imageedit', 'wanx-v1', 'wan2.2-t2i-flash', 'wan2.2-t2i-plus', 'wan2.5-t2i-preview', 'wan2.6-t2i', 'wan2.7-image', 'wan2.7-image-pro', 'qwen-image', 'qwen-image-edit', 'qwen-image-plus', 'qwen-image-max', 'qwen-image-2.0-pro', 'z-image-turbo'], defaultBaseUrl: 'https://dashscope.aliyuncs.com/api/v1', needsBaseUrl: false },
   { value: 'volcengine', label: '火山引擎 / 即梦 / 豆包', defaultModel: 'doubao-seedream-3-0-t2i-250415', models: ['doubao-seedream-3-0-t2i-250415', 'doubao-seedream-4-0-250828', 'doubao-seededit-3-0-i2i-250628', 'jimeng_high_aes_general_v21_L', 'jimeng_high_aes_general_v20_L', 'jimeng_high_aes_general_v14'], defaultBaseUrl: '', needsBaseUrl: false },
   { value: 'zhipu', label: '智谱 CogView', defaultModel: 'cogview-3-flash', models: ['cogview-3-flash', 'cogview-3-plus', 'cogview-4'], defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4', needsBaseUrl: false },
-  { value: 'baidu', label: '百度千帆 / 文心一格', defaultModel: 'irag-1.0', models: ['irag-1.0', 'ernie-vilg-v2', 'ernie-vilg-v2.0'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'tencent', label: '腾讯混元图像', defaultModel: 'TextToImageLite', models: ['TextToImageLite', 'SubmitHunyuanImageJob', 'QueryHunyuanImageJob', 'SubmitHunyuanImageChatJob', 'QueryHunyuanImageChatJob'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'minimax', label: 'MiniMax 图像', defaultModel: 'image-01', models: ['image-01', 'image-01-live'], defaultBaseUrl: 'https://api.minimax.chat/v1', needsBaseUrl: false },
   { value: 'siliconflow', label: 'SiliconFlow', defaultModel: 'Kwai-Kolors/Kolors', models: ['Kwai-Kolors/Kolors', 'black-forest-labs/FLUX.1-schnell', 'black-forest-labs/FLUX.1-dev', 'stabilityai/stable-diffusion-3-5-large', 'stabilityai/stable-diffusion-xl-base-1.0', 'Qwen/Qwen-Image', 'Qwen/Qwen-Image-Edit'], defaultBaseUrl: 'https://api.siliconflow.cn/v1', needsBaseUrl: false },
-  { value: 'replicate', label: 'Replicate', defaultModel: 'black-forest-labs/flux-schnell', models: ['black-forest-labs/flux-schnell', 'black-forest-labs/flux-dev', 'black-forest-labs/flux-pro', 'stability-ai/sdxl', 'bytedance/sdxl-lightning-4step'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'fal', label: 'fal.ai', defaultModel: 'fal-ai/flux/schnell', models: ['fal-ai/flux/schnell', 'fal-ai/flux/dev', 'fal-ai/flux-pro/v1.1', 'fal-ai/stable-diffusion-v35-large', 'fal-ai/imagen4/preview'], defaultBaseUrl: '', needsBaseUrl: false },
   { value: 'sd-webui', label: 'Stable Diffusion WebUI (本地)', defaultModel: 'local', models: ['local', 'sdxl', 'sd1.5', 'sd3.5-large', 'flux', 'kolors'], defaultBaseUrl: 'http://127.0.0.1:7860', needsBaseUrl: true, keyHint: '本地服务通常不需要 Key' },
-  { value: 'comfyui', label: 'ComfyUI (本地)', defaultModel: 'workflow', models: ['workflow', 'sdxl', 'sd1.5', 'sd3.5-large', 'flux', 'kolors', 'qwen-image'], defaultBaseUrl: 'http://127.0.0.1:8188', needsBaseUrl: true, keyHint: '本地服务通常不需要 Key' },
-  { value: 'midjourney', label: 'Midjourney 网关', defaultModel: 'midjourney', models: ['midjourney', 'midjourney-v6.1', 'midjourney-v6', 'niji', 'niji-v6'], defaultBaseUrl: 'https://api.example.com', needsBaseUrl: true },
   { value: 'custom', label: '自定义', defaultModel: 'image-model', models: ['image-model'], defaultBaseUrl: 'https://api.example.com/v1/images/generations', needsBaseUrl: true },
 ];
 
@@ -85,6 +77,22 @@ const TTS_PROVIDERS: ProviderPreset[] = [
   { value: 'edge-tts', label: 'Edge TTS (本地免费)', defaultModel: 'zh-CN-XiaoxiaoNeural', models: ['zh-CN-XiaoxiaoNeural', 'zh-CN-YunxiNeural', 'zh-CN-XiaoyiNeural', 'zh-CN-YunjianNeural', 'en-US-AriaNeural', 'en-US-JennyNeural', 'ja-JP-NanamiNeural'], defaultBaseUrl: '', needsBaseUrl: false, keyHint: '本地 Edge TTS 通常不需要 Key' },
   { value: 'custom', label: '自定义', defaultModel: 'tts-model', models: ['tts-model'], defaultBaseUrl: 'https://api.example.com/v1/audio/speech', needsBaseUrl: true },
 ];
+
+function configFromPreset(preset: ProviderPreset): AiProviderConfig {
+  return {
+    provider: preset.value,
+    model: preset.defaultModel,
+    api_key: '',
+    base_url: preset.needsBaseUrl ? preset.defaultBaseUrl : '',
+  };
+}
+
+function normalizeImageConfig(config: AiProviderConfig): AiProviderConfig {
+  if (IMAGE_PROVIDERS.some((provider) => provider.value === config.provider)) {
+    return config;
+  }
+  return configFromPreset(IMAGE_PROVIDERS[0]);
+}
 
 interface Props {
   open: boolean;
@@ -115,7 +123,7 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
     Promise.all([getAiConfig(), getAiImageConfig(), getAiTtsConfig()])
       .then(([chat, image, tts]) => {
         setConfig(chat);
-        setImageConfig(image);
+        setImageConfig(normalizeImageConfig(image));
         setTtsConfig(tts);
       })
       .catch((e) => setError(String(e)));

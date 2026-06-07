@@ -39,6 +39,20 @@ export interface AiLogEntry {
   message: string;
 }
 
+export interface GeneratedMedia {
+  base64Data: string;
+  extension: string;
+}
+
+export interface AiMediaGenerationProgress {
+  provider: string;
+  model: string;
+  phase: string;
+  attempt: number;
+  totalAttempts: number;
+  message: string;
+}
+
 export interface AiChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
@@ -100,6 +114,27 @@ export async function setAiTtsConfig(config: AiProviderConfig): Promise<void> {
 
 export async function validateAiConfig(config: AiConfig): Promise<AiValidationResult> {
   return invoke<AiValidationResult>('validate_ai_config', { config });
+}
+
+export async function aiGenerateImage(prompt: string, model: string): Promise<GeneratedMedia> {
+  return invoke<GeneratedMedia>('ai_generate_image', { prompt, model });
+}
+
+export async function listenAiMediaGenerationProgress(
+  handler: (progress: AiMediaGenerationProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<AiMediaGenerationProgress>('ai-media-generation-progress', (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function aiGenerateTts(
+  text: string,
+  voicePrompt: string,
+  model: string,
+  format: string,
+): Promise<GeneratedMedia> {
+  return invoke<GeneratedMedia>('ai_generate_tts', { text, voicePrompt, model, format });
 }
 
 export async function listAiLogs(limit?: number): Promise<AiLogEntry[]> {

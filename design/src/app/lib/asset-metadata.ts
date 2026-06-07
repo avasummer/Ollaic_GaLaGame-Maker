@@ -2,9 +2,54 @@ import {
   loadProjectAssetMetadata,
   saveProjectAssetMetadata,
   type AssetMetadata,
+  type SceneAssetCard,
 } from './assets-ipc';
 
 export type { AssetMetadata } from './assets-ipc';
+
+/** Stable scene-card id derived from a scene .txt filename. */
+export function sceneCardId(sceneFile: string): string {
+  return sceneFile.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+/** Human-friendly default title from a scene filename ("start.txt" -> "start"). */
+export function sceneTitleFromFile(sceneFile: string): string {
+  return sceneFile.replace(/\.txt$/i, '') || sceneFile;
+}
+
+/** Default generated-background filename stem for a new scene card. */
+export function defaultSceneTargetStem(index: number): string {
+  return `${String(index).padStart(3, '0')}_scene_dusk`;
+}
+
+/**
+ * Ensure a background scene card exists for the given scene file. Returns the
+ * (possibly unchanged) metadata. No-op if a card already exists or the card was
+ * explicitly deleted by the user.
+ */
+export function ensureSceneCard(
+  metadata: AssetMetadata,
+  sceneFile: string,
+  index: number,
+): AssetMetadata {
+  const id = sceneCardId(sceneFile);
+  if (metadata.sceneCards?.[id]) return metadata;
+  if ((metadata.deletedSceneCards ?? []).includes(id)) return metadata;
+  const card: SceneAssetCard = {
+    id,
+    title: sceneTitleFromFile(sceneFile),
+    sceneFile,
+    imageAsset: null,
+    targetStem: defaultSceneTargetStem(index),
+    prompt: '',
+    style: '',
+    negativePrompt: '',
+  };
+  return {
+    ...metadata,
+    sceneCards: { ...(metadata.sceneCards ?? {}), [id]: card },
+  };
+}
 
 const legacyUnifiedKey = (projectId: string) => `asset-metadata-${projectId}`;
 const legacyAliasKey = (projectId: string) => `asset-alias-${projectId}`;

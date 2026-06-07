@@ -188,6 +188,8 @@ fn main() {
             ai::commands::get_ai_tts_config,
             ai::commands::set_ai_tts_config,
             ai::commands::validate_ai_config,
+            ai::commands::ai_generate_image,
+            ai::commands::ai_generate_tts,
             ai::commands::ai_chat_stream,
             ai::commands::ai_chat_turn,
             ai::commands::list_ai_logs,

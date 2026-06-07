@@ -2744,13 +2744,23 @@ export function StoryEditor() {
       // Refresh project info
       const info = await openProject(projectPath);
       setProjectInfo(info);
-      // Switch to new scene
       const sceneName = name.endsWith('.txt') ? name : `${name}.txt`;
+      // Immediately create a matching background card in the asset library so the
+      // new scene shows up under 素材库 > 背景, ready to fill in / generate.
+      try {
+        const metadata = await loadAssetMetadata(projectPath, projectId);
+        const index = Object.keys(metadata.sceneCards ?? {}).length + 1;
+        const next = ensureSceneCard(metadata, sceneName, index);
+        if (next !== metadata) await saveAssetMetadata(projectPath, next);
+      } catch (metaErr) {
+        console.error('Create scene card failed:', metaErr);
+      }
+      // Switch to new scene
       await handleSwitchScene(sceneName);
     } catch (e) {
       console.error('Create scene failed:', e);
     }
-  }, [projectPath, handleSwitchScene]);
+  }, [projectPath, projectId, handleSwitchScene]);
 
   const handleDeleteScene = useCallback(async (sceneName: string) => {
     if (!projectPath) return;

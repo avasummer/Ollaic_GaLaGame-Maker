@@ -6,15 +6,17 @@ use genai::chat::{
 };
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 const MAX_LOG_LIMIT: usize = 500;
 const DEFAULT_LOG_LIMIT: usize = 100;
 const MAX_LOG_FIELD_CHARS: usize = 1000;
+const HTTP_REQUEST_TIMEOUT_SECS: u64 = 180;
 
 #[derive(Debug, Deserialize)]
 pub struct ToolCallInput {
@@ -77,6 +79,91 @@ pub struct AiValidationResult {
     pub model: String,
     pub endpoint: String,
     pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedMedia {
+    pub base64_data: String,
+    pub extension: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AiMediaGenerationProgress {
+    pub provider: String,
+    pub model: String,
+    pub phase: String,
+    pub attempt: u8,
+    pub total_attempts: u8,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiImageResponse {
+    data: Vec<OpenAiImageItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiImageItem {
+    #[serde(default)]
+    b64_json: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DashScopeTaskCreateResponse {
+    output: DashScopeTaskOutput,
+}
+
+#[derive(Debug, Deserialize)]
+struct DashScopeTaskOutput {
+    #[serde(default)]
+    task_id: Option<String>,
+    #[serde(default)]
+    task_status: Option<String>,
+    #[serde(default)]
+    results: Vec<DashScopeImageResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DashScopeImageResult {
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiGenerateResponse {
+    #[serde(default)]
+    candidates: Vec<GeminiCandidate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiCandidate {
+    #[serde(default)]
+    content: Option<GeminiContent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiContent {
+    #[serde(default)]
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiPart {
+    #[serde(default)]
+    inline_data: Option<GeminiInlineData>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiInlineData {
+    #[serde(default)]
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,6 +245,75 @@ pub fn clear_ai_logs() -> Result<(), String> {
 #[tauri::command]
 pub fn get_ai_log_path() -> Result<String, String> {
     config::log_path().map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn ai_generate_image(
+    app_handle: AppHandle,
+    prompt: String,
+    model: String,
+) -> Result<GeneratedMedia, String> {
+    let cfg = config::load_image_config();
+    validate_provider_config_basics(&cfg, "图片")?;
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("尚未选择图片生成模型".to_string());
+    }
+    if prompt.trim().is_empty() {
+        return Err("图片生成描述为空".to_string());
+    }
+
+    match cfg.provider.trim() {
+        "openai" | "custom" | "zhipu" | "siliconflow" | "midjourney" | "volcengine" => {
+            generate_openai_compatible_image(&cfg, model, &prompt).await
+        }
+        "aliyun" => generate_dashscope_image(&app_handle, &cfg, model, &prompt).await,
+        "gemini" => generate_gemini_image(&cfg, model, &prompt).await,
+        "sd-webui" => generate_sd_webui_image(&cfg, &prompt).await,
+        "stability" => Err("Stability AI 图片接口需要 multipart/form-data；当前客户端尚未启用该格式，请先通过自定义 OpenAI 兼容网关接入。".to_string()),
+        "baidu" => Err("百度千帆/文心一格图片接口需要 Access Token 获取流程；当前配置不足以直连。请使用 OpenAI 兼容网关或后续补充 OAuth 配置。".to_string()),
+        "tencent" => Err("腾讯混元图像接口需要 TC3 签名参数；当前配置不足以直连。请使用 OpenAI 兼容网关或后续补充 SecretId/SecretKey/Region 配置。".to_string()),
+        "minimax" => Err("MiniMax 图片接口是原生 /v1/image_generation 协议，不是 OpenAI /v1/images/generations；当前客户端尚未适配原生请求体，请先通过 OpenAI 兼容网关接入。".to_string()),
+        "replicate" | "fal" => Err("Replicate/fal.ai 图片接口是任务式 API，且不同模型路由不同；当前模型字段不足以稳定直连。请先通过自定义网关接入。".to_string()),
+        "comfyui" => Err("ComfyUI 需要完整 workflow JSON 才能生成图片；当前 UI 只有模型选择，尚未适配 workflow 提交。".to_string()),
+        other => Err(format!("当前暂未适配 {other} 图片生成接口，请使用 OpenAI 兼容 Base URL 或选择已适配供应商。")),
+    }
+}
+
+#[tauri::command]
+pub async fn ai_generate_tts(
+    text: String,
+    voice_prompt: String,
+    model: String,
+    format: String,
+) -> Result<GeneratedMedia, String> {
+    let cfg = config::load_tts_config();
+    validate_provider_config_basics(&cfg, "音频")?;
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("尚未选择音频生成模型".to_string());
+    }
+    if text.trim().is_empty() {
+        return Err("语音文本为空".to_string());
+    }
+
+    let response_format = normalize_audio_format(&format);
+    match cfg.provider.trim() {
+        "openai" | "custom" => {
+            generate_openai_compatible_tts(&cfg, model, &text, &voice_prompt, response_format).await
+        }
+        "elevenlabs" => generate_elevenlabs_tts(&cfg, model, &text, &voice_prompt, response_format).await,
+        "aliyun" => generate_dashscope_tts(&cfg, model, &text, &voice_prompt, response_format).await,
+        "gemini" => Err("Gemini TTS 当前返回格式需要解析 generateContent 的 inline audio；此客户端尚未适配，请先使用 OpenAI 兼容音频网关。".to_string()),
+        "azure" => Err("Azure Speech 需要 region endpoint、SSML voice 和 Ocp-Apim-Subscription-Key；当前配置不足以稳定直连。请使用自定义网关或后续补充 Azure 专用字段。".to_string()),
+        "volcengine" => Err("火山引擎语音接口需要 AppID/Cluster/签名等专用参数；当前配置不足以直连。".to_string()),
+        "tencent" => Err("腾讯云 TTS 需要 TC3 签名参数；当前配置不足以直连。".to_string()),
+        "baidu" => Err("百度语音合成需要 Access Token 获取流程；当前配置不足以直连。".to_string()),
+        "minimax" => Err("MiniMax TTS 需要 group_id 和 voice_id 等专用字段；当前 UI 暂未配置这些参数。".to_string()),
+        "xunfei" => Err("讯飞 TTS 需要 WebSocket 鉴权签名参数；当前配置不足以直连。".to_string()),
+        "edge-tts" => Err("Edge TTS 是本地/命令行方案，当前 Tauri 后端尚未集成 edge-tts 执行器。".to_string()),
+        other => Err(format!("当前暂未适配 {other} 音频生成接口，请使用 OpenAI 兼容 Base URL 或选择已适配供应商。")),
+    }
 }
 
 #[tauri::command]
@@ -469,6 +625,636 @@ fn effective_endpoint(cfg: &AiConfig) -> String {
         "custom" => String::new(),
         _ => String::new(),
     }
+}
+
+fn media_endpoint(cfg: &AiProviderConfig, path: &str) -> String {
+    let configured_base = cfg.base_url.trim();
+    let should_use_configured_base =
+        !configured_base.is_empty() && !is_placeholder_base_url(configured_base);
+    let base = if should_use_configured_base {
+        cfg.base_url.trim().trim_end_matches('/').to_string()
+    } else {
+        match cfg.provider.as_str() {
+            "openai" => "https://api.openai.com/v1".to_string(),
+            "volcengine" => "https://ark.cn-beijing.volces.com/api/v3".to_string(),
+            "zhipu" => "https://open.bigmodel.cn/api/paas/v4".to_string(),
+            "siliconflow" => "https://api.siliconflow.cn/v1".to_string(),
+            _ => String::new(),
+        }
+    };
+    if base.is_empty() {
+        path.to_string()
+    } else if base.ends_with(path) {
+        base
+    } else {
+        format!("{base}/{path}")
+    }
+}
+
+fn is_placeholder_base_url(value: &str) -> bool {
+    value.to_ascii_lowercase().contains("api.example.com")
+}
+
+async fn generate_openai_compatible_image(
+    cfg: &AiProviderConfig,
+    model: &str,
+    prompt: &str,
+) -> Result<GeneratedMedia, String> {
+    let endpoint = media_endpoint(cfg, "images/generations");
+    let body = if is_seedream_model(model) {
+        serde_json::json!({
+            "model": model,
+            "prompt": prompt,
+            "size": "2K",
+            "response_format": "url",
+            "stream": false,
+            "watermark": false,
+            "sequential_image_generation": "disabled"
+        })
+    } else {
+        serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "n": 1,
+        "size": "1024x1024",
+        "response_format": "b64_json"
+        })
+    };
+    let text = post_json_text(cfg, &endpoint, body, "图片生成").await?;
+    parse_openai_image_response(cfg, model, &endpoint, &text).await
+}
+
+async fn generate_dashscope_image(
+    app_handle: &AppHandle,
+    cfg: &AiProviderConfig,
+    model: &str,
+    prompt: &str,
+) -> Result<GeneratedMedia, String> {
+    let endpoint = dashscope_endpoint(cfg, "services/aigc/text2image/image-synthesis");
+    let body = serde_json::json!({
+        "model": model,
+        "input": {
+            "prompt": prompt
+        },
+        "parameters": {
+            "size": "1024*1024",
+            "n": 1
+        }
+    });
+    let body = serde_json::to_string(&body).map_err(|e| format!("序列化阿里云图片生成请求失败: {e}"))?;
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&endpoint)
+        .bearer_auth(cfg.api_key.trim())
+        .header("Content-Type", "application/json")
+        .header("X-DashScope-Async", "enable")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("阿里云图片生成请求失败: {e}"))?;
+    let status = response.status();
+    let text = response.text().await.map_err(|e| format!("读取阿里云图片生成响应失败: {e}"))?;
+    if !status.is_success() {
+        log_provider_event("image_generate", cfg, model, &endpoint, false, &text);
+        return Err(format!("阿里云图片生成失败 ({status}): {text}"));
+    }
+    let parsed: DashScopeTaskCreateResponse = serde_json::from_str(&text)
+        .map_err(|e| format!("解析阿里云图片任务响应失败: {e}; 响应: {text}"))?;
+    let task_id = parsed
+        .output
+        .task_id
+        .ok_or_else(|| format!("阿里云图片任务响应缺少 task_id: {text}"))?;
+    let task_endpoint = dashscope_endpoint(cfg, &format!("tasks/{task_id}"));
+    emit_media_generation_progress(
+        app_handle,
+        cfg,
+        model,
+        "submitted",
+        0,
+        36,
+        "阿里云图片任务已提交，等待生成结果...",
+    );
+    for attempt in 1..=36 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        emit_media_generation_progress(
+            app_handle,
+            cfg,
+            model,
+            "polling",
+            attempt,
+            36,
+            "正在查询阿里云图片生成状态...",
+        );
+        let poll = client
+            .get(&task_endpoint)
+            .bearer_auth(cfg.api_key.trim())
+            .send()
+            .await
+            .map_err(|e| format!("查询阿里云图片任务失败: {e}"))?;
+        let status = poll.status();
+        let text = poll.text().await.map_err(|e| format!("读取阿里云图片任务响应失败: {e}"))?;
+        if !status.is_success() {
+            log_provider_event("image_generate", cfg, model, &task_endpoint, false, &text);
+            return Err(format!("查询阿里云图片任务失败 ({status}): {text}"));
+        }
+        let parsed: DashScopeTaskCreateResponse = serde_json::from_str(&text)
+            .map_err(|e| format!("解析阿里云图片任务状态失败: {e}; 响应: {text}"))?;
+        match parsed.output.task_status.as_deref() {
+            Some("SUCCEEDED") => {
+                emit_media_generation_progress(
+                    app_handle,
+                    cfg,
+                    model,
+                    "succeeded",
+                    attempt,
+                    36,
+                    "阿里云图片生成完成，正在下载结果...",
+                );
+                let url = parsed
+                    .output
+                    .results
+                    .into_iter()
+                    .find_map(|item| item.url)
+                    .ok_or_else(|| format!("阿里云图片任务完成但缺少图片 URL: {text}"))?;
+                return download_generated_media(cfg, model, &task_endpoint, &url, "png", "image_generate").await;
+            }
+            Some("FAILED") | Some("CANCELED") | Some("UNKNOWN") => {
+                emit_media_generation_progress(
+                    app_handle,
+                    cfg,
+                    model,
+                    "failed",
+                    attempt,
+                    36,
+                    "阿里云图片任务失败。",
+                );
+                log_provider_event("image_generate", cfg, model, &task_endpoint, false, &text);
+                return Err(format!("阿里云图片任务失败: {text}"));
+            }
+            _ => {}
+        }
+    }
+    emit_media_generation_progress(
+        app_handle,
+        cfg,
+        model,
+        "timeout",
+        36,
+        36,
+        "阿里云图片任务超时。",
+    );
+    Err("阿里云图片任务超时，请稍后查看任务或重试。".to_string())
+}
+
+fn emit_media_generation_progress(
+    app_handle: &AppHandle,
+    cfg: &AiProviderConfig,
+    model: &str,
+    phase: &str,
+    attempt: u8,
+    total_attempts: u8,
+    message: &str,
+) {
+    let _ = app_handle.emit(
+        "ai-media-generation-progress",
+        AiMediaGenerationProgress {
+            provider: cfg.provider.clone(),
+            model: model.to_string(),
+            phase: phase.to_string(),
+            attempt,
+            total_attempts,
+            message: message.to_string(),
+        },
+    );
+}
+
+async fn generate_gemini_image(
+    cfg: &AiProviderConfig,
+    model: &str,
+    prompt: &str,
+) -> Result<GeneratedMedia, String> {
+    let endpoint = gemini_endpoint(cfg, model, "generateContent");
+    let body = serde_json::json!({
+        "contents": [{
+            "parts": [{ "text": prompt }]
+        }]
+    });
+    let body = serde_json::to_string(&body).map_err(|e| format!("序列化 Gemini 图片生成请求失败: {e}"))?;
+    let response = reqwest::Client::new()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .header("x-goog-api-key", cfg.api_key.trim())
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini 图片生成请求失败: {e}"))?;
+    let status = response.status();
+    let text = response.text().await.map_err(|e| format!("读取 Gemini 图片生成响应失败: {e}"))?;
+    if !status.is_success() {
+        log_provider_event("image_generate", cfg, model, &endpoint, false, &text);
+        return Err(format!("Gemini 图片生成失败 ({status}): {text}"));
+    }
+    let parsed: GeminiGenerateResponse = serde_json::from_str(&text)
+        .map_err(|e| format!("解析 Gemini 图片生成响应失败: {e}; 响应: {text}"))?;
+    for candidate in parsed.candidates {
+        if let Some(content) = candidate.content {
+            for part in content.parts {
+                if let Some(inline) = part.inline_data {
+                    let extension = extension_from_mime(&inline.mime_type, "png");
+                    log_provider_event("image_generate", cfg, model, &endpoint, true, "image generated");
+                    return Ok(GeneratedMedia {
+                        base64_data: inline.data,
+                        extension,
+                    });
+                }
+            }
+        }
+    }
+    Err("Gemini 图片生成响应中没有 inline image 数据".to_string())
+}
+
+async fn generate_sd_webui_image(
+    cfg: &AiProviderConfig,
+    prompt: &str,
+) -> Result<GeneratedMedia, String> {
+    let endpoint = media_endpoint(cfg, "sdapi/v1/txt2img");
+    let body = serde_json::json!({
+        "prompt": prompt,
+        "steps": 28,
+        "width": 1024,
+        "height": 1024,
+        "batch_size": 1,
+        "n_iter": 1
+    });
+    let text = post_json_text(cfg, &endpoint, body, "Stable Diffusion WebUI 图片生成").await?;
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("解析 Stable Diffusion WebUI 响应失败: {e}; 响应: {text}"))?;
+    let b64 = parsed
+        .get("images")
+        .and_then(|v| v.as_array())
+        .and_then(|items| items.first())
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("Stable Diffusion WebUI 响应中没有 images[0]: {text}"))?;
+    log_provider_event("image_generate", cfg, cfg.model.trim(), &endpoint, true, "image generated");
+    Ok(GeneratedMedia {
+        base64_data: strip_data_url_prefix(b64).to_string(),
+        extension: "png".to_string(),
+    })
+}
+
+async fn generate_openai_compatible_tts(
+    cfg: &AiProviderConfig,
+    model: &str,
+    text: &str,
+    voice_prompt: &str,
+    response_format: &str,
+) -> Result<GeneratedMedia, String> {
+    let endpoint = media_endpoint(cfg, "audio/speech");
+    let voice = openai_voice_from_prompt(voice_prompt);
+    let body = serde_json::json!({
+        "model": model,
+        "input": text,
+        "voice": voice,
+        "response_format": response_format
+    });
+    post_audio_bytes(cfg, model, &endpoint, body, response_format, "tts_generate").await
+}
+
+async fn generate_elevenlabs_tts(
+    cfg: &AiProviderConfig,
+    model: &str,
+    text: &str,
+    voice_prompt: &str,
+    response_format: &str,
+) -> Result<GeneratedMedia, String> {
+    let voice_id = elevenlabs_voice_id(voice_prompt);
+    let endpoint = if !cfg.base_url.trim().is_empty() {
+        let base = cfg.base_url.trim().trim_end_matches('/');
+        if base.contains("/text-to-speech/") {
+            base.to_string()
+        } else {
+            format!("{base}/v1/text-to-speech/{voice_id}")
+        }
+    } else {
+        format!("https://api.elevenlabs.io/v1/text-to-speech/{voice_id}")
+    };
+    let output_format = match response_format {
+        "mp3" => "mp3_44100_128",
+        "pcm" => "pcm_44100",
+        "wav" => "pcm_44100",
+        _ => "mp3_44100_128",
+    };
+    let body = serde_json::json!({
+        "text": text,
+        "model_id": model,
+        "output_format": output_format
+    });
+    let body = serde_json::to_string(&body).map_err(|e| format!("序列化 ElevenLabs 请求失败: {e}"))?;
+    let response = reqwest::Client::new()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .header("xi-api-key", cfg.api_key.trim())
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("ElevenLabs 音频生成请求失败: {e}"))?;
+    response_to_generated_media(response, cfg, model, &endpoint, response_format, "tts_generate").await
+}
+
+async fn generate_dashscope_tts(
+    cfg: &AiProviderConfig,
+    model: &str,
+    text: &str,
+    voice_prompt: &str,
+    response_format: &str,
+) -> Result<GeneratedMedia, String> {
+    let endpoint = dashscope_endpoint(cfg, "services/audio/tts");
+    let voice = dashscope_voice_from_prompt(voice_prompt);
+    let body = serde_json::json!({
+        "model": model,
+        "input": {
+            "text": text,
+            "voice": voice
+        },
+        "parameters": {
+            "format": response_format
+        }
+    });
+    post_audio_bytes(cfg, model, &endpoint, body, response_format, "tts_generate").await
+}
+
+async fn post_json_text(
+    cfg: &AiProviderConfig,
+    endpoint: &str,
+    body: serde_json::Value,
+    action_label: &str,
+) -> Result<String, String> {
+    let body = serde_json::to_string(&body).map_err(|e| format!("序列化{action_label}请求失败: {e}"))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("创建{action_label}HTTP客户端失败: {e}"))?;
+    let mut request = client
+        .post(endpoint)
+        .header("Content-Type", "application/json")
+        .body(body);
+    if !cfg.api_key.trim().is_empty() {
+        request = request.bearer_auth(cfg.api_key.trim());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| {
+            let message = format!("{action_label}请求失败: {e}");
+            log_provider_event("media_generate", cfg, cfg.model.trim(), endpoint, false, &message);
+            message
+        })?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取{action_label}响应失败: {e}"))?;
+    if !status.is_success() {
+        log_provider_event("media_generate", cfg, cfg.model.trim(), endpoint, false, &text);
+        return Err(format!("{action_label}失败 ({status}): {text}"));
+    }
+    Ok(text)
+}
+
+async fn post_audio_bytes(
+    cfg: &AiProviderConfig,
+    model: &str,
+    endpoint: &str,
+    body: serde_json::Value,
+    extension: &str,
+    action: &str,
+) -> Result<GeneratedMedia, String> {
+    let body = serde_json::to_string(&body).map_err(|e| format!("序列化音频生成请求失败: {e}"))?;
+    let mut request = reqwest::Client::new()
+        .post(endpoint)
+        .header("Content-Type", "application/json")
+        .body(body);
+    if !cfg.api_key.trim().is_empty() {
+        request = request.bearer_auth(cfg.api_key.trim());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("音频生成请求失败: {e}"))?;
+    response_to_generated_media(response, cfg, model, endpoint, extension, action).await
+}
+
+async fn response_to_generated_media(
+    response: reqwest::Response,
+    cfg: &AiProviderConfig,
+    model: &str,
+    endpoint: &str,
+    extension: &str,
+    action: &str,
+) -> Result<GeneratedMedia, String> {
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        log_provider_event(action, cfg, model, endpoint, false, &text);
+        return Err(format!("音频生成失败 ({status}): {text}"));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("读取音频生成响应失败: {e}"))?;
+    log_provider_event(action, cfg, model, endpoint, true, "audio generated");
+    Ok(GeneratedMedia {
+        base64_data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        extension: extension.to_string(),
+    })
+}
+
+async fn parse_openai_image_response(
+    cfg: &AiProviderConfig,
+    model: &str,
+    endpoint: &str,
+    text: &str,
+) -> Result<GeneratedMedia, String> {
+    let parsed: OpenAiImageResponse = serde_json::from_str(text)
+        .map_err(|e| format!("解析图片生成响应失败: {e}; 响应: {text}"))?;
+    let item = parsed
+        .data
+        .into_iter()
+        .next()
+        .ok_or_else(|| "图片生成响应中没有图片数据".to_string())?;
+    if let Some(b64) = item.b64_json {
+        log_provider_event("image_generate", cfg, model, endpoint, true, "image generated");
+        return Ok(GeneratedMedia {
+            base64_data: strip_data_url_prefix(&b64).to_string(),
+            extension: "png".to_string(),
+        });
+    }
+    if let Some(url) = item.url {
+        return download_generated_media(cfg, model, endpoint, &url, "png", "image_generate").await;
+    }
+    Err("图片生成响应中没有 b64_json 或 url".to_string())
+}
+
+async fn download_generated_media(
+    cfg: &AiProviderConfig,
+    model: &str,
+    endpoint: &str,
+    url: &str,
+    extension: &str,
+    action: &str,
+) -> Result<GeneratedMedia, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("创建下载客户端失败: {e}"))?;
+    let bytes = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("下载生成媒体失败: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("读取生成媒体失败: {e}"))?;
+    log_provider_event(action, cfg, model, endpoint, true, "media generated");
+    Ok(GeneratedMedia {
+        base64_data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        extension: extension.to_string(),
+    })
+}
+
+fn dashscope_endpoint(cfg: &AiProviderConfig, path: &str) -> String {
+    let base = if cfg.base_url.trim().is_empty() {
+        "https://dashscope.aliyuncs.com/api/v1".to_string()
+    } else {
+        cfg.base_url.trim().trim_end_matches('/').to_string()
+    };
+    if base.ends_with(path) {
+        base
+    } else {
+        format!("{base}/{path}")
+    }
+}
+
+fn gemini_endpoint(_cfg: &AiProviderConfig, model: &str, action: &str) -> String {
+    let base = if _cfg.base_url.trim().is_empty() {
+        "https://generativelanguage.googleapis.com/v1beta".to_string()
+    } else {
+        _cfg.base_url.trim().trim_end_matches('/').to_string()
+    };
+    format!("{base}/models/{model}:{action}")
+}
+
+fn strip_data_url_prefix(value: &str) -> &str {
+    value.split_once(',').map(|(_, data)| data).unwrap_or(value)
+}
+
+fn extension_from_mime(mime_type: &str, fallback: &str) -> String {
+    match mime_type {
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/ogg" => "ogg",
+        "audio/flac" => "flac",
+        _ => fallback,
+    }
+    .to_string()
+}
+
+fn is_seedream_model(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("seedream")
+}
+
+fn validate_provider_config_basics(cfg: &AiProviderConfig, capability: &str) -> Result<(), String> {
+    if cfg.provider.trim().is_empty() {
+        return Err(format!("尚未选择{capability} AI 供应商"));
+    }
+    if cfg.model.trim().is_empty() {
+        return Err(format!("尚未配置{capability}模型"));
+    }
+    if cfg.provider == "custom" && is_placeholder_base_url(&cfg.base_url) {
+        return Err(format!("自定义{capability} Base URL 仍是示例地址，请填写真实接口地址"));
+    }
+    if cfg.api_key.trim().is_empty()
+        && cfg.provider != "sd-webui"
+        && cfg.provider != "comfyui"
+        && cfg.provider != "edge-tts"
+    {
+        return Err(format!("尚未配置{capability} API Key"));
+    }
+    Ok(())
+}
+
+fn normalize_audio_format(value: &str) -> &'static str {
+    match value.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
+        "opus" => "opus",
+        "aac" => "aac",
+        "flac" => "flac",
+        "wav" => "wav",
+        "pcm" => "pcm",
+        _ => "mp3",
+    }
+}
+
+fn openai_voice_from_prompt(value: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    for voice in ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"] {
+        if lower.contains(voice) {
+            return voice.to_string();
+        }
+    }
+    "alloy".to_string()
+}
+
+fn elevenlabs_voice_id(value: &str) -> String {
+    for token in value.split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == '，' || c == '；') {
+        let token = token.trim();
+        if token.len() >= 16 && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            return token.to_string();
+        }
+    }
+    "21m00Tcm4TlvDq8ikWAM".to_string()
+}
+
+fn dashscope_voice_from_prompt(value: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    for voice in [
+        "longxiaochun",
+        "longxiaoxia",
+        "longxiaobai",
+        "longlaotie",
+        "loongstella",
+        "loongbella",
+        "loongnina",
+        "zhichu",
+        "zhiting",
+        "zhixiang",
+        "zhiwei",
+        "zhimiao",
+        "zhiru",
+    ] {
+        if lower.contains(voice) {
+            return voice.to_string();
+        }
+    }
+    "longxiaochun".to_string()
+}
+
+fn log_provider_event(
+    action: &str,
+    cfg: &AiProviderConfig,
+    model: &str,
+    endpoint: &str,
+    success: bool,
+    message: &str,
+) {
+    let chat_cfg = AiConfig {
+        provider: cfg.provider.clone(),
+        model: model.to_string(),
+        api_key: cfg.api_key.clone(),
+        base_url: cfg.base_url.clone(),
+    };
+    log_ai_event(action, &chat_cfg, endpoint, success, message);
 }
 
 fn log_ai_event(action: &str, cfg: &AiConfig, endpoint: &str, success: bool, message: &str) {
