@@ -360,14 +360,14 @@ function SceneWorldlinePanel({
     <aside className="flex w-80 shrink-0 flex-col border-r border-border bg-surface-container-lowest">
       <div className="flex h-10 items-center justify-between border-b border-border px-3">
         <span className="flex items-center gap-1.5 font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">
-          <GitBranch className="h-3 w-3 text-secondary" /> 世界线 · 场景关系图
+          <GitBranch className="h-3 w-3 text-secondary" /> 场景关系图
         </span>
         <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => adjustZoom(-0.1)}
             className="story-os-icon-button h-6 w-6"
-            aria-label="缩小世界线"
+            aria-label="缩小"
             title="缩小"
           >
             <ZoomOut className="h-3 w-3" />
@@ -379,7 +379,7 @@ function SceneWorldlinePanel({
             type="button"
             onClick={() => adjustZoom(0.1)}
             className="story-os-icon-button h-6 w-6"
-            aria-label="放大世界线"
+            aria-label="放大"
             title="放大"
           >
             <ZoomIn className="h-3 w-3" />
@@ -490,7 +490,7 @@ function SceneWorldlinePanel({
         </div>
         {layout.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-center text-[10px] text-muted-foreground">
-            加载世界线…
+            加载中…
           </div>
         )}
       </div>
