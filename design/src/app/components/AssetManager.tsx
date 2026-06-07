@@ -224,8 +224,11 @@ export function AssetManager() {
   }, [projectId]);
 
   useEffect(() => {
-    if (searchParams.get('tab') === 'character') {
+    const tabParam = searchParams.get('tab');
+    if (tabParam === 'character') {
       setActiveTab('character');
+    } else if (!tabParam) {
+      setActiveTab('scene');
     }
   }, [searchParams]);
 
