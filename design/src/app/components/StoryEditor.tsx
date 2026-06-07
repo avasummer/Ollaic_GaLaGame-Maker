@@ -24,7 +24,7 @@ import {
   exportProject, readProjectMetadata, saveProjectMetadata,
   createProjectSnapshot, listProjectSnapshots, renameProjectSnapshot, deleteProjectSnapshot, restoreProjectSnapshot,
   setRuntimeProject, setRuntimeTemplateDir, getRuntimeUrl, jumpToSentence, openInBrowser,
-  readFileText, parseSceneHeader,
+  readFileText, parseSceneHeader, deleteScene, renameScene,
   type ProjectInfo, type SceneHeader, type ProjectMetadata, type SnapshotInfo,
 } from '../lib/webgal-ipc';
 import { listCharacters, listCharacterNames } from '../lib/character-ipc';
@@ -173,6 +173,10 @@ interface SceneWorldlinePanelProps {
   onOpenScene: (sceneName: string) => void;
   onOpenSceneManager?: () => void;
   characterColors?: Record<string, string>;
+  nodePositions?: Record<string, { x: number; y: number }>;
+  onUpdateNodePosition?: (sceneName: string, x: number, y: number) => void;
+  onAddSceneLink?: (fromScene: string, toScene: string) => void;
+  onRemoveSceneLink?: (fromScene: string, toScene: string, kind: SceneLink['kind']) => void;
 }
 
 interface WorldNodeLayout {
@@ -274,6 +278,644 @@ function buildEdgePath(from: WorldNodeLayout, to: WorldNodeLayout): string {
   return `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
 }
 
+interface FullScreenWorldlineProps {
+  scenes: string[];
+  currentSceneName: string;
+  sceneHeaders: Record<string, SceneHeader>;
+  sceneLinkMap: Record<string, SceneLink[]>;
+  nodes: WebGalNode[];
+  selectedNode: WebGalNode | null;
+  onSelectNode: (node: WebGalNode) => void;
+  onOpenScene: (sceneName: string) => void;
+  onClose: () => void;
+  characterColors?: Record<string, string>;
+  nodePositions?: Record<string, { x: number; y: number }>;
+  onUpdateNodePosition?: (sceneName: string, x: number, y: number) => void;
+  onAddSceneLink?: (fromScene: string, toScene: string) => void;
+  onRemoveSceneLink?: (fromScene: string, toScene: string, kind: SceneLink['kind']) => void;
+  onNewScene?: () => void;
+  onDeleteScene?: (sceneName: string) => void;
+  onRenameScene?: (sceneName: string) => void;
+  onOpenSceneManager?: () => void;
+}
+
+function FullScreenWorldline({
+  scenes,
+  currentSceneName,
+  sceneHeaders,
+  sceneLinkMap,
+  nodes,
+  selectedNode,
+  onSelectNode,
+  onOpenScene,
+  onClose,
+  characterColors,
+  nodePositions,
+  onUpdateNodePosition,
+  onAddSceneLink,
+  onRemoveSceneLink,
+  onNewScene,
+  onDeleteScene,
+  onRenameScene,
+  onOpenSceneManager,
+}: FullScreenWorldlineProps) {
+  const visibleNodes = nodes.filter((node) => node.type !== 'comment' || node.content?.trim());
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+  const [nodeDrag, setNodeDrag] = useState<{ sceneName: string; startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const [connectMode, setConnectMode] = useState(false);
+  const [connectSource, setConnectSource] = useState<string | null>(null);
+  const [hoveredEdge, setHoveredEdge] = useState<{ from: string; to: string; kind: string; label?: string; x: number; y: number } | null>(null);
+  const [connDrag, setConnDrag] = useState<{ fromScene: string; sx: number; sy: number; ex: number; ey: number } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ sceneName: string; x: number; y: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRectRef = useRef<DOMRect | null>(null);
+
+  const baseLayout = useMemo(
+    () => buildWorldLayout(scenes, currentSceneName, sceneLinkMap),
+    [scenes, currentSceneName, sceneLinkMap],
+  );
+
+  // Apply custom node positions
+  const layout = useMemo(() => {
+    const nodes = baseLayout.nodes.map((n) => {
+      const custom = nodePositions?.[n.scene];
+      if (custom) return { ...n, x: custom.x, y: custom.y };
+      return n;
+    });
+    // Recalculate bounds
+    let maxX = 0, maxY = 0;
+    for (const n of nodes) {
+      maxX = Math.max(maxX, n.x + NODE_WIDTH);
+      maxY = Math.max(maxY, n.y + NODE_HEIGHT);
+    }
+    return { nodes, width: Math.max(baseLayout.width, maxX + PADDING), height: Math.max(baseLayout.height, maxY + PADDING) };
+  }, [baseLayout, nodePositions]);
+
+  const { width, height } = layout;
+
+  const layoutMap = useMemo(() => {
+    const map = new Map<string, WorldNodeLayout>();
+    for (const n of layout.nodes) map.set(n.scene, n);
+    return map;
+  }, [layout.nodes]);
+
+  const edges = useMemo(() => {
+    const result: Array<{ from: WorldNodeLayout; to: WorldNodeLayout; active: boolean; label?: string; kind: SceneLink['kind'] }> = [];
+    for (const node of layout.nodes) {
+      for (const link of node.outgoing) {
+        const target = layoutMap.get(link.target);
+        if (!target) continue;
+        result.push({ from: node, to: target, active: node.isCurrent, label: link.label, kind: link.kind });
+      }
+    }
+    return result;
+  }, [layout.nodes, layoutMap]);
+
+  const adjustZoom = useCallback((delta: number) => {
+    setZoom((z) => Math.min(1.4, Math.max(0.5, +(z + delta).toFixed(2))));
+  }, []);
+
+  const resetView = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  // --- Node drag handling ---
+  const handleNodeMouseDown = useCallback(
+    (e: React.MouseEvent, sceneName: string) => {
+      if (e.button !== 0) return;
+      if (connectMode) return;
+      e.stopPropagation();
+      const node = layout.nodes.find((n) => n.scene === sceneName);
+      if (!node) return;
+      setNodeDrag({ sceneName, startX: e.clientX, startY: e.clientY, origX: node.x, origY: node.y });
+    },
+    [connectMode, layout.nodes],
+  );
+
+  const handleNodeMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!nodeDrag || !onUpdateNodePosition) return;
+      const dx = (e.clientX - nodeDrag.startX) / zoom;
+      const dy = (e.clientY - nodeDrag.startY) / zoom;
+      const nx = Math.round(nodeDrag.origX + dx);
+      const ny = Math.round(nodeDrag.origY + dy);
+      onUpdateNodePosition(nodeDrag.sceneName, nx, ny);
+    },
+    [nodeDrag, zoom, onUpdateNodePosition],
+  );
+
+  const handleNodeMouseUp = useCallback(() => setNodeDrag(null), []);
+
+  useEffect(() => {
+    if (!nodeDrag) return;
+    const stop = () => setNodeDrag(null);
+    window.addEventListener('mouseup', stop);
+    return () => window.removeEventListener('mouseup', stop);
+  }, [nodeDrag]);
+
+  // --- Canvas pan handling ---
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-worldline-node]') || target.closest('[data-worldline-edge]')) return;
+      setDragging({ startX: e.clientX, startY: e.clientY, baseX: pan.x, baseY: pan.y });
+    },
+    [pan],
+  );
+
+  const onMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (nodeDrag) { handleNodeMouseMove(e); return; }
+      if (!dragging) return;
+      setPan({ x: dragging.baseX + (e.clientX - dragging.startX), y: dragging.baseY + (e.clientY - dragging.startY) });
+    },
+    [dragging, nodeDrag, handleNodeMouseMove],
+  );
+
+  const onMouseUp = useCallback(() => { setDragging(null); handleNodeMouseUp(); }, [handleNodeMouseUp]);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const stop = () => setDragging(null);
+    window.addEventListener('mouseup', stop);
+    return () => window.removeEventListener('mouseup', stop);
+  }, [dragging]);
+
+  // --- Connect mode node click ---
+  const handleNodeClick = useCallback(
+    (sceneName: string) => {
+      if (!connectMode || !onAddSceneLink) {
+        onOpenScene(sceneName);
+        return;
+      }
+      if (!connectSource) {
+        setConnectSource(sceneName);
+      } else if (connectSource !== sceneName) {
+        onAddSceneLink(connectSource, sceneName);
+        setConnectSource(null);
+        setConnectMode(false);
+      }
+    },
+    [connectMode, connectSource, onAddSceneLink, onOpenScene],
+  );
+
+  // --- Drag-to-connect from node handle ---
+  const getSceneAtPoint = useCallback(
+    (clientX: number, clientY: number): string | null => {
+      const rect = containerRectRef.current;
+      if (!rect) return null;
+      // Convert screen coords to layout coords
+      const lx = (clientX - rect.left - pan.x) / zoom;
+      const ly = (clientY - rect.top - pan.y) / zoom;
+      for (const node of layout.nodes) {
+        if (lx >= node.x && lx <= node.x + NODE_WIDTH && ly >= node.y && ly <= node.y + NODE_HEIGHT) {
+          return node.scene;
+        }
+      }
+      return null;
+    },
+    [layout.nodes, pan, zoom],
+  );
+
+  const handleConnDragStart = useCallback(
+    (e: React.MouseEvent, fromScene: string) => {
+      if (!onAddSceneLink) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) containerRectRef.current = rect;
+      setConnDrag({ fromScene, sx: e.clientX, sy: e.clientY, ex: e.clientX, ey: e.clientY });
+    },
+    [onAddSceneLink],
+  );
+
+  useEffect(() => {
+    if (!connDrag) return;
+    const handleMove = (e: MouseEvent) => {
+      setConnDrag((prev) => (prev ? { ...prev, ex: e.clientX, ey: e.clientY } : null));
+    };
+    const handleUp = (e: MouseEvent) => {
+      setConnDrag((prev) => {
+        if (prev && onAddSceneLink) {
+          const target = getSceneAtPoint(e.clientX, e.clientY);
+          if (target && target !== prev.fromScene) {
+            onAddSceneLink(prev.fromScene, target);
+          }
+        }
+        return null;
+      });
+      containerRectRef.current = null;
+    };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [connDrag, onAddSceneLink, getSceneAtPoint]);
+
+  // Close context menu on click outside
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [ctxMenu]);
+
+  return (
+    <div className="flex h-full flex-col bg-surface-container-lowest">
+      {/* Header bar */}
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface-container-low px-4">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-sm text-on-surface-variant hover:bg-surface-container-high hover:text-foreground transition-colors"
+            aria-label="返回编辑器"
+          >
+            <ArrowRight className="h-4 w-4 rotate-180" />
+            返回编辑器
+          </button>
+          <div className="h-5 w-px bg-border/60" />
+          <span className="flex items-center gap-2 font-mono-family text-xs font-semibold uppercase tracking-widest text-on-surface-variant">
+            <GitBranch className="h-4 w-4 text-secondary" /> 场景关系图 · 全屏
+          </span>
+          <span className="rounded bg-secondary/10 px-2 py-0.5 font-mono text-[10px] text-secondary">
+            {scenes.length} 场景
+          </span>
+          {onNewScene && (
+            <button
+              type="button"
+              onClick={onNewScene}
+              className="flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors"
+              title="新建场景"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              新建
+            </button>
+          )}
+          {onOpenSceneManager && (
+            <button
+              type="button"
+              onClick={onOpenSceneManager}
+              className="flex items-center gap-1 rounded-sm px-2 py-1 text-xs text-on-surface-variant hover:bg-surface-container-high hover:text-foreground transition-colors"
+              title="场景管理"
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              管理
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {onAddSceneLink && (
+            <>
+              <button
+                type="button"
+                onClick={() => { setConnectMode(!connectMode); setConnectSource(null); }}
+                className={`flex items-center gap-1 rounded-sm px-2 py-1 text-xs font-medium transition-colors ${
+                  connectMode
+                    ? 'bg-tertiary/20 text-tertiary ring-1 ring-tertiary/40'
+                    : 'text-on-surface-variant hover:bg-surface-container-high hover:text-tertiary'
+                }`}
+                title={connectMode ? '退出连线模式' : '连线模式：点击节点或拖拽节点右侧圆点来创建场景跳转'}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                连线
+              </button>
+              <div className="h-4 w-px bg-border/60" />
+            </>
+          )}
+          {connectMode && (
+            <span className="rounded bg-tertiary/10 px-2 py-0.5 font-mono text-[9px] text-tertiary">
+              {connectSource ? `来源: ${connectSource} → 点击目标` : '点击来源场景'}
+            </span>
+          )}
+          <button type="button" onClick={() => adjustZoom(-0.1)} className="story-os-icon-button h-7 w-7" aria-label="缩小" title="缩小">
+            <ZoomOut className="h-3.5 w-3.5" />
+          </button>
+          <span className="min-w-[32px] text-center font-mono text-[10px] text-muted-foreground">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button type="button" onClick={() => adjustZoom(0.1)} className="story-os-icon-button h-7 w-7" aria-label="放大" title="放大">
+            <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" onClick={resetView} className="story-os-icon-button h-7 w-7" aria-label="重置视图" title="重置视图">
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        {/* Large canvas */}
+        <div
+          ref={containerRef}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+          className={`relative flex-1 overflow-hidden bg-surface-container-low ${
+            connectMode ? 'cursor-crosshair' : dragging || nodeDrag ? 'cursor-grabbing' : 'cursor-grab'
+          }`}
+        >
+          <div className="absolute inset-0 opacity-60 flow-grid pointer-events-none" />
+          <div
+            className="absolute inset-0"
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transformOrigin: '0 0',
+              width,
+              height,
+            }}
+          >
+            <svg className="pointer-events-none absolute inset-0" style={{ width, height, overflow: 'visible' }}>
+              {edges.map((edge, idx) => {
+                const midX = (edge.from.x + NODE_WIDTH + edge.to.x) / 2;
+                const midY = (edge.from.y + edge.to.y + NODE_HEIGHT) / 2;
+                return (
+                  <g key={`${edge.from.scene}-${edge.to.scene}-${idx}`}>
+                    {/* Invisible wide hit area for edge hover/click */}
+                    <path
+                      d={buildEdgePath(edge.from, edge.to)}
+                      fill="none"
+                      stroke="transparent"
+                      strokeWidth={16}
+                      className="pointer-events-auto cursor-pointer"
+                      data-worldline-edge
+                      onMouseEnter={(e) => {
+                        const rect = containerRef.current?.getBoundingClientRect();
+                        if (rect) {
+                          setHoveredEdge({ from: edge.from.scene, to: edge.to.scene, kind: edge.kind, label: edge.label, x: e.clientX - rect.left, y: e.clientY - rect.top });
+                        }
+                      }}
+                      onMouseLeave={() => setHoveredEdge(null)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onRemoveSceneLink) {
+                          const ok = window.confirm(`删除从 "${edge.from.scene}" 到 "${edge.to.scene}" 的 ${edge.kind === 'choose' ? '分支' : '跳转'} 链接？\n这将修改源场景文件。`);
+                          if (ok) onRemoveSceneLink(edge.from.scene, edge.to.scene, edge.kind);
+                        }
+                      }}
+                    />
+                    <path
+                      d={buildEdgePath(edge.from, edge.to)}
+                      fill="none"
+                      stroke={edge.active ? 'var(--color-primary, #a43758)' : 'var(--color-outline-variant, #c8c2bf)'}
+                      strokeWidth={edge.active ? 2.5 : 1.5}
+                      strokeDasharray={edge.active ? undefined : '4 4'}
+                      opacity={edge.active ? 1 : 0.6}
+                      className="pointer-events-none"
+                    />
+                    {/* Edge kind badge */}
+                    <circle
+                      cx={midX}
+                      cy={midY}
+                      r={6}
+                      fill="var(--color-surface-bright, #fff)"
+                      stroke={edge.active ? 'var(--color-primary, #a43758)' : 'var(--color-outline-variant, #c8c2bf)'}
+                      strokeWidth={1}
+                      className="pointer-events-none"
+                    />
+                    <text
+                      x={midX}
+                      y={midY + 2.5}
+                      textAnchor="middle"
+                      className="pointer-events-none fill-on-surface-variant font-mono text-[7px] font-bold"
+                    >
+                      {edge.kind === 'choose' ? 'C' : edge.kind === 'call' ? '↗' : '→'}
+                    </text>
+                  </g>
+                );
+              })}
+              {/* Edge labels */}
+              {edges.map((edge, idx) => {
+                if (!edge.label) return null;
+                const mx = (edge.from.x + NODE_WIDTH + edge.to.x) / 2;
+                const my = (edge.from.y + edge.to.y + NODE_HEIGHT) / 2;
+                return (
+                  <text
+                    key={`label-${idx}`}
+                    x={mx}
+                    y={my - 12}
+                    className="fill-on-surface-variant/50 font-mono text-[8px] pointer-events-none"
+                    textAnchor="middle"
+                  >
+                    {edge.label}
+                  </text>
+                );
+              })}
+            </svg>
+
+            {/* Temp connection line while dragging to connect */}
+            {connDrag && onAddSceneLink && (() => {
+              const srcNode = layout.nodes.find((n) => n.scene === connDrag.fromScene);
+              if (!srcNode) return null;
+              const sx = srcNode.x + NODE_WIDTH;
+              const sy = srcNode.y + NODE_HEIGHT / 2;
+              // Convert screen endpoint to layout coords
+              const rect = containerRectRef.current;
+              let ex = connDrag.ex, ey = connDrag.ey;
+              if (rect) {
+                ex = (connDrag.ex - rect.left - pan.x) / zoom;
+                ey = (connDrag.ey - rect.top - pan.y) / zoom;
+              }
+              return (
+                <svg className="pointer-events-none absolute inset-0" style={{ width, height, overflow: 'visible', zIndex: 10 }}>
+                  <line x1={sx} y1={sy} x2={ex} y2={ey}
+                    stroke="var(--color-tertiary, #5b7a4c)" strokeWidth={2} strokeDasharray="6 3" opacity={0.8} />
+                  <circle cx={ex} cy={ey} r={4} fill="var(--color-tertiary, #5b7a4c)" opacity={0.8} />
+                </svg>
+              );
+            })()}
+            {layout.nodes.map((node) => {
+              const isCurrent = node.isCurrent;
+              const isChoice = node.kind === 'choice';
+              const isConnectSource = connectMode && connectSource === node.scene;
+              const isDragTarget = nodeDrag?.sceneName === node.scene;
+              return (<>
+                <button
+                  key={node.scene}
+                  type="button"
+                  data-worldline-node
+                  onMouseDown={(e) => handleNodeMouseDown(e, node.scene)}
+                  onClick={() => handleNodeClick(node.scene)}
+                  onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ sceneName: node.scene, x: e.clientX, y: e.clientY }); }}
+                  style={{ left: node.x, top: node.y, position: 'absolute', width: NODE_WIDTH, height: NODE_HEIGHT, zIndex: isCurrent || isConnectSource ? 3 : 1 }}
+                  className={`flex flex-col rounded border bg-surface-container-lowest px-2.5 py-1.5 text-left shadow-sm transition-all ${
+                    isConnectSource
+                      ? 'border-tertiary ring-2 ring-tertiary/50'
+                      : isCurrent
+                        ? 'border-primary ring-2 ring-primary/30'
+                        : isChoice
+                          ? 'border-primary/40 hover:border-primary'
+                          : node.isOrphan
+                            ? 'border-dashed border-outline-variant/40 opacity-70 hover:opacity-100'
+                            : connectMode
+                              ? 'border-outline-variant/40 hover:border-tertiary hover:ring-1 hover:ring-tertiary/30'
+                              : 'border-outline-variant/40 hover:border-secondary'
+                  } ${
+                    isDragTarget ? 'opacity-80 shadow-lg' : ''
+                  } ${
+                    connectMode && !isConnectSource ? 'hover:scale-105' : ''
+                  }`}
+                  title={node.scene}
+                >
+                  <div className="flex items-center gap-1">
+                    {isCurrent ? (
+                      <BookOpen className="h-3 w-3 text-primary" />
+                    ) : isChoice ? (
+                      <Split className="h-3 w-3 text-primary" />
+                    ) : (
+                      <CornerDownRight className="h-3 w-3 text-on-surface-variant" />
+                    )}
+                    <span className="truncate font-mono-family text-[9px] uppercase tracking-widest text-on-surface-variant">
+                      {isCurrent ? '当前' : isChoice ? `选择点 · ${node.outgoing.length}` : sceneHeaders[node.scene]?.chapter || '场景'}
+                    </span>
+                    {node.incoming > 0 && (
+                      <span className="ml-auto rounded bg-secondary-container/30 px-1 font-mono text-[8px] text-secondary">
+                        ←{node.incoming}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 truncate font-display-family text-xs font-semibold text-foreground">
+                    {sceneHeaders[node.scene]?.chapter?.replace(/[;：:]\s.*$/, '').trim() || node.scene.replace(/\.txt$/, '')}
+                  </div>
+                  <div className="truncate font-mono text-[9px] text-muted-foreground">
+                    {node.scene}
+                  </div>
+                </button>
+                {/* Connection handle on right edge — drag to another node to create a link */}
+                {onAddSceneLink && (
+                  <div
+                    className="absolute"
+                    style={{ left: node.x + NODE_WIDTH - 6, top: node.y + NODE_HEIGHT / 2 - 6, width: 12, height: 12, zIndex: 5 }}
+                    onMouseDown={(e) => handleConnDragStart(e, node.scene)}
+                    title={`从 ${node.scene} 拖拽到目标场景来创建连接`}
+                  >
+                    <div
+                      className={`h-full w-full rounded-full border-2 border-outline-variant/50 bg-surface-bright shadow-sm transition-all hover:scale-150 hover:border-tertiary hover:bg-tertiary/30 cursor-crosshair ${
+                        connectMode ? 'opacity-100' : 'opacity-0 hover:opacity-100'
+                      }`}
+                    />
+                  </div>
+                )}
+              </>);
+            })}
+          </div>
+          {layout.nodes.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
+              加载中…
+            </div>
+          )}
+
+          {/* Edge hover tooltip */}
+          {hoveredEdge && (
+            <div
+              className="pointer-events-none absolute z-40 rounded border border-border bg-surface-container-high px-2 py-1 shadow-md"
+              style={{ left: hoveredEdge.x + 12, top: hoveredEdge.y - 12 }}
+            >
+              <div className="font-mono text-[9px] text-on-surface">
+                {hoveredEdge.from} → {hoveredEdge.to}
+              </div>
+              <div className="mt-0.5 text-[8px] text-muted-foreground">
+                {hoveredEdge.kind === 'choose' ? '分支选择' : hoveredEdge.kind === 'call' ? '场景调用' : '场景跳转'}
+                {hoveredEdge.label ? ` · ${hoveredEdge.label}` : ''}
+                {onRemoveSceneLink ? ' · 点击删除' : ''}
+              </div>
+            </div>
+          )}
+
+          {/* Right-click context menu on nodes */}
+          {ctxMenu && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setCtxMenu(null)} />
+              <div
+                className="fixed z-50 min-w-[160px] rounded border border-border bg-surface-container-high p-1 shadow-lg"
+                style={{ left: ctxMenu.x, top: ctxMenu.y }}
+              >
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-xs hover:bg-surface-container-low"
+                onClick={() => { onOpenScene(ctxMenu.sceneName); setCtxMenu(null); }}
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                切换到此场景
+              </button>
+              {onRenameScene && (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-xs hover:bg-surface-container-low"
+                  onClick={() => { onRenameScene(ctxMenu.sceneName); setCtxMenu(null); }}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  重命名
+                </button>
+              )}
+              {onDeleteScene && ctxMenu.sceneName !== currentSceneName && (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-xs text-error hover:bg-error/10"
+                  onClick={() => { onDeleteScene(ctxMenu.sceneName); setCtxMenu(null); }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  删除场景
+                </button>
+              )}
+              <div className="my-0.5 h-px bg-border/50" />
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-xs text-muted-foreground hover:bg-surface-container-low"
+                onClick={() => setCtxMenu(null)}
+              >
+                关闭
+              </button>
+            </div>
+            </>
+          )}
+        </div>
+
+        {/* Right sidebar: node index */}
+        <div className="flex w-72 shrink-0 flex-col border-l border-border bg-surface-container-lowest">
+          <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
+            <span className="font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">当前场景索引</span>
+            <span className="font-mono-family text-[10px] text-muted-foreground">{visibleNodes.length}</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {visibleNodes.map((node, index) => {
+              const Icon = commandIconFor(node.type);
+              const sel = selectedNode?.id === node.id;
+              const charColor = node.type === 'dialogue' && node.character && characterColors?.[node.character]
+                ? characterColors[node.character]
+                : undefined;
+              return (
+                <button
+                  key={node.id}
+                  type="button"
+                  onClick={() => onSelectNode(node)}
+                  className={`flex w-full items-start gap-2 border-l-2 px-3 py-2 text-left transition-colors ${
+                    sel ? 'border-secondary bg-surface-container-low' : 'border-transparent hover:bg-surface-container-low'
+                  }`}
+                >
+                  <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${commandToneFor(node.type)}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-mono-family text-[10px] text-muted-foreground">{index + 1} {node.type}</span>
+                    <span className="block truncate text-xs text-on-surface">{getCommandSummary(node)}</span>
+                  </span>
+                  {charColor && (
+                    <span className="ml-auto mt-1 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: charColor }} />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SceneWorldlinePanel({
   scenes,
   currentSceneName,
@@ -285,27 +927,48 @@ function SceneWorldlinePanel({
   onOpenScene,
   onOpenSceneManager,
   characterColors,
+  nodePositions,
+  onUpdateNodePosition,
+  onAddSceneLink: _onAddSceneLink,
+  onRemoveSceneLink: _onRemoveSceneLink,
 }: SceneWorldlinePanelProps) {
   const visibleNodes = nodes.filter((node) => node.type !== 'comment' || node.content?.trim());
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+  const [sideNodeDrag, setSideNodeDrag] = useState<{ sceneName: string; startX: number; startY: number; origX: number; origY: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const { nodes: layout, width, height } = useMemo(
+  const baseLayout = useMemo(
     () => buildWorldLayout(scenes, currentSceneName, sceneLinkMap),
     [scenes, currentSceneName, sceneLinkMap],
   );
 
+  const layout = useMemo(() => {
+    const nodes = baseLayout.nodes.map((n) => {
+      const custom = nodePositions?.[n.scene];
+      if (custom) return { ...n, x: custom.x, y: custom.y };
+      return n;
+    });
+    let maxX = 0, maxY = 0;
+    for (const n of nodes) {
+      maxX = Math.max(maxX, n.x + NODE_WIDTH);
+      maxY = Math.max(maxY, n.y + NODE_HEIGHT);
+    }
+    return { nodes, width: Math.max(baseLayout.width, maxX + PADDING), height: Math.max(baseLayout.height, maxY + PADDING) };
+  }, [baseLayout, nodePositions]);
+
+  const { width, height } = layout;
+
   const layoutMap = useMemo(() => {
     const map = new Map<string, WorldNodeLayout>();
-    for (const n of layout) map.set(n.scene, n);
+    for (const n of layout.nodes) map.set(n.scene, n);
     return map;
-  }, [layout]);
+  }, [layout.nodes]);
 
   const edges = useMemo(() => {
-    const result: Array<{ from: WorldNodeLayout; to: WorldNodeLayout; active: boolean; label?: string }> = [];
-    for (const node of layout) {
+    const result: Array<{ from: WorldNodeLayout; to: WorldNodeLayout; active: boolean; label?: string; kind: SceneLink['kind'] }> = [];
+    for (const node of layout.nodes) {
       for (const link of node.outgoing) {
         const target = layoutMap.get(link.target);
         if (!target) continue;
@@ -314,11 +977,12 @@ function SceneWorldlinePanel({
           to: target,
           active: node.isCurrent,
           label: link.label,
+          kind: link.kind,
         });
       }
     }
     return result;
-  }, [layout, layoutMap]);
+  }, [layout.nodes, layoutMap]);
 
   const adjustZoom = useCallback((delta: number) => {
     setZoom((z) => Math.min(1.4, Math.max(0.5, +(z + delta).toFixed(2))));
@@ -329,11 +993,40 @@ function SceneWorldlinePanel({
     setPan({ x: 0, y: 0 });
   }, []);
 
+  // --- Side panel node drag ---
+  const handleSideNodeMouseDown = useCallback(
+    (e: React.MouseEvent, sceneName: string) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      const node = layout.nodes.find((n) => n.scene === sceneName);
+      if (!node || !onUpdateNodePosition) return;
+      setSideNodeDrag({ sceneName, startX: e.clientX, startY: e.clientY, origX: node.x, origY: node.y });
+    },
+    [layout.nodes, onUpdateNodePosition],
+  );
+
+  const handleSideNodeMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!sideNodeDrag || !onUpdateNodePosition) return;
+      const dx = (e.clientX - sideNodeDrag.startX) / zoom;
+      const dy = (e.clientY - sideNodeDrag.startY) / zoom;
+      onUpdateNodePosition(sideNodeDrag.sceneName, Math.round(sideNodeDrag.origX + dx), Math.round(sideNodeDrag.origY + dy));
+    },
+    [sideNodeDrag, zoom, onUpdateNodePosition],
+  );
+
+  useEffect(() => {
+    if (!sideNodeDrag) return;
+    const stop = () => setSideNodeDrag(null);
+    window.addEventListener('mouseup', stop);
+    return () => window.removeEventListener('mouseup', stop);
+  }, [sideNodeDrag]);
+
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button !== 0) return;
       const target = e.target as HTMLElement;
-      if (target.closest('[data-worldline-node]')) return;
+      if (target.closest('[data-worldline-node]') || target.closest('[data-worldline-edge]')) return;
       setDragging({ startX: e.clientX, startY: e.clientY, baseX: pan.x, baseY: pan.y });
     },
     [pan],
@@ -341,13 +1034,14 @@ function SceneWorldlinePanel({
 
   const onMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      if (sideNodeDrag) { handleSideNodeMouseMove(e); return; }
       if (!dragging) return;
       setPan({ x: dragging.baseX + (e.clientX - dragging.startX), y: dragging.baseY + (e.clientY - dragging.startY) });
     },
-    [dragging],
+    [dragging, sideNodeDrag, handleSideNodeMouseMove],
   );
 
-  const onMouseUp = useCallback(() => setDragging(null), []);
+  const onMouseUp = useCallback(() => { setDragging(null); setSideNodeDrag(null); }, []);
 
   useEffect(() => {
     if (!dragging) return;
@@ -440,7 +1134,7 @@ function SceneWorldlinePanel({
               />
             ))}
           </svg>
-          {layout.map((node) => {
+          {layout.nodes.map((node) => {
             const isCurrent = node.isCurrent;
             const isChoice = node.kind === 'choice';
             return (
@@ -448,6 +1142,7 @@ function SceneWorldlinePanel({
                 key={node.scene}
                 type="button"
                 data-worldline-node
+                onMouseDown={(e) => handleSideNodeMouseDown(e, node.scene)}
                 onClick={() => onOpenScene(node.scene)}
                 style={{ left: node.x, top: node.y, position: 'absolute', width: NODE_WIDTH, height: NODE_HEIGHT, zIndex: isCurrent ? 3 : 1 }}
                 className={`flex flex-col rounded border bg-surface-container-lowest px-2.5 py-1.5 text-left shadow-sm transition-colors ${
@@ -488,7 +1183,7 @@ function SceneWorldlinePanel({
             );
           })}
         </div>
-        {layout.length === 0 && (
+        {layout.nodes.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-center text-[10px] text-muted-foreground">
             加载中…
           </div>
@@ -1160,6 +1855,7 @@ export function StoryEditor() {
   const { projectId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedSceneName = searchParams.get('scene') || 'start.txt';
+  const viewMode = searchParams.get('view'); // 'worldline' = full-screen scene graph
 
   // Project state
   const [projectPath, setProjectPath] = useState<string | null>(null);
@@ -1200,6 +1896,7 @@ export function StoryEditor() {
   const [sceneManagerOpen, setSceneManagerOpen] = useState(false);
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
   const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
+  const [worldNodePositions, setWorldNodePositions] = useState<Record<string, { x: number; y: number }>>({});
   const [aiCollapsed, setAiCollapsed] = useState(() => localStorage.getItem(`story-ai-collapsed-${projectId}`) === '1');
 
   // Build character context for AI system prompt
@@ -1280,6 +1977,76 @@ export function StoryEditor() {
       void loadSceneLinkMap(projectPath, info.scenes);
     } catch {}
   }, [projectPath, loadSceneHeaders, loadSceneLinkMap]);
+
+  const updateWorldNodePosition = useCallback((sceneName: string, x: number, y: number) => {
+    setWorldNodePositions((prev) => ({ ...prev, [sceneName]: { x, y } }));
+  }, []);
+
+  const addSceneLink = useCallback(async (fromScene: string, toScene: string) => {
+    if (!projectPath) return;
+    try {
+      const path = await getScenePath(projectPath, fromScene);
+      const existingNodes = await loadScene(path);
+      const id = Date.now().toString();
+      const inserted: WebGalNode = {
+        id,
+        type: 'changeScene',
+        content: toScene,
+        targetScene: toScene,
+        flags: [],
+        position: { x: 100, y: 60 + existingNodes.length * 110 },
+        connections: [],
+      };
+      const updated = [...existingNodes, inserted];
+      await saveScene(path, updated);
+      // If modifying the current scene, keep editor in sync
+      if (fromScene === currentSceneName) {
+        setNodes(updated);
+        setScriptSource(await serializeScene(updated));
+        setDirty(true);
+        setSaveStatus('idle');
+      }
+      void loadSceneLinkMap(projectPath, projectInfo?.scenes ?? [fromScene]);
+    } catch (e) {
+      console.error('Failed to add scene link:', e);
+    }
+  }, [projectPath, currentSceneName, loadSceneLinkMap, projectInfo]);
+
+  const removeSceneLink = useCallback(async (fromScene: string, toScene: string, kind: SceneLink['kind']) => {
+    if (!projectPath) return;
+    try {
+      const path = await getScenePath(projectPath, fromScene);
+      const existingNodes = await loadScene(path);
+      const filtered = existingNodes.filter((n) => {
+        if (kind === 'change' && n.type === 'changeScene') return n.targetScene !== toScene;
+        if (kind === 'call' && n.type === 'callScene') return n.targetScene !== toScene;
+        if (kind === 'choose' && n.type === 'choose' && n.choices) {
+          // Keep the node but filter out the specific choice
+          return n.choices.every((c) => c.target !== toScene);
+        }
+        return true;
+      });
+      // For choose nodes, also clean up choices that target the removed scene
+      const cleaned = filtered.map((n) => {
+        if (n.type === 'choose' && n.choices) {
+          const kept = n.choices.filter((c) => c.target !== toScene);
+          if (kept.length === n.choices.length) return n;
+          return { ...n, choices: kept.length > 0 ? kept : [{ text: '选项 1', target: '' }] };
+        }
+        return n;
+      });
+      await saveScene(path, cleaned);
+      if (fromScene === currentSceneName) {
+        setNodes(cleaned);
+        setScriptSource(await serializeScene(cleaned));
+        setDirty(true);
+        setSaveStatus('idle');
+      }
+      void loadSceneLinkMap(projectPath, projectInfo?.scenes ?? [fromScene]);
+    } catch (e) {
+      console.error('Failed to remove scene link:', e);
+    }
+  }, [projectPath, currentSceneName, loadSceneLinkMap, projectInfo]);
 
   const [unsavedConfirmOpen, setUnsavedConfirmOpen] = useState(false);
   const pendingActionRef = useRef<(() => void) | null>(null);
@@ -1886,6 +2653,46 @@ export function StoryEditor() {
     }
   }, [projectPath, handleSwitchScene]);
 
+  const handleDeleteScene = useCallback(async (sceneName: string) => {
+    if (!projectPath) return;
+    const ok = window.confirm(`确定删除场景 "${sceneName}" 吗？此操作不可恢复。`);
+    if (!ok) return;
+    try {
+      const path = await getScenePath(projectPath, sceneName);
+      await deleteScene(path);
+      // If deleting the current scene, switch to another
+      if (sceneName === currentSceneName) {
+        const info = await openProject(projectPath);
+        const remaining = info.scenes.filter((s) => s !== sceneName);
+        if (remaining.length > 0) {
+          await handleSwitchScene(remaining[0]);
+        }
+      }
+      void refreshProjectInfo();
+    } catch (e) {
+      console.error('Delete scene failed:', e);
+      alert(`删除场景失败: ${e}`);
+    }
+  }, [projectPath, currentSceneName, handleSwitchScene, refreshProjectInfo]);
+
+  const handleRenameScene = useCallback(async (oldName: string) => {
+    if (!projectPath) return;
+    const newName = prompt(`重命名 "${oldName}" 为:`, oldName.replace(/\.txt$/, ''));
+    if (!newName || newName === oldName) return;
+    const finalName = newName.endsWith('.txt') ? newName : `${newName}.txt`;
+    try {
+      const path = await getScenePath(projectPath, oldName);
+      await renameScene(path, finalName);
+      void refreshProjectInfo();
+      if (oldName === currentSceneName) {
+        setCurrentSceneName(finalName);
+      }
+    } catch (e) {
+      console.error('Rename scene failed:', e);
+      alert(`重命名场景失败: ${e}`);
+    }
+  }, [projectPath, currentSceneName, refreshProjectInfo]);
+
   // ---------------------------------------------------------------------------
   // Import / Export / Apply script
   // ---------------------------------------------------------------------------
@@ -2199,13 +3006,40 @@ export function StoryEditor() {
           onSettings={() => setAppSettingsOpen(true)}
         />
         <StoryOsSideNav
-          active="script"
+          active={viewMode === 'worldline' ? 'world' : 'script'}
           projectId={projectId}
           projectLabel={gameName}
           onCreate={handleNewScene}
         />
 
         <div className="story-os-workspace flex flex-col">
+        {viewMode === 'worldline' ? (
+          <FullScreenWorldline
+            scenes={projectInfo?.scenes ?? [currentSceneName]}
+            currentSceneName={currentSceneName}
+            sceneHeaders={sceneHeaders}
+            sceneLinkMap={sceneLinkMap}
+            nodes={nodes}
+            selectedNode={selectedNode}
+            onSelectNode={setSelectedNode}
+            onOpenScene={stableSwitchScene}
+            onClose={() => {
+              const next = new URLSearchParams(searchParams);
+              next.delete('view');
+              setSearchParams(next, { replace: true });
+            }}
+            characterColors={characterColors}
+            nodePositions={worldNodePositions}
+            onUpdateNodePosition={updateWorldNodePosition}
+            onAddSceneLink={addSceneLink}
+            onRemoveSceneLink={removeSceneLink}
+            onNewScene={handleNewScene}
+            onDeleteScene={handleDeleteScene}
+            onRenameScene={handleRenameScene}
+            onOpenSceneManager={() => setSceneManagerOpen(true)}
+          />
+        ) : (
+          <>
         {/* Main Content */}
         <div className="relative flex-1 flex overflow-hidden">
           <SceneWorldlinePanel
@@ -2219,6 +3053,10 @@ export function StoryEditor() {
             onOpenScene={stableSwitchScene}
             onOpenSceneManager={() => setSceneManagerOpen(true)}
             characterColors={characterColors}
+            nodePositions={worldNodePositions}
+            onUpdateNodePosition={updateWorldNodePosition}
+            onAddSceneLink={addSceneLink}
+            onRemoveSceneLink={removeSceneLink}
           />
 
           {/* Center - Script Command Stream / Script Source */}
@@ -2302,6 +3140,8 @@ export function StoryEditor() {
               <span>UTF-8 | LF | Engine: WebGAL</span>
             </div>
           </footer>
+          </>
+        )}
         </div>
 
         <AiSettingsDialog

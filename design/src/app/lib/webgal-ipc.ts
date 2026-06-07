@@ -136,6 +136,14 @@ export async function createScene(projectPath: string, sceneName: string): Promi
   return invoke<string>('create_scene', { projectPath, sceneName });
 }
 
+export async function deleteScene(path: string): Promise<void> {
+  return invoke('delete_scene', { path });
+}
+
+export async function renameScene(path: string, newName: string): Promise<string> {
+  return invoke<string>('rename_scene', { path, newName });
+}
+
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------

@@ -198,7 +198,7 @@ export function StoryOsSideNav({ active, projectId, projectLabel = 'ALPHA', onCr
     } else if (target === 'build') {
       navigate(`/editor/${projectId}?action=export`);
     } else if (target === 'world') {
-      navigate(`/editor/${projectId}`);
+      navigate(`/editor/${projectId}?view=worldline`);
     } else {
       alert('该模块尚未接入。');
     }

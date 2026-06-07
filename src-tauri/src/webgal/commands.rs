@@ -84,3 +84,28 @@ pub fn list_scenes(dir: String) -> Result<Vec<String>, String> {
     scenes.sort();
     Ok(scenes)
 }
+
+/// Delete a scene file.
+#[tauri::command]
+pub fn delete_scene(path: String) -> Result<(), String> {
+    let path = PathBuf::from(&path);
+    if !path.exists() {
+        return Err(format!("Scene file not found: {}", path.display()));
+    }
+    fs::remove_file(&path)
+        .map_err(|e| format!("Failed to delete {}: {}", path.display(), e))
+}
+
+/// Rename a scene file.
+#[tauri::command]
+pub fn rename_scene(path: String, new_name: String) -> Result<String, String> {
+    let path = PathBuf::from(&path);
+    if !path.exists() {
+        return Err(format!("Scene file not found: {}", path.display()));
+    }
+    let parent = path.parent().ok_or("Invalid scene path")?;
+    let new_path = parent.join(&new_name);
+    fs::rename(&path, &new_path)
+        .map_err(|e| format!("Failed to rename {} -> {}: {}", path.display(), new_path.display(), e))?;
+    Ok(new_path.to_string_lossy().to_string())
+}

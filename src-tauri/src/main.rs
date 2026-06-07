@@ -154,6 +154,8 @@ fn main() {
             webgal::commands::list_scenes,
             webgal::commands::read_file_text,
             webgal::commands::write_file_text,
+            webgal::commands::delete_scene,
+            webgal::commands::rename_scene,
             // Project management
             webgal::project::init_project,
             webgal::project::open_project,
