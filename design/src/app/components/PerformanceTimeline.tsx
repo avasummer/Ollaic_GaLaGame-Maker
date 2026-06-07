@@ -23,7 +23,7 @@ interface PerformanceTimelineProps {
 }
 
 const TRACKS: Array<{
-  id: 'background' | 'bgm' | 'voice';
+  id: 'background' | 'bgm' | 'figure';
   label: string;
   icon: typeof Music;
   types: ReadonlyArray<WebGalNode['type']>;
@@ -32,10 +32,10 @@ const TRACKS: Array<{
   { id: 'background', label: '背景', icon: ImageIcon, types: ['changeBg'], tone: 'secondary' },
   { id: 'bgm', label: 'BGM', icon: Music, types: ['bgm'], tone: 'tertiary' },
   {
-    id: 'voice',
-    label: '台词/语音',
+    id: 'figure',
+    label: '立绘/演出',
     icon: MessageCircle,
-    types: ['dialogue', 'changeFigure', 'setAnimation', 'playEffect'],
+    types: ['changeFigure', 'setAnimation', 'playEffect'],
     tone: 'primary',
   },
 ];
@@ -50,16 +50,15 @@ function estimateDuration(node: WebGalNode): number {
       return 4.0;
     case 'bgm':
       return 8.0;
-    case 'dialogue':
-      return 3.5;
     case 'changeFigure':
     case 'setAnimation':
     case 'playEffect':
-      return 2.0;
+      return 2.5;
+    case 'dialogue':
     case 'choose':
-      return 5.0;
+      return 1.0;
     default:
-      return 1.5;
+      return 0.8;
   }
 }
 
@@ -108,12 +107,11 @@ export function PerformanceTimeline({
       const segments: Array<{ node: WebGalNode; index: number; start: number; end: number }> = [];
       let cursor = 0;
       for (const { node, index } of visibleNodes) {
-        if (!track.types.includes(node.type)) continue;
         const dur = estimateDuration(node);
-        const start = cursor;
-        const end = cursor + dur;
-        segments.push({ node, index, start, end });
-        cursor = end;
+        if (track.types.includes(node.type)) {
+          segments.push({ node, index, start: cursor, end: cursor + dur });
+        }
+        cursor += dur;
       }
       return { ...track, segments };
     });
