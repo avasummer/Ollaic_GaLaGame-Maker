@@ -2999,6 +2999,10 @@ export function StoryEditor() {
           onRun={handleOpenRuntime}
           onPublish={handleExportProject}
           onSave={handleSave}
+          onImport={handleImport}
+          onExport={handleExport}
+          onOpenProject={handleOpenProject}
+          onSnapshots={handleOpenSnapshotManager}
           onSearchChange={setCommandSearchQuery}
           searchValue={commandSearchQuery}
           searchPlaceholder="搜索指令 / 角色 / 内容..."
@@ -3010,6 +3014,7 @@ export function StoryEditor() {
           projectId={projectId}
           projectLabel={gameName}
           onCreate={handleNewScene}
+          onBeforeNavigate={guardedNavigate}
         />
 
         <div className="story-os-workspace flex flex-col">

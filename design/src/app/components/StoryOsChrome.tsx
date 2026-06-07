@@ -3,9 +3,13 @@ import type * as React from 'react';
 import {
   BookOpen,
   Boxes,
+  Camera,
   Cloud,
   CloudOff,
   Eye,
+  FileDown,
+  FileUp,
+  FolderOpen,
   GitBranch,
   Home,
   Loader2,
@@ -34,6 +38,10 @@ interface StoryOsTopBarProps {
   onRun?: () => void;
   onPublish?: () => void;
   onSave?: () => void;
+  onImport?: () => void;
+  onExport?: () => void;
+  onOpenProject?: () => void;
+  onSnapshots?: () => void;
   onSearchChange?: (value: string) => void;
   searchValue?: string;
   searchPlaceholder?: string;
@@ -46,6 +54,7 @@ interface StoryOsSideNavProps {
   projectId?: string;
   projectLabel?: string;
   onCreate?: () => void;
+  onBeforeNavigate?: (action: () => void) => void;
 }
 
 interface StoryOsPanelProps {
@@ -73,6 +82,10 @@ export function StoryOsTopBar({
   onRun,
   onPublish,
   onSave,
+  onImport,
+  onExport,
+  onOpenProject,
+  onSnapshots,
   onSearchChange,
   searchValue,
   searchPlaceholder,
@@ -85,6 +98,13 @@ export function StoryOsTopBar({
     { label: '运行预览', icon: Play, handler: onRun },
     { label: '导出/发布', icon: Upload, handler: onPublish },
     { label: '保存', icon: Save, handler: onSave, primary: true },
+  ].filter((action) => action.handler);
+
+  const secondaryActions = [
+    { label: '打开项目', icon: FolderOpen, handler: onOpenProject },
+    { label: '导入场景', icon: FileUp, handler: onImport },
+    { label: '导出场景', icon: FileDown, handler: onExport },
+    { label: '快照管理', icon: Camera, handler: onSnapshots },
   ].filter((action) => action.handler);
 
   const SaveIndicatorIcon =
@@ -138,6 +158,22 @@ export function StoryOsTopBar({
             {label}
           </button>
         ))}
+        {secondaryActions.length > 0 && (
+          <>
+            <div className="mx-1 h-4 w-px bg-border/40" />
+            {secondaryActions.map(({ label, icon: Icon, handler }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={handler}
+                className="story-os-top-action text-muted-foreground hover:text-foreground"
+              >
+                <Icon className="h-4 w-4" />
+                <span className="hidden xl:inline">{label}</span>
+              </button>
+            ))}
+          </>
+        )}
       </nav>
 
       <div className="flex items-center gap-2">
@@ -175,10 +211,10 @@ export function StoryOsTopBar({
   );
 }
 
-export function StoryOsSideNav({ active, projectId, projectLabel = 'ALPHA', onCreate }: StoryOsSideNavProps) {
+export function StoryOsSideNav({ active, projectId, projectLabel = 'ALPHA', onCreate, onBeforeNavigate }: StoryOsSideNavProps) {
   const navigate = useNavigate();
 
-  const handleNavigate = (target: StoryOsSection) => {
+  const doNavigate = (target: StoryOsSection) => {
     if (target === 'home') {
       navigate('/');
       return;
@@ -201,6 +237,14 @@ export function StoryOsSideNav({ active, projectId, projectLabel = 'ALPHA', onCr
       navigate(`/editor/${projectId}?view=worldline`);
     } else {
       alert('该模块尚未接入。');
+    }
+  };
+
+  const handleNavigate = (target: StoryOsSection) => {
+    if (onBeforeNavigate) {
+      onBeforeNavigate(() => doNavigate(target));
+    } else {
+      doNavigate(target);
     }
   };
 
