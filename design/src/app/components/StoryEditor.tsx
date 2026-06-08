@@ -1230,27 +1230,6 @@ function SceneWorldlinePanel({
   );
 }
 
-function MiniLivePreview({ nodes }: { nodes: WebGalNode[] }) {
-  const dialogue = nodes.find((node) => node.type === 'dialogue');
-  const background = nodes.find((node) => node.type === 'changeBg');
-  return (
-    <div className="absolute right-6 top-14 z-20 flex h-36 w-64 flex-col overflow-hidden rounded-sm border border-border bg-surface-container-highest shadow-[0_0_0_3px_rgba(116,191,253,0.08)]">
-      <div className="flex h-7 items-center justify-between border-b border-border bg-surface-container px-2">
-        <span className="font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">实时预览</span>
-        <ArrowRight className="h-3.5 w-3.5 -rotate-45 text-muted-foreground" />
-      </div>
-      <div className="story-os-blueprint relative flex flex-1 items-center justify-center overflow-hidden bg-inverse-surface">
-        <div className="absolute inset-0 bg-secondary-fixed/15" />
-        <Image className="h-10 w-10 text-secondary-container/60" />
-        <div className="absolute bottom-2 left-2 right-2 border border-border bg-surface-container-lowest/90 p-2 backdrop-blur">
-          <p className="mb-0.5 truncate text-[10px] font-bold text-primary">{dialogue?.character || background?.asset || '预览'}</p>
-          <p className="truncate text-[11px] text-on-surface">"{dialogue?.content || '选择一个对白节点查看演出效果'}"</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 interface AiAssistantPanelProps {
   aiAgent: ReturnType<typeof useAiAgent>;
   projectPath: string | null;
@@ -1838,7 +1817,6 @@ function ScriptCommandStream({
   return (
     <section className="relative flex min-w-0 flex-1 flex-col bg-[#F7F9FC]">
       <div className="pointer-events-none absolute inset-0 opacity-[0.03] story-os-dot-grid" />
-      <MiniLivePreview nodes={nodes} />
       <div className="relative z-10 flex h-10 shrink-0 items-center justify-between border-b border-outline-variant/20 bg-surface-bright/50 px-4">
         <div className="flex min-w-0 items-center gap-4">
           <span className="shrink-0 text-xs font-bold tracking-widest text-on-surface-variant">指令流编辑</span>
@@ -1984,12 +1962,6 @@ function ScriptCommandStream({
           />
         )}
 
-        <div className="sticky bottom-0 z-20 flex justify-center py-3 bg-gradient-to-t from-[#F7F9FC] via-[#F7F9FC]/80 to-transparent">
-          <button type="button" onClick={() => onInsertNode('dialogue', nodes.length)} className="flex items-center gap-2 bg-primary px-6 py-2 font-semibold text-on-primary shadow-lg story-os-chamfer-tr">
-            <Plus className="h-4 w-4" />
-            新增指令流
-          </button>
-        </div>
       </div>
       )}
     </section>
