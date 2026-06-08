@@ -72,17 +72,6 @@ import { PerformanceTimeline } from './PerformanceTimeline';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
-const DEMO_SCRIPT = `; 序章 - 安静的午后
-changeBg:afternoon_park.webp -next;
-bgm:peaceful_afternoon.mp3;
-changeFigure:girl_smile.webp -left -next;
-setAnimation:enter-from-left -target=fig-left -next;
-未知少女:你好，我是……;
-未知少女:你也是这个学校的学生吗？;
-:一阵微风穿过庭院。;
-choose:打招呼:branch_friendly.txt|保持沉默:branch_silent.txt;
-`;
-
 const EMPTY_PROJECT_METADATA: ProjectMetadata = {
   synopsis: '',
   description: '',
@@ -1975,7 +1964,8 @@ export function StoryEditor() {
   const navigate = useNavigate();
   const { projectId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const requestedSceneName = searchParams.get('scene') || 'start.txt';
+  const requestedScene = searchParams.get('scene');
+  const requestedSceneName = requestedScene || 'start.txt';
   const viewMode = searchParams.get('view'); // 'worldline' = full-screen scene graph
 
   // Project state
@@ -1991,7 +1981,7 @@ export function StoryEditor() {
   const [nodes, setNodes] = useState<WebGalNode[]>([]);
   const nodesRef = useRef<WebGalNode[]>([]);
   const [selectedNode, setSelectedNode] = useState<WebGalNode | null>(null);
-  const [scriptSource, setScriptSource] = useState(DEMO_SCRIPT);
+  const [scriptSource, setScriptSource] = useState('');
   const [showScript, setShowScript] = useState(false);
   const [commandSearchQuery, setCommandSearchQuery] = useState('');
   const [clipboardNode, setClipboardNode] = useState<WebGalNode | null>(null);
@@ -2068,6 +2058,12 @@ export function StoryEditor() {
 
   const handleHeaderUpdated = useCallback((name: string, header: SceneHeader) => {
     setSceneHeaders((prev) => ({ ...prev, [name]: header }));
+  }, []);
+
+  const chooseInitialScene = useCallback((scenes: string[], requested: string | null): string => {
+    if (requested && scenes.includes(requested)) return requested;
+    if (scenes.includes('start.txt')) return 'start.txt';
+    return scenes[0] ?? 'start.txt';
   }, []);
 
   const refreshProjectInfo = useCallback(async () => {
@@ -2221,13 +2217,18 @@ export function StoryEditor() {
           const info = await openProject(storedPath);
           setProjectPath(storedPath);
           setProjectInfo(info);
-          const sceneName = chooseInitialScene(info.scenes, requestedScene);
-          setCurrentSceneName(sceneName);
+          const initialSceneName = chooseInitialScene(info.scenes, requestedScene);
+          const sceneCandidates = Array.from(new Set([
+            initialSceneName,
+            ...info.scenes,
+          ])).filter(Boolean);
 
-          // Load the scene file
-          const scenePath = await getScenePath(storedPath, sceneName);
-          try {
-            const loaded = await loadScene(scenePath);
+          let loadedInitialScene = false;
+          for (const sceneName of sceneCandidates) {
+            const scenePath = await getScenePath(storedPath, sceneName);
+            try {
+              const loaded = await loadScene(scenePath);
+              setCurrentSceneName(sceneName);
             // Restore sessionStorage draft left by assets-page navigation
             const draftKey = `scene-draft-${projectId}-${sceneName}`;
             const draftJson = sessionStorage.getItem(draftKey);
@@ -2249,16 +2250,29 @@ export function StoryEditor() {
               const text = await serializeScene(loaded);
               setScriptSource(text);
             }
-          } catch {
-            // Scene doesn't exist yet, start with empty
-            const parsed = await parseScene(DEMO_SCRIPT);
-            setNodes(parsed);
-            setScriptSource(DEMO_SCRIPT);
+              loadedInitialScene = true;
+              break;
+            } catch (e) {
+              console.warn(`[project] failed to load scene ${sceneName}:`, e);
+            }
           }
-        } catch {
-          // Stored path no longer valid, fall back to demo.
-          const parsed = await parseScene(DEMO_SCRIPT);
-          setNodes(parsed);
+
+          if (!loadedInitialScene) {
+            const sceneName = initialSceneName || info.scenes[0] || 'start.txt';
+            setCurrentSceneName(sceneName);
+            setNodes([]);
+            setScriptSource('');
+            setDirty(false);
+          }
+        } catch (e) {
+          // Keep the stored path visible so a transient project-load failure does
+          // not make the editor forget the project and render a blank workspace.
+          console.error('Restore project failed:', e);
+          setProjectPath(storedPath);
+          setProjectInfo(null);
+          setNodes([]);
+          setScriptSource('');
+          setDirty(false);
         }
 
         // Load character names for autocomplete
@@ -2277,10 +2291,11 @@ export function StoryEditor() {
           void loadSceneLinkMap(storedPath, info.scenes);
         }
       } else {
-        // No project path, just load demo script.
+        // No project path yet; keep the editor empty until a project is opened.
         setCurrentSceneName(requestedScene || 'start.txt');
-        const parsed = await parseScene(DEMO_SCRIPT);
-        setNodes(parsed);
+        setNodes([]);
+        setScriptSource('');
+        setDirty(false);
       }
 
       setLoading(false);

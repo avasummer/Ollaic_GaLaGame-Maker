@@ -69,6 +69,7 @@ interface StoryOsPanelProps {
 }
 
 const navItems: Array<{ id: StoryOsSection; label: string; icon: LucideIcon }> = [
+  { id: 'home', label: '项目', icon: Home },
   { id: 'script', label: '脚本流', icon: BookOpen },
   { id: 'world', label: '场景', icon: GitBranch },
   { id: 'characters', label: '立绘', icon: Users },

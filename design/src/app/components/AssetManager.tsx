@@ -18,8 +18,6 @@ import {
   Edit3,
   Plus,
   Sparkles,
-  Tag,
-  Filter,
   Loader2,
   AlertTriangle,
   Copy,
@@ -96,11 +94,6 @@ const musicCategoryLabels: Record<MusicCategory, string> = {
   vocal: '语音',
 };
 
-const sceneTagGroups = [
-  { title: '时段', tags: ['白天', '黄昏', '夜晚', '雨天'] },
-  { title: '场景类型', tags: ['室内', '室外', '幻想', '战斗'] },
-];
-
 const voiceEmotionOptions = [
   '默认',
   '平静',
@@ -167,6 +160,38 @@ function formatDuration(seconds?: number): string {
 
 function getSafeAudioDuration(audio: HTMLAudioElement): number {
   return Number.isFinite(audio.duration) ? audio.duration : 0;
+}
+
+function sceneCardTargetFilename(card: SceneAssetCard): string {
+  if (card.imageAsset) return card.imageAsset;
+  const targetStem = card.targetStem || card.id;
+  return `${targetStem.replace(/\.(png|jpe?g|webp)$/i, '')}.png`;
+}
+
+function hashText(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function safeStem(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[\\/:*?"<>|#%&{}$!'@+`=]/g, '')
+    .slice(0, 32)
+    || 'voice';
+}
+
+function voiceCardId(character: string, text: string, emotion: string): string {
+  return hashText(`${character}\n${text}\n${emotion || '默认'}`);
+}
+
+function voiceTargetStem(character: string, text: string): string {
+  return `v_${safeStem(character || 'narrator')}_${hashText(text).slice(0, 8)}`;
 }
 
 function countUsages(usages: AssetUsage[], _filename: string): number {
@@ -502,7 +527,7 @@ export function AssetManager() {
 
   // Tab counts from all assets and metadata, independent of the currently loaded tab assets.
   const tabCounts = {
-    scene: allAssets.filter(a => a.category === 'background').length,
+    scene: sceneLibraryItems.length || allAssets.filter(a => a.category === 'background').length,
     cg: allAssets.filter(a => a.category === 'background').length,
     music: allAssets.filter(a => a.category === 'bgm' || a.category === 'sfx' || a.category === 'vocal').length,
     character: characterCount,
@@ -510,7 +535,7 @@ export function AssetManager() {
 
   const importConfig = getImportConfig(activeTab, musicCategory);
   const aiActionLabel = activeTab === 'scene'
-    ? 'AI 生成背景'
+    ? '新建场景'
     : activeTab === 'cg'
       ? 'AI 生成 CG 剧情画'
       : activeTab === 'music'
@@ -979,7 +1004,13 @@ export function AssetManager() {
                 <button
                   key={id}
                   type="button"
-                  onClick={() => { setActiveTab(id); setSelectedAsset(null); }}
+                  onClick={() => {
+                    setActiveTab(id);
+                    setSelectedAsset(null);
+                    setSelectedSceneCard(null);
+                    setSelectedVoiceCard(null);
+                    setEditingSceneCard(null);
+                  }}
                   className={`flex items-center gap-1.5 px-4 py-2 text-xs font-semibold tracking-wide transition-colors ${
                     activeTab === id
                       ? 'story-os-layered-tab-active text-foreground'
@@ -991,15 +1022,26 @@ export function AssetManager() {
                   <span className="rounded border border-border px-1 text-[10px] text-muted-foreground">{tabCounts[id]}</span>
                 </button>
               ))}
+            </div>
+            <div className="flex h-10 items-center gap-2 border-b border-border bg-surface-container-lowest px-4">
+              <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
+                {projectPath}
+              </span>
               <button
                 onClick={() => {
                   if (activeTab === 'character') {
                     setCharacterGenerationRequestToken((value) => value + 1);
                     return;
                   }
-                  alert(`${aiActionLabel} 即将推出`);
+                  if (activeTab === 'scene') {
+                    handleNewSceneCard();
+                    return;
+                  }
+                  setEditingSceneCard(null);
+                  setAiAssetPrompt('');
+                  setAiGenerateOpen(true);
                 }}
-                className="story-os-command mb-1 ml-auto border-primary/30 bg-primary/10 text-primary"
+                className="story-os-command border-primary/30 bg-primary/10 text-primary"
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 {aiActionLabel}
@@ -1008,41 +1050,12 @@ export function AssetManager() {
                 <button
                   onClick={handleImport}
                   disabled={!projectPath || importing}
-                  className="story-os-command story-os-command-primary story-os-chamfer-tr mb-1 disabled:opacity-50"
+                  className="story-os-command story-os-command-primary story-os-chamfer-tr disabled:opacity-50"
                 >
                   {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
                   {importing ? '导入中...' : importConfig.buttonLabel}
                 </button>
               )}
-            </div>
-            <div className="flex h-10 items-center gap-2 border-b border-border bg-surface-container-lowest px-4">
-              <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
-                {projectPath}
-              </span>
-              <button
-                onClick={() => alert('文件夹浏览即将推出')}
-                className="story-os-command"
-                aria-label="浏览所有文件夹"
-              >
-                <FolderOpen className="mr-1 inline h-3.5 w-3.5" />
-                所有文件夹
-              </button>
-              <button
-                onClick={() => alert('标签管理即将推出')}
-                className="story-os-command"
-                aria-label="管理素材标签"
-              >
-                <Tag className="mr-1 inline h-3.5 w-3.5" />
-                标签管理
-              </button>
-              <button
-                onClick={() => alert('筛选器即将推出')}
-                className="story-os-command"
-                aria-label="使用筛选器筛选素材"
-              >
-                <Filter className="mr-1 inline h-3.5 w-3.5" />
-                筛选器
-              </button>
             </div>
             {activeTab === 'character' ? (
               <CharacterPanel
@@ -1384,7 +1397,12 @@ export function AssetManager() {
                     return (
                       <div
                         key={asset.path}
-                        onClick={() => setSelectedAsset(asset)}
+                        onClick={() => {
+                          setSelectedAsset(asset);
+                          setSelectedSceneCard(null);
+                          setSelectedVoiceCard(null);
+                          setEditingSceneCard(null);
+                        }}
                         className={`story-os-interactive group relative cursor-pointer overflow-hidden rounded border bg-surface-container-low ${
                           isSelected
                             ? 'border-secondary ring-1 ring-secondary story-os-hard-shadow'
@@ -1500,7 +1518,12 @@ export function AssetManager() {
                     return (
                       <div
                         key={asset.path}
-                        onClick={() => setSelectedAsset(asset)}
+                        onClick={() => {
+                          setSelectedAsset(asset);
+                          setSelectedSceneCard(null);
+                          setSelectedVoiceCard(null);
+                          setEditingSceneCard(null);
+                        }}
                         className={`story-os-interactive flex cursor-pointer items-center gap-4 rounded border p-4 ${
                           isSelected
                             ? 'bg-secondary/10 border-secondary'
@@ -1643,7 +1666,38 @@ export function AssetManager() {
           {/* Right Sidebar - Details */}
           {activeTab !== 'character' && (
           <aside className="my-4 mr-4 w-80 overflow-hidden rounded border border-border bg-surface-bright/90 shadow-[-4px_0_24px_rgba(0,0,0,0.02)] backdrop-blur-xl">
-            {selectedAsset ? (
+            {selectedSceneCard ? (
+              <SceneCardDetails
+                card={selectedSceneCard}
+                projectPath={projectPath}
+                backgroundAssets={allAssets.filter((asset) => asset.category === 'background')}
+                getThumbnail={getThumbnail}
+                references={sceneCardReferences}
+                referenceUploading={referenceUploading}
+                onReferenceUpload={handleSceneCardReferenceUpload}
+                onReferenceRemove={handleSceneCardReferenceRemove}
+                onSave={handleSaveSceneCard}
+                onGenerate={(card) => {
+                  handleSaveSceneCard(card);
+                  setEditingSceneCard(card);
+                  setAiAssetPrompt('');
+                  setAiGenerateOpen(true);
+                }}
+              />
+            ) : selectedVoiceCard ? (
+              <VoiceCardDetails
+                card={selectedVoiceCard}
+                projectPath={projectPath}
+                onSave={handleSaveVoiceCard}
+                onGenerate={(card) => {
+                  handleSaveVoiceCard(card);
+                  setEditingSceneCard(null);
+                  setAiAssetPrompt('');
+                  setAiGenerateOpen(true);
+                }}
+                onOpenUsage={openUsage}
+              />
+            ) : selectedAsset ? (
               <div className="h-full overflow-auto">
                 <div className="flex h-10 items-center justify-between border-b border-border bg-surface-container-high px-4">
                   <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">属性检视器</span>
@@ -1696,60 +1750,6 @@ export function AssetManager() {
                       <p className="mt-1 text-[10px] text-muted-foreground">
                         设置后，剧本编辑器的素材选择弹窗会优先显示这个名称。
                       </p>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
-                      文件信息
-                    </label>
-                    <div className="space-y-0 text-sm">
-                      <div className="flex justify-between border-b border-border/40 py-2">
-                        <span className="text-muted-foreground">类型</span>
-                        <span>{formatCategory(selectedAsset.category)}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-border/40 py-2">
-                        <span className="text-muted-foreground">格式</span>
-                        <span>{selectedAsset.extension.toUpperCase()}</span>
-                      </div>
-                      <div className="flex justify-between border-b border-border/40 py-2">
-                        <span className="text-muted-foreground">大小</span>
-                        <span>{formatSize(selectedAsset.size)}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {activeTab === 'scene' && (
-                    <div>
-                      <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
-                        场景标签
-                      </label>
-                      <div className="space-y-3">
-                        {sceneTagGroups.map((group) => (
-                          <div key={group.title}>
-                            <div className="mb-1 text-[10px] text-muted-foreground">{group.title}</div>
-                            <div className="flex flex-wrap gap-2">
-                              {group.tags.map((tagName) => {
-                                const active = tagsForAsset(selectedAsset).includes(tagName);
-                                return (
-                                  <button
-                                    key={tagName}
-                                    type="button"
-                                    onClick={() => toggleTag(selectedAsset, tagName)}
-                                    className={`px-2 py-1 rounded-full text-xs border transition-colors ${
-                                      active
-                                        ? 'bg-primary/20 text-primary border-primary/30'
-                                        : 'bg-secondary/40 border-border hover:bg-secondary'
-                                    }`}
-                                  >
-                                    {tagName}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
                     </div>
                   )}
 
@@ -1960,8 +1960,10 @@ function AssetAiGenerateDialog({
   const [generating, setGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<AiMediaGenerationProgress | null>(null);
 
-  const isImageGeneration = activeTab === 'scene';
-  const title = isImageGeneration ? 'AI 生成背景素材' : `AI 生成${musicCategoryLabels[musicCategory]}`;
+  const isImageGeneration = activeTab === 'scene' || activeTab === 'cg';
+  const title = isImageGeneration
+    ? activeTab === 'cg' ? 'AI 生成 CG 剧情画' : 'AI 生成背景素材'
+    : `AI 生成${musicCategoryLabels[musicCategory]}`;
   const configuredModels = config ? parseConfiguredModels(config.model) : [];
   const effectiveModel = selectedModel || configuredModels[0] || config?.model.trim() || '';
   const promptSource = isImageGeneration

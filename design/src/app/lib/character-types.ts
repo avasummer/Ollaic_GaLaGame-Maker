@@ -5,6 +5,7 @@
 export interface CharacterSprite {
   emotion: string; // "default", "happy", "sad", "angry", etc.
   file: string;    // filename in game/figure/
+  prompt?: string; // custom generation prompt for this sprite
 }
 
 export interface CharacterRelation {
@@ -19,7 +20,6 @@ export interface Character {
   aliases: string[];       // nicknames / alternative names
   description: string;     // backstory / role description
   personality: string;     // personality traits
-  consistencyPrompt?: string; // stable image-generation prompt prefix
   referenceImages?: string[]; // filenames in game/config/references/
   stance: string;          // moral/faction stance: "正义", "混沌", "中立", "邪恶"
   keywords: string[];      // searchable tags: ["学生", "傲娇", "学生会"]

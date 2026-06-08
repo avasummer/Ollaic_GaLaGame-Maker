@@ -22,7 +22,6 @@ export function createDraftCharacter(index: number, id = `tmp_${Date.now()}`): C
     aliases: [],
     description: '',
     personality: '',
-    consistencyPrompt: '',
     stance: '',
     keywords: [],
     dialogueStyle: '',
@@ -77,10 +76,11 @@ export function appendCharacterSprite(
   characters: Character[],
   characterId: string,
   emotion = '',
+  prompt = '',
 ): Character[] {
   return characters.map((character) =>
     character.id === characterId
-      ? { ...character, sprites: [...character.sprites, { emotion, file: '' }] }
+      ? { ...character, sprites: [...character.sprites, { emotion, file: '', prompt: prompt || undefined }] }
       : character,
   );
 }
@@ -89,13 +89,14 @@ export function appendEmotionPreset(
   characters: Character[],
   characterId: string,
   emotion: string,
+  prompt = '',
 ): Character[] {
   const trimmed = emotion.trim();
   if (!trimmed) return characters;
   return characters.map((character) => {
     if (character.id !== characterId) return character;
     if (character.sprites.some((sprite) => sprite.emotion === trimmed)) return character;
-    return { ...character, sprites: [...character.sprites, { emotion: trimmed, file: '' }] };
+    return { ...character, sprites: [...character.sprites, { emotion: trimmed, file: '', prompt: prompt || undefined }] };
   });
 }
 

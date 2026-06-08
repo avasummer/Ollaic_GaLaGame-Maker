@@ -40,7 +40,22 @@ import {
   listCharacters,
   updateCharacter,
 } from '../lib/character-ipc';
-import { deleteAsset, findAssetUsages, importAsset, listAssets, type AssetInfo, type AssetUsage } from '../lib/assets-ipc';
+import {
+  deleteAsset,
+  findAssetUsages,
+  importAsset,
+  saveGeneratedAsset,
+  listAssets,
+  type AssetInfo,
+  type AssetUsage,
+} from '../lib/assets-ipc';
+import {
+  aiGenerateImage,
+  getAiImageConfig,
+  listenAiMediaGenerationProgress,
+  type AiMediaGenerationProgress,
+  type AiProviderConfig,
+} from '../lib/ai-ipc';
 import { AssetPickerButton } from './AssetPicker';
 
 interface Props {
@@ -71,6 +86,53 @@ interface SpriteUsage extends AssetUsage {
   assetName: string;
 }
 
+type SpriteGenerationTarget =
+  | { kind: 'reference' }
+  | { kind: 'variant'; index: number };
+
+type PendingSpriteGeneration = {
+  emotion: string;
+  target: SpriteGenerationTarget;
+  batch?: boolean;
+};
+
+function parseConfiguredModels(value: string): string[] {
+  return Array.from(new Set(
+    value
+      .split(/[\n,，]/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  ));
+}
+
+function sanitizeFilenamePart(value: string, fallback: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || fallback;
+}
+
+function buildSpritePrompt(character: Character, sprite: CharacterSprite, isReference: boolean, instruction: string): string {
+  return [
+    'visual novel character sprite, full body, transparent background, clean anime game asset, consistent character design',
+    isReference ? 'main reference sprite, neutral readable pose, front-facing character design sheet quality' : '',
+    character.name ? `角色名：${character.name}` : '',
+    character.gender ? `性别：${character.gender}` : '',
+    character.age ? `年龄：${character.age}` : '',
+    character.description ? `外观设定：${character.description}` : '',
+    character.personality ? `性格气质：${character.personality}` : '',
+    character.stance ? `剧情定位：${character.stance}` : '',
+    character.dialogueStyle ? `说话风格：${character.dialogueStyle}` : '',
+    character.keywords.length ? `关键词：${character.keywords.join('、')}` : '',
+    sprite.emotion ? `立绘形态/情绪：${sprite.emotion}` : '',
+    instruction ? `本次生成提示词：${instruction}` : '',
+    'avoid background scene, avoid text, avoid watermark, avoid extra characters',
+  ].filter(Boolean).join('\n');
+}
+
 export function CharacterPanel({
   projectPath,
   onClose,
@@ -98,7 +160,22 @@ export function CharacterPanel({
   const [figureAssetDeleting, setFigureAssetDeleting] = useState<string | null>(null);
   const [spriteUsages, setSpriteUsages] = useState<SpriteUsage[]>([]);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [figureLibraryOpen, setFigureLibraryOpen] = useState(false);
+  const [spriteGeneratingKey, setSpriteGeneratingKey] = useState<string | null>(null);
+  const [pendingSpriteGeneration, setPendingSpriteGeneration] = useState<PendingSpriteGeneration | null>(null);
   const savingRef = useRef(false);
+
+  const emotionColor = (emotion: string): string => {
+    const key = emotion.toLowerCase();
+    if (key.includes('微笑') || key.includes('高兴') || key.includes('开心') || key.includes('笑') || key === 'happy' || key === 'smile') return '#D4A574';
+    if (key.includes('悲伤') || key.includes('低落') || key.includes('哭') || key === 'sad' || key === 'cry') return '#60A5FA';
+    if (key.includes('愤怒') || key.includes('生气') || key === 'angry') return '#F87171';
+    if (key.includes('惊讶') || key === 'surprised') return '#C084FC';
+    if (key.includes('害羞') || key.includes('羞') || key === 'shy') return '#F472B6';
+    if (key.includes('思考') || key.includes('认真') || key.includes('严肃') || key === 'serious') return '#34D399';
+    if (key.includes('默认') || key === 'default') return '#94A3B8';
+    return '#D4A574';
+  };
 
   useEffect(() => {
     (async () => {
@@ -228,12 +305,12 @@ export function CharacterPanel({
     setCharacters((prev) => updateCharacterSprite(prev, charId, index, field, value));
   }, []);
 
-  const addSprite = useCallback((charId: string, emotion = '') => {
-    setCharacters((prev) => appendCharacterSprite(prev, charId, emotion));
+  const addSprite = useCallback((charId: string, emotion = '', prompt = '') => {
+    setCharacters((prev) => appendCharacterSprite(prev, charId, emotion, prompt));
   }, []);
 
-  const addEmotionPreset = useCallback((charId: string, emotion: string) => {
-    setCharacters((prev) => appendEmotionPreset(prev, charId, emotion));
+  const addEmotionPreset = useCallback((charId: string, emotion: string, prompt = '') => {
+    setCharacters((prev) => appendEmotionPreset(prev, charId, emotion, prompt));
   }, []);
 
   const setReferenceFile = useCallback(async (charId: string, filename: string) => {
@@ -246,6 +323,23 @@ export function CharacterPanel({
 
     await persistCharacter(withReferenceSprite(base, filename), { showSavedBadge: false });
   }, [characters, ensurePersistedCharacter, persistCharacter]);
+
+  const setReferencePrompt = useCallback((charId: string, prompt: string) => {
+    setCharacters((prev) => prev.map((character) => {
+      if (character.id !== charId) return character;
+      const index = referenceSpriteIndex(character);
+      if (index >= 0) {
+        const sprites = character.sprites.map((sprite, spriteIndex) =>
+          spriteIndex === index ? { ...sprite, emotion: '主体参考', prompt } : sprite,
+        );
+        return { ...character, sprites };
+      }
+      return {
+        ...character,
+        sprites: [{ emotion: '主体参考', file: '', prompt }, ...character.sprites],
+      };
+    }));
+  }, []);
 
   const removeSprite = useCallback((charId: string, index: number) => {
     setCharacters((prev) => removeCharacterSprite(prev, charId, index));
@@ -347,20 +441,6 @@ export function CharacterPanel({
     navigate(`/editor/${projectId}?scene=${encodeURIComponent(usage.sceneFile)}&line=${usage.lineNumber}`);
   }, [navigate, projectId]);
 
-  const triggerBatchSpriteGeneration = useCallback(() => {
-    if (!selected) {
-      setError('请先选择一个角色，再批量生成立绘结果与映射。');
-      return;
-    }
-    setMode('sprite');
-    setError(`“${selected.name || '当前角色'}”的立绘批量生成功能即将接入，这里会按“立绘结果与映射”里的形态统一生成。`);
-  }, [selected]);
-
-  const triggerSingleSpriteGeneration = useCallback((emotion: string) => {
-    if (!selected) return;
-    setError(`“${selected.name || '当前角色'} / ${emotion || '未命名形态'}”的单张立绘生成功能即将接入。`);
-  }, [selected]);
-
   const refreshFigureAssets = useCallback(async () => {
     setFigureAssetsLoading(true);
     try {
@@ -373,6 +453,143 @@ export function CharacterPanel({
       setFigureAssetsLoading(false);
     }
   }, [projectPath]);
+
+  const generateSprite = useCallback(async (
+    emotion: string,
+    target: SpriteGenerationTarget,
+    model: string,
+    instruction: string,
+    sourceCharacter?: Character,
+  ) => {
+    const current = sourceCharacter ?? selected;
+    if (!current) return null;
+    if (!projectPath) {
+      setError('未打开项目，无法保存生成立绘。');
+      return null;
+    }
+
+    const persisted = current.id.startsWith('tmp_')
+      ? await ensurePersistedCharacter(current.id, '生成立绘')
+      : current;
+    if (!persisted) return null;
+
+    const sprite =
+      target.kind === 'reference'
+        ? persisted.sprites[referenceSpriteIndex(persisted)] ?? { emotion: emotion || '主体参考', file: '', prompt: '' }
+        : persisted.sprites[target.index];
+    if (!sprite) {
+      setError('没有找到要生成的立绘形态。');
+      return null;
+    }
+
+    const trimmedInstruction = instruction.trim();
+    if (!trimmedInstruction) {
+      setError('请先填写本次立绘生成提示词，再生成。');
+      return null;
+    }
+
+    const effectiveSprite = {
+      ...sprite,
+      emotion: emotion || sprite.emotion || (target.kind === 'reference' ? '主体参考' : '默认'),
+    };
+    const key = target.kind === 'reference' ? 'reference' : `variant:${target.index}`;
+    setSpriteGeneratingKey(key);
+    setError(null);
+    try {
+      const media = await aiGenerateImage(buildSpritePrompt(persisted, effectiveSprite, target.kind === 'reference', trimmedInstruction), model);
+      const extension = media.extension?.replace(/^\./, '') || 'png';
+      const characterPart = sanitizeFilenamePart(persisted.name || persisted.id, 'character');
+      const emotionPart = sanitizeFilenamePart(effectiveSprite.emotion || 'sprite', 'sprite');
+      const filename = `${characterPart}_${emotionPart}_${Date.now()}.${extension}`;
+      const asset = await saveGeneratedAsset(projectPath, 'figure', filename, media.base64Data);
+      const nextCharacter = target.kind === 'reference'
+        ? (() => {
+            const next = withReferenceSprite(persisted, asset.name);
+            const index = referenceSpriteIndex(next);
+            return {
+              ...next,
+              sprites: next.sprites.map((item, itemIndex) =>
+                itemIndex === index ? { ...item, prompt: trimmedInstruction } : item,
+              ),
+            };
+          })()
+        : {
+            ...persisted,
+            sprites: persisted.sprites.map((item, index) =>
+              index === target.index ? { ...item, emotion: effectiveSprite.emotion, file: asset.name, prompt: trimmedInstruction } : item,
+            ),
+          };
+      const saved = await persistCharacter(nextCharacter, { showSavedBadge: false });
+      await refreshFigureAssets();
+      setMode('sprite');
+      return saved;
+    } catch (e) {
+      setError(String(e));
+      return null;
+    } finally {
+      setSpriteGeneratingKey(null);
+    }
+  }, [ensurePersistedCharacter, persistCharacter, projectPath, refreshFigureAssets, selected]);
+
+  const triggerBatchSpriteGeneration = useCallback(() => {
+    if (!selected) {
+      setError('请先选择一个角色，再批量生成立绘结果与映射。');
+      return;
+    }
+    if (variantSprites.length === 0) {
+      setMode('sprite');
+      setError('请先添加表情变体，再批量生成立绘。');
+      return;
+    }
+    const missingPrompt = variantSprites.filter(({ sprite }) => !sprite.prompt?.trim());
+    if (missingPrompt.length > 0) {
+      setMode('sprite');
+      setError(`请先为 ${missingPrompt.length} 个表情变体填写提示词，再批量生成。`);
+      return;
+    }
+    setMode('sprite');
+    setError(null);
+    setPendingSpriteGeneration({ emotion: '批量生成', target: { kind: 'variant', index: -1 }, batch: true });
+  }, [selected, variantSprites]);
+
+  const triggerSingleSpriteGeneration = useCallback((emotion: string, target: SpriteGenerationTarget = { kind: 'reference' }) => {
+    if (!selected) return;
+    setPendingSpriteGeneration({ emotion, target });
+  }, [selected]);
+
+  const handleConfirmSpriteGeneration = useCallback(async (model: string) => {
+    if (!selected || !pendingSpriteGeneration) return;
+    if (pendingSpriteGeneration.batch) {
+      let current: Character | null = selected;
+      for (const { sprite, index } of variantSprites) {
+        current = await generateSprite(
+          sprite.emotion,
+          { kind: 'variant', index },
+          model,
+          sprite.prompt ?? '',
+          current ?? undefined,
+        );
+        if (!current) return;
+      }
+      setPendingSpriteGeneration(null);
+      return;
+    }
+    const instruction = pendingSpriteGeneration.target.kind === 'reference'
+      ? referenceSprite?.prompt ?? ''
+      : selected.sprites[pendingSpriteGeneration.target.index]?.prompt ?? '';
+    if (!instruction.trim()) {
+      throw new Error(pendingSpriteGeneration.target.kind === 'reference'
+        ? '请先填写主体区域的设定图提示词。'
+        : '请先填写该表情变体的提示词。');
+    }
+    const saved = await generateSprite(
+      pendingSpriteGeneration.emotion,
+      pendingSpriteGeneration.target,
+      model,
+      instruction,
+    );
+    if (saved) setPendingSpriteGeneration(null);
+  }, [generateSprite, pendingSpriteGeneration, referenceSprite, selected, variantSprites]);
 
   const uploadFigureAsset = useCallback(async () => {
     const path = await openDialog({
@@ -750,22 +967,19 @@ export function CharacterPanel({
               </div>
             ) : (
               <div className="relative z-10 p-4 space-y-4 max-w-6xl">
-                <section className="story-os-panel p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <div>
-                      <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">主体立绘素材</h4>
-                      <p className="mt-1 text-xs text-muted-foreground">从人物素材库选择主立绘；下面的主体参考图会单独绑定到当前人物，用于后续 AI 一致性控制。</p>
+                {/* 区域1：主体立绘 — 角色设定图 / 三视图 */}
+                <section className="story-os-panel p-4 border-2 border-primary/25 bg-primary/[0.04]">
+                  <div className="mb-3 flex items-center gap-2">
+                    <div className="story-os-chamfer-tr rounded bg-primary/15 border border-primary/30 p-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-primary" />
                     </div>
-                    <AssetPickerButton
-                      projectPath={projectPath}
-                      category="figure"
-                      currentValue={referenceSprite?.file || ''}
-                      onSelect={(filename) => setReferenceFile(selected.id, filename === 'none' ? '' : filename)}
-                    />
+                    <div>
+                      <h4 className="text-sm font-semibold tracking-wide text-primary">主体立绘 · 角色设定图</h4>
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-4">
-                    <div className="aspect-[3/4] rounded-md border border-border bg-secondary/30 overflow-hidden flex items-center justify-center">
+                  <div className="grid grid-cols-[240px_minmax(0,1fr)] gap-4">
+                    <div className="aspect-[3/4] rounded-md border-2 border-primary/30 bg-secondary/30 overflow-hidden flex items-center justify-center">
                       {referenceSprite?.file ? (
                         <img
                           src={convertFileSrc(`${projectPath}/game/figure/${referenceSprite.file}`)}
@@ -773,22 +987,25 @@ export function CharacterPanel({
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <ImageIcon className="w-10 h-10 text-muted-foreground/40" />
+                        <div className="flex flex-col items-center gap-2 text-muted-foreground/50">
+                          <ImageIcon className="w-12 h-12" />
+                          <span className="text-xs">未设置主体图</span>
+                        </div>
                       )}
                     </div>
                     <div className="space-y-3">
                       <div>
-                        <label className={labelClass}>一致性描述</label>
+                        <label className={labelClass}>设定图提示词（三视图）</label>
                         <textarea
-                          value={selected.consistencyPrompt || ''}
-                          onChange={(e) => patchCharacter(selected.id, { consistencyPrompt: e.target.value })}
-                          className={`${inputClass} h-20 resize-none font-mono-family`}
-                          placeholder="二次元风格，银发，红眼，校服，单人"
+                          value={referenceSprite?.prompt || ''}
+                          onChange={(e) => setReferencePrompt(selected.id, e.target.value)}
+                          className={`${inputClass} h-28 resize-none font-mono-family`}
+                          placeholder={'左区：角色正脸特写，面部占满左区，五官、发型、配饰清晰，无身体入镜、无遮挡变形；右区：标准角色设定三视图，横向依次排列侧视图、正视图、背视图，从头到脚完整无遮挡、高度统一；核心约束：特写与三视图为同一角色，五官、服装、配饰、体态完全一致；中性表情，眼神平静，自然站立，双手自然下垂，空手无手持物；浅灰色纯净背景，角色无阴影，无畸变，平视视角，超高清；严禁出现无关文字；\n银发齐刘海，红色瞳孔，白色水手服校服，左侧蝴蝶结发饰，纤细体型'}
                         />
                       </div>
                       <div>
                         <div className="mb-2 flex items-center justify-between">
-                          <label className={labelClass}>主体参考图</label>
+                          <label className={labelClass}>主体参考图（可选）</label>
                           <span className="text-[10px] text-muted-foreground">最多 5 张</span>
                         </div>
                         <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
@@ -817,104 +1034,141 @@ export function CharacterPanel({
                               className="aspect-square rounded-md border border-dashed border-border bg-secondary/10 hover:bg-secondary/30 transition-colors flex flex-col items-center justify-center gap-1 text-xs text-muted-foreground disabled:opacity-50"
                             >
                               {referenceUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                              上传主体参考图
+                              上传
                             </button>
                           )}
                         </div>
-                        <p className="mt-2 text-[10px] text-muted-foreground">支持 PNG/JPG/WEBP。上传或删除后会自动保存到当前人物。</p>
                       </div>
-                      <div className="rounded-md bg-secondary/20 p-3 text-xs text-muted-foreground">
-                        生成提示词会组合为：一致性描述 + 主体素材参考 + 形态 + 表情。当前阶段保留 UI 框架，后续接入图片生成接口后自动保存到 game/figure/。
+                      <div className="flex items-center gap-2">
+                        <AssetPickerButton
+                          projectPath={projectPath}
+                          category="figure"
+                          currentValue={referenceSprite?.file || ''}
+                          onSelect={(filename) => setReferenceFile(selected.id, filename === 'none' ? '' : filename)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => triggerSingleSpriteGeneration(referenceSprite?.emotion || '主体参考', { kind: 'reference' })}
+                          disabled={spriteGeneratingKey !== null}
+                          className="px-3 py-1.5 rounded bg-primary text-primary-foreground hover:opacity-90 text-xs flex items-center gap-2 disabled:opacity-50"
+                        >
+                          {spriteGeneratingKey === 'reference'
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : <Sparkles className="w-3.5 h-3.5" />}
+                          {spriteGeneratingKey === 'reference' ? '生成中' : '生成主体设定图'}
+                        </button>
                       </div>
                     </div>
                   </div>
                 </section>
 
+                {/* 区域2：立绘素材库 — 可折叠 */}
                 <section className="story-os-panel p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setFigureLibraryOpen((v) => !v)}
+                    className="w-full flex items-center justify-between text-left"
+                  >
                     <div>
                       <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">立绘素材库</h4>
-                      <p className="mt-1 text-xs text-muted-foreground">这里集中管理人物可用的立绘素材。上传后的图片会出现在主体素材选择器和各个立绘映射里。</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={uploadFigureAsset}
-                      disabled={figureAssetImporting}
-                      className="px-3 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-colors text-xs flex items-center gap-2 disabled:opacity-50"
-                    >
-                      {figureAssetImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                      上传立绘素材
-                    </button>
-                  </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {figureAssets.length} 个
+                      <ChevronDown className={`w-4 h-4 transition-transform ${figureLibraryOpen ? 'rotate-180' : ''}`} />
+                    </div>
+                  </button>
 
-                  {figureAssetsLoading ? (
-                    <div className="h-28 rounded-md border border-dashed border-border flex items-center justify-center text-muted-foreground">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    </div>
-                  ) : figureAssets.length === 0 ? (
-                    <div className="rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground">
-                      还没有立绘素材。可以从右上角或这里上传，上传后会立刻出现在选择器里。
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-                      {figureAssets.map((asset) => {
-                        const isCurrentReference = referenceSprite?.file === asset.name;
-                        return (
-                          <div key={asset.path} className="rounded-md border border-border bg-secondary/20 overflow-hidden">
-                            <div className="aspect-[3/4] bg-background/40 overflow-hidden">
-                              <img
-                                src={convertFileSrc(asset.path)}
-                                alt={asset.name}
-                                className="w-full h-full object-cover"
-                              />
-                            </div>
-                            <div className="p-2 space-y-2">
-                              <div className="truncate text-xs font-medium" title={asset.name}>{asset.name}</div>
-                              <div className="text-[10px] text-muted-foreground">
-                                {isCurrentReference ? '当前主体素材' : '可用于主体与立绘映射'}
+                  {figureLibraryOpen && (
+                    <div className="mt-3">
+                      <div className="mb-3">
+                        <button
+                          type="button"
+                          onClick={uploadFigureAsset}
+                          disabled={figureAssetImporting}
+                          className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-colors text-xs flex items-center gap-2 disabled:opacity-50"
+                        >
+                          {figureAssetImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                          上传立绘素材
+                        </button>
+                      </div>
+
+                      {figureAssetsLoading ? (
+                        <div className="h-20 rounded-md border border-dashed border-border flex items-center justify-center text-muted-foreground">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        </div>
+                      ) : figureAssets.length === 0 ? (
+                        <div className="rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground">
+                          还没有立绘素材，上传后的图片会出现在这里。
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-2">
+                          {figureAssets.map((asset) => {
+                            const isCurrentReference = referenceSprite?.file === asset.name;
+                            return (
+                              <div key={asset.path} className="rounded-md border border-border bg-secondary/20 overflow-hidden">
+                                <div className="aspect-[3/4] bg-background/40 overflow-hidden">
+                                  <img
+                                    src={convertFileSrc(asset.path)}
+                                    alt={asset.name}
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="p-1.5 space-y-1">
+                                  <div className="truncate text-[10px] font-medium" title={asset.name}>{asset.name}</div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setReferenceFile(selected.id, asset.name)}
+                                    className={`w-full px-1.5 py-1 rounded text-[10px] transition-colors ${
+                                      isCurrentReference
+                                        ? 'bg-primary text-primary-foreground'
+                                        : 'bg-primary/10 text-primary hover:bg-primary/20'
+                                    }`}
+                                  >
+                                    {isCurrentReference ? '当前主体' : '设为主体'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeFigureAsset(asset)}
+                                    disabled={figureAssetDeleting === asset.name}
+                                    className="w-full px-1.5 py-1 rounded bg-destructive/10 text-destructive hover:bg-destructive/20 text-[10px] disabled:opacity-50"
+                                  >
+                                    {figureAssetDeleting === asset.name ? '删除中' : '删除'}
+                                  </button>
+                                </div>
                               </div>
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setReferenceFile(selected.id, asset.name)}
-                                  className={`flex-1 px-2 py-1.5 rounded text-[10px] transition-colors ${
-                                    isCurrentReference
-                                      ? 'bg-primary text-primary-foreground'
-                                      : 'bg-primary/10 text-primary hover:bg-primary/20'
-                                  }`}
-                                >
-                                  {isCurrentReference ? '当前主体' : '设为主体'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => removeFigureAsset(asset)}
-                                  disabled={figureAssetDeleting === asset.name}
-                                  className="px-2 py-1.5 rounded bg-destructive/10 text-destructive hover:bg-destructive/20 text-[10px] disabled:opacity-50"
-                                >
-                                  {figureAssetDeleting === asset.name ? '删除中' : '删除'}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </section>
 
+                {/* 区域3：表情变体 — 醒目情绪标签 + 各自提示词 */}
                 <section className="story-os-panel p-4">
-                  <div className="mb-3 flex items-center justify-between">
+                  <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
-                      <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">剧本分析出的形态与表情</h4>
-                      <p className="mt-1 text-xs text-muted-foreground">这里展示建议生成的立绘类型，后续会从剧本自动分析得到。</p>
+                      <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">表情变体</h4>
                     </div>
-                    <button
-                      onClick={() => setShowEmotionPicker((value) => !value)}
-                      className="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs flex items-center gap-1"
-                    >
-                      <Plus className="w-3 h-3" />
-                      新增
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setShowEmotionPicker((value) => !value)}
+                        className="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs flex items-center gap-1"
+                      >
+                        <Plus className="w-3 h-3" />
+                        添加变体
+                      </button>
+                      <button
+                        onClick={triggerBatchSpriteGeneration}
+                        disabled={spriteGeneratingKey !== null || variantSprites.length === 0}
+                        className="px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 text-xs flex items-center gap-1 disabled:opacity-50"
+                      >
+                        {spriteGeneratingKey !== null && spriteGeneratingKey !== 'reference'
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <Sparkles className="w-3 h-3" />}
+                        {spriteGeneratingKey !== null && spriteGeneratingKey !== 'reference' ? '生成中' : '批量生成'}
+                      </button>
+                    </div>
                   </div>
 
                   {showEmotionPicker && (
@@ -926,7 +1180,12 @@ export function CharacterPanel({
                             key={emotion}
                             type="button"
                             onClick={() => addEmotionPreset(selected.id, emotion)}
-                            className="px-2 py-1 rounded bg-background/60 hover:bg-primary/10 hover:text-primary text-xs border border-border"
+                            className="px-2 py-1 rounded text-xs border transition-colors"
+                            style={{
+                              color: emotionColor(emotion),
+                              borderColor: `${emotionColor(emotion)}40`,
+                              backgroundColor: `${emotionColor(emotion)}14`,
+                            }}
                           >
                             {emotion}
                           </button>
@@ -950,89 +1209,98 @@ export function CharacterPanel({
                           添加
                         </button>
                       </div>
+                      <div className="mt-3 border-t border-border pt-3">
+                        <div className="mb-2 text-xs text-muted-foreground">建议姿态</div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
+                          {spriteSuggestions.map((suggestion) => (
+                            <button
+                              key={`${suggestion.pose}-${suggestion.emotion}`}
+                              onClick={() => addSprite(selected.id, `${suggestion.pose}-${suggestion.emotion}`, suggestion.prompt)}
+                              className="rounded-md border border-border bg-background/40 p-2 text-left hover:border-primary/40 hover:bg-primary/10 transition-colors"
+                            >
+                              <div className="text-xs font-medium">{suggestion.pose}</div>
+                              <div className="mt-0.5 text-[11px]" style={{ color: emotionColor(suggestion.emotion) }}>{suggestion.emotion}</div>
+                              <div className="mt-1 text-[10px] text-muted-foreground font-mono-family line-clamp-2">{suggestion.prompt}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
-                    {spriteSuggestions.map((suggestion) => (
-                      <button
-                        key={`${suggestion.pose}-${suggestion.emotion}`}
-                        onClick={() => addSprite(selected.id, `${suggestion.pose}-${suggestion.emotion}`)}
-                        className="rounded-md border border-border bg-secondary/20 p-3 text-left hover:border-primary/40 hover:bg-primary/10 transition-colors"
-                      >
-                        <div className="text-sm">{suggestion.pose}</div>
-                        <div className="mt-1 text-xs text-primary">{suggestion.emotion}</div>
-                        <div className="mt-2 text-[10px] text-muted-foreground font-mono-family">{suggestion.prompt}</div>
-                      </button>
-                    ))}
-                  </div>
-                </section>
+                  {variantSprites.length === 0 ? (
+                    <div className="text-xs text-muted-foreground border border-dashed border-border rounded-md p-3">还没有表情变体。点击「添加变体」选择情绪或建议姿态。</div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+                      {variantSprites.map(({ sprite, index }) => {
+                        const color = emotionColor(sprite.emotion);
+                        return (
+                          <div key={index} className="rounded-md border border-border bg-secondary/15 overflow-hidden hover:border-primary/30 transition-colors">
+                            {/* 情绪标签 — 醒目展示 */}
+                            <div
+                              className="px-3 py-2 flex items-center gap-1"
+                              style={{ backgroundColor: `${color}18`, borderBottom: `2px solid ${color}40` }}
+                            >
+                              <input
+                                value={sprite.emotion}
+                                onChange={(e) => updateSprite(selected.id, index, 'emotion', e.target.value)}
+                                className="min-w-0 flex-1 bg-transparent text-sm font-semibold focus:outline-none focus:ring-1 focus:ring-primary/40 rounded px-1 py-0.5"
+                                placeholder="情绪标签"
+                                style={{ color }}
+                              />
+                              <button
+                                onClick={() => removeSprite(selected.id, index)}
+                                className="p-1 hover:bg-destructive/10 rounded transition-colors flex-shrink-0"
+                                aria-label="删除变体"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
+                              </button>
+                            </div>
 
-                <section className="story-os-panel space-y-2 p-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">立绘结果与映射</h4>
-                    <button
-                      onClick={triggerBatchSpriteGeneration}
-                      className="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs flex items-center gap-1"
-                    >
-                      <Sparkles className="w-3 h-3" />
-                      批量生成当前角色
-                    </button>
-                  </div>
-                  {variantSprites.length === 0 && (
-                    <div className="text-xs text-muted-foreground border border-dashed border-border rounded-md p-3">暂无形态或表情立绘。</div>
-                  )}
-                  <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-                    {variantSprites.map(({ sprite, index }) => (
-                      <div key={index} className="rounded-md border border-border bg-secondary/20 overflow-hidden">
-                        <div className="p-2 flex items-center gap-1">
-                          <input
-                            value={sprite.emotion}
-                            onChange={(e) => updateSprite(selected.id, index, 'emotion', e.target.value)}
-                            className="min-w-0 flex-1 bg-transparent text-xs font-medium focus:outline-none focus:ring-1 focus:ring-primary/40 rounded px-1 py-0.5"
-                            placeholder="情绪标签"
-                          />
-                          <button
-                            onClick={() => removeSprite(selected.id, index)}
-                            className="p-1 hover:bg-destructive/10 rounded transition-colors"
-                            aria-label="删除立绘"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
-                          </button>
-                        </div>
-                        <div className="aspect-[3/4] bg-background/40 flex items-center justify-center overflow-hidden">
-                          {sprite.file ? (
-                            <img
-                              src={convertFileSrc(`${projectPath}/game/figure/${sprite.file}`)}
-                              alt=""
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <ImageIcon className="w-8 h-8 text-muted-foreground/40" />
-                          )}
-                        </div>
-                        <div className="p-2 space-y-2">
-                          <div className="truncate text-[10px] text-muted-foreground font-mono-family">
-                            {sprite.file || '未选择文件'}
+                            <div className="aspect-[3/4] bg-background/40 flex items-center justify-center overflow-hidden border-b border-border">
+                              {sprite.file ? (
+                                <img
+                                  src={convertFileSrc(`${projectPath}/game/figure/${sprite.file}`)}
+                                  alt=""
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <ImageIcon className="w-8 h-8 text-muted-foreground/40" />
+                              )}
+                            </div>
+
+                            <div className="p-2 space-y-2">
+                              <textarea
+                                value={sprite.prompt || ''}
+                                onChange={(e) => updateSprite(selected.id, index, 'prompt', e.target.value)}
+                                className="w-full h-16 resize-none text-[10px] font-mono-family bg-input-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                placeholder="提示词（如：微笑表情，嘴角上扬，眼睛微眯…）"
+                              />
+                              <div className="flex items-center gap-1">
+                                <AssetPickerButton
+                                  projectPath={projectPath}
+                                  category="figure"
+                                  currentValue={sprite.file}
+                                  onSelect={(filename) => updateSprite(selected.id, index, 'file', filename === 'none' ? '' : filename)}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => triggerSingleSpriteGeneration(sprite.emotion, { kind: 'variant', index })}
+                                  disabled={spriteGeneratingKey !== null}
+                                  className="flex-1 px-2 py-1.5 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs flex items-center justify-center gap-1 disabled:opacity-50"
+                                >
+                                  {spriteGeneratingKey === `variant:${index}`
+                                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                                    : <Sparkles className="w-3 h-3" />}
+                                  {spriteGeneratingKey === `variant:${index}` ? '生成中' : '生成'}
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                          <AssetPickerButton
-                            projectPath={projectPath}
-                            category="figure"
-                            currentValue={sprite.file}
-                            onSelect={(filename) => updateSprite(selected.id, index, 'file', filename === 'none' ? '' : filename)}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => triggerSingleSpriteGeneration(sprite.emotion)}
-                            className="w-full px-2 py-1.5 rounded bg-secondary/60 text-muted-foreground text-xs flex items-center justify-center gap-1 hover:bg-primary/10 hover:text-primary transition-colors"
-                          >
-                            <Sparkles className="w-3 h-3" />
-                            生成此立绘
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </section>
 
                 <section className="story-os-panel p-4">
@@ -1105,6 +1373,230 @@ export function CharacterPanel({
           </main>
         </div>
       )}
+      <SpriteAiGenerateDialog
+        open={pendingSpriteGeneration !== null}
+        character={selected}
+        generation={pendingSpriteGeneration}
+        initialInstruction={
+          pendingSpriteGeneration && selected
+            ? pendingSpriteGeneration.batch
+              ? ''
+              : pendingSpriteGeneration.target.kind === 'reference'
+                ? (referenceSprite?.prompt ?? '')
+                : (selected.sprites[pendingSpriteGeneration.target.index]?.prompt ?? '')
+            : ''
+        }
+        variantCount={variantSprites.length}
+        onGenerate={handleConfirmSpriteGeneration}
+        onClose={() => {
+          if (!spriteGeneratingKey) setPendingSpriteGeneration(null);
+        }}
+      />
+    </div>
+  );
+}
+
+function SpriteAiGenerateDialog({
+  open,
+  character,
+  generation,
+  initialInstruction,
+  variantCount,
+  onGenerate,
+  onClose,
+}: {
+  open: boolean;
+  character: Character | null;
+  generation: PendingSpriteGeneration | null;
+  initialInstruction: string;
+  variantCount: number;
+  onGenerate: (model: string) => void | Promise<void>;
+  onClose: () => void;
+}) {
+  const [config, setConfig] = useState<AiProviderConfig | null>(null);
+  const [loadingConfig, setLoadingConfig] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState<AiMediaGenerationProgress | null>(null);
+
+  const configuredModels = config ? parseConfiguredModels(config.model) : [];
+  const effectiveModel = selectedModel || configuredModels[0] || config?.model.trim() || '';
+  const isBatch = generation?.batch === true;
+  const contextLines = character
+    ? [
+        character.name ? `角色：${character.name}` : '',
+        character.gender ? `性别：${character.gender}` : '',
+        character.age ? `年龄：${character.age}` : '',
+        character.description ? `外观：${character.description}` : '',
+        character.personality ? `性格：${character.personality}` : '',
+      ].filter(Boolean)
+    : [];
+
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    setGenerationProgress(null);
+    setLoadingConfig(true);
+    getAiImageConfig()
+      .then((nextConfig) => {
+        setConfig(nextConfig);
+        const models = parseConfiguredModels(nextConfig.model);
+        setSelectedModel(models[0] ?? nextConfig.model.trim());
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoadingConfig(false));
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    listenAiMediaGenerationProgress((progress) => {
+      if (!disposed) setGenerationProgress(progress);
+    })
+      .then((nextUnlisten) => {
+        if (disposed) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [open]);
+
+  if (!open || !generation) return null;
+
+  const handleSubmit = async () => {
+    if (!effectiveModel) {
+      setError('请先在图片 AI 设置中选择至少一个模型。');
+      return;
+    }
+    if (!isBatch && !initialInstruction.trim()) {
+      setError(generation.target.kind === 'reference' ? '请先填写主体区域的设定图提示词。' : '请先填写该表情变体的提示词。');
+      return;
+    }
+    setError(null);
+    setGenerating(true);
+    try {
+      await onGenerate(effectiveModel);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="w-[640px] max-h-[86vh] overflow-hidden rounded-lg border border-border bg-card shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border p-4">
+          <h2 className="text-lg font-display-family">
+            {isBatch ? '批量生成角色立绘' : `生成立绘：${generation.emotion || '未命名形态'}`}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={generating}
+            className="rounded-md px-2 py-1 text-sm hover:bg-secondary/60 disabled:opacity-50"
+          >
+            关闭
+          </button>
+        </div>
+
+        <div className="max-h-[calc(86vh-120px)] overflow-y-auto p-4 space-y-4">
+          <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+            {loadingConfig
+              ? '正在读取图片 AI 配置...'
+              : config
+                ? `使用配置：${config.provider} / ${effectiveModel || '未填写模型'}`
+                : '未读取到配置'}
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs uppercase tracking-wide text-muted-foreground">生成模型</label>
+            {configuredModels.length > 1 ? (
+              <select
+                value={effectiveModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="w-full rounded-md border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                {configuredModels.map((model) => (
+                  <option key={model} value={model}>{model}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={effectiveModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                placeholder="先在图片 AI 设置中选择模型"
+                className="w-full rounded-md border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            )}
+          </div>
+
+          {contextLines.length > 0 && (
+            <div className="rounded-md border border-border bg-secondary/20 p-3">
+              <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">角色上下文</div>
+              <div className="space-y-1 text-xs text-muted-foreground">
+                {contextLines.map((line) => <div key={line}>{line}</div>)}
+              </div>
+            </div>
+          )}
+
+          {isBatch ? (
+            <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+              将使用 {variantCount} 个表情变体各自填写的提示词批量生成；这里只选择本次使用的图片模型。
+            </div>
+          ) : (
+            <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+              {generation.target.kind === 'reference'
+                ? '将使用主体区域的“设定图提示词（三视图）”生成。'
+                : '将使用该表情变体卡片中填写的提示词生成。'}
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+
+          {generating && (
+            <div className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-primary">
+              {generationProgress
+                ? generationProgress.totalAttempts > 0
+                  ? `${generationProgress.message} (${generationProgress.attempt}/${generationProgress.totalAttempts})`
+                  : generationProgress.message
+                : '正在提交生成请求...'}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-border p-4">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={generating}
+            className="rounded-md bg-secondary px-4 py-2 text-sm hover:bg-secondary/70 disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={loadingConfig || generating}
+            className="inline-flex min-w-24 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50"
+          >
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {generating ? '生成中' : '生成'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
