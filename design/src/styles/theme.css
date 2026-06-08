@@ -6,7 +6,7 @@
   --font-body: 'Inter', 'Hanken Grotesk', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
 
-  --background: #f7f9fc;
+  --background: #fdfbf5;
   --foreground: #191c1e;
   --card: #ffffff;
   --card-foreground: #191c1e;
@@ -21,6 +21,8 @@
   --secondary-container: #F2B5B4;
   --on-secondary-container: #004d77;
   --nav-active: #371041;
+  --scrollbar-thumb: var(--primary);
+  --scrollbar-track: transparent;
   --muted: #f2f4f7;
   --muted-foreground: #564245;
   --accent: #62aeeb;
@@ -48,7 +50,7 @@
   --sidebar-accent-foreground: #191c1e;
   --sidebar-border: #e3e7ef;
   --sidebar-ring: #a43758;
-  --surface-bright: #f7f9fc;
+  --surface-bright: #fdfbf5;
   --surface-container-lowest: #ffffff;
   --surface-container-low: #f2f4f7;
   --surface-container: #eceef1;
@@ -190,18 +192,18 @@
   }
 
   ::-webkit-scrollbar-track {
-    background: transparent;
+    background: var(--scrollbar-track);
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #d8dadd;
+    background: var(--scrollbar-thumb);
     border: 2px solid transparent;
     border-radius: 999px;
     background-clip: padding-box;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #c7ccd3;
+    background: color-mix(in srgb, var(--scrollbar-thumb) 88%, black);
     background-clip: padding-box;
   }
 
