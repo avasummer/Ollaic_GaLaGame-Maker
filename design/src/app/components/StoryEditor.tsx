@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo, Fragment } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, memo, Fragment } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
@@ -1260,8 +1260,60 @@ interface AiAssistantPanelProps {
   onRenameSession: (session: { id: string; title: string }) => void;
   onDeleteSession: (session: { id: string; title: string }) => void;
   onOpenSettings: () => void;
-  onSend: () => void;
+  onSend: (text: string) => void;
 }
+
+interface AiInputBoxProps {
+  /** Programmatic seed from the agent (prefill on regenerate, clear after send). */
+  value: string;
+  busy: boolean;
+  pending: boolean;
+  onSubmit: (text: string) => void;
+  onStop: () => void;
+}
+
+// Keeps the draft in local state so typing only re-renders this small box,
+// not the whole StoryEditor tree (script list, worldline, timeline, ...).
+const AiInputBox = memo(function AiInputBox({ value, busy, pending, onSubmit, onStop }: AiInputBoxProps) {
+  const [draft, setDraft] = useState(value);
+  // Sync when the agent changes input externally (regenerate prefills, send clears).
+  useEffect(() => { setDraft(value); }, [value]);
+
+  const submit = () => {
+    if (busy) { onStop(); return; }
+    const text = draft.trim();
+    if (!text || pending) return;
+    onSubmit(text);
+  };
+
+  return (
+    <>
+      <textarea
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            submit();
+          }
+        }}
+        disabled={busy || pending}
+        className="mt-3 h-20 w-full resize-none rounded-sm border border-border bg-surface-container-lowest p-2 text-sm focus:border-secondary focus:outline-none focus:ring-2 focus:ring-secondary-container/30 disabled:opacity-60"
+        placeholder={busy ? '生成中...' : pending ? '请先同意或拒绝当前 AI 修改...' : '输入你的创作想法...'}
+        aria-label="AI 创作输入"
+      />
+      <button
+        type="button"
+        onClick={submit}
+        disabled={!busy && (!draft.trim() || pending)}
+        className="mt-2 flex w-full items-center justify-center gap-2 rounded-sm bg-secondary-container/60 py-2 text-sm font-semibold text-black transition-colors hover:bg-secondary-container disabled:opacity-50"
+      >
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+        {busy ? '停止' : '发送'}
+      </button>
+    </>
+  );
+});
 
 function AiAssistantPanel({
   aiAgent,
@@ -1287,7 +1339,7 @@ function AiAssistantPanel({
     <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-surface-container-lowest">
       <div className="flex h-10 items-center justify-between border-b border-border px-3">
         <div className="flex min-w-0 items-center gap-2">
-          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-secondary-container/35 text-secondary">
+          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-secondary-container/35 text-[var(--nav-active)]">
             <Wand2 className="h-3.5 w-3.5" />
           </div>
           <span className="truncate text-sm font-semibold text-on-surface" title={activeSession?.title}>
@@ -1431,29 +1483,13 @@ function AiAssistantPanel({
           disabled={!projectPath}
           onSave={aiAgent.saveMemory}
         />
-        <textarea
+        <AiInputBox
           value={aiAgent.input}
-          onChange={(event) => aiAgent.setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              onSend();
-            }
-          }}
-          disabled={aiAgent.busy || aiAgent.pendingChangeSet?.status === 'pending'}
-          className="mt-3 h-20 w-full resize-none rounded-sm border border-border bg-surface-container-lowest p-2 text-sm focus:border-secondary focus:outline-none focus:ring-2 focus:ring-secondary-container/30 disabled:opacity-60"
-          placeholder={aiAgent.busy ? '生成中...' : aiAgent.pendingChangeSet?.status === 'pending' ? '请先同意或拒绝当前 AI 修改...' : '输入你的创作想法...'}
-          aria-label="AI 创作输入"
+          busy={aiAgent.busy}
+          pending={aiAgent.pendingChangeSet?.status === 'pending'}
+          onSubmit={onSend}
+          onStop={aiAgent.stop}
         />
-        <button
-          type="button"
-          onClick={aiAgent.busy ? aiAgent.stop : onSend}
-          disabled={!aiAgent.busy && (!aiAgent.input.trim() || aiAgent.pendingChangeSet?.status === 'pending')}
-          className="mt-2 flex w-full items-center justify-center gap-2 rounded-sm bg-secondary-container/60 py-2 text-sm font-semibold text-secondary transition-colors hover:bg-secondary-container disabled:opacity-50"
-        >
-          {aiAgent.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          {aiAgent.busy ? '停止' : '发送'}
-        </button>
       </div>
     </aside>
   );
@@ -1666,7 +1702,7 @@ function ScriptCommandStream({
                   <Image className="h-5 w-5 text-on-surface-variant/30" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="mb-1 font-bold text-secondary">设置背景: {node.asset || node.content || '未选择背景'}</p>
+                  <p className="mb-1 font-bold text-foreground">设置背景: {node.asset || node.content || '未选择背景'}</p>
                 </div>
               </div>
             ) : isDialogue ? (
@@ -3120,7 +3156,7 @@ export function StoryEditor() {
     }
   }, [aiAgent.pendingChangeSet?.status, aiAgent.status, currentSceneName]);
 
-  const handleAiSend = () => { void aiAgent.sendPrompt(aiAgent.input); };
+  const handleAiSend = useCallback((text: string) => { void aiAgent.sendPrompt(text); }, [aiAgent.sendPrompt]);
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
