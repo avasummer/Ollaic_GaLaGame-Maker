@@ -1182,7 +1182,7 @@ export function AssetManager() {
                           }}
                           className={`group overflow-hidden rounded-lg bg-card text-left transition-all hover:scale-[1.02] cursor-pointer ${
                             isSelected
-                              ? 'ring-2 ring-primary shadow-[0_0_20px_rgba(212,165,116,0.3)]'
+                              ? 'ring-2 ring-primary shadow-[0_0_20px_color-mix(in_srgb,var(--color-warm-glow)_60%,transparent)]'
                               : 'hover:ring-1 hover:ring-border'
                           }`}
                         >
@@ -1328,13 +1328,13 @@ export function AssetManager() {
                           }}
                           className={`group relative rounded-lg overflow-hidden cursor-pointer transition-all hover:scale-[1.02] ${
                             isSelected
-                              ? 'ring-2 ring-primary shadow-[0_0_20px_rgba(212,165,116,0.3)]'
+                              ? 'ring-2 ring-primary shadow-[0_0_20px_color-mix(in_srgb,var(--color-warm-glow)_60%,transparent)]'
                               : 'hover:ring-1 hover:ring-border bg-card'
                           }`}
                         >
                           <div className="aspect-square bg-secondary/30 relative overflow-hidden flex flex-col items-center justify-center gap-4">
                             <Music className="w-10 h-10 text-muted-foreground" />
-                            <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,hsl(var(--primary)/0.25)_0_3px,transparent_3px_7px)]" />
+                            <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,color-mix(in_srgb,var(--color-primary)_25%,transparent)_0_3px,transparent_3px_7px)]" />
                             {(asset || card) && (
                               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                                 <div className="absolute right-2 top-2">
@@ -1422,7 +1422,7 @@ export function AssetManager() {
                               {isAudioExt(asset.extension) ? (
                                 <>
                                   <Music className="w-10 h-10 text-muted-foreground" />
-                                  <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,hsl(var(--primary)/0.25)_0_3px,transparent_3px_7px)]" />
+                                  <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,color-mix(in_srgb,var(--color-primary)_25%,transparent)_0_3px,transparent_3px_7px)]" />
                                 </>
                               ) : (
                                 <Image className="w-12 h-12 text-muted-foreground/30" />
@@ -1665,7 +1665,7 @@ export function AssetManager() {
 
           {/* Right Sidebar - Details */}
           {activeTab !== 'character' && (
-          <aside className="my-4 mr-4 w-80 overflow-hidden rounded border border-border bg-surface-bright/90 shadow-[-4px_0_24px_rgba(0,0,0,0.02)] backdrop-blur-xl">
+          <aside className="my-4 mr-4 w-80 overflow-hidden rounded border border-border bg-surface-bright/90 shadow-[-4px_0_24px_var(--shadow-faint)] backdrop-blur-xl">
             {selectedSceneCard ? (
               <SceneCardDetails
                 card={selectedSceneCard}
@@ -2219,7 +2219,7 @@ function VoiceCardDetails({
       <div className="mb-6">
         <div className="aspect-square rounded-lg overflow-hidden bg-secondary/30 mb-4 flex flex-col items-center justify-center gap-4">
           <Music className="w-16 h-16 text-muted-foreground" />
-          <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,hsl(var(--primary)/0.25)_0_3px,transparent_3px_7px)]" />
+          <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,color-mix(in_srgb,var(--color-primary)_25%,transparent)_0_3px,transparent_3px_7px)]" />
         </div>
         <h2 className="text-xl mb-2 font-display-family">
           {targetFilename}

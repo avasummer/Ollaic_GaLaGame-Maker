@@ -62,7 +62,7 @@ export function SceneManagerPanel({
   if (!open) return null;
 
   return (
-    <div className="absolute bottom-0 right-80 top-0 z-40 flex w-80 flex-col border-l border-border bg-surface-container-lowest shadow-[-8px_0_24px_rgba(25,28,30,0.06)]">
+    <div className="absolute bottom-0 right-80 top-0 z-40 flex w-80 flex-col border-l border-border bg-surface-container-lowest shadow-[-8px_0_24px_var(--shadow-soft)]">
       <div className="flex h-10 items-center justify-between border-b border-border px-3">
         <span className="flex items-center gap-1.5 font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">
           <FolderOpen className="h-3 w-3 text-secondary" /> 场景管理

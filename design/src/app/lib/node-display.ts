@@ -9,6 +9,7 @@ import {
   ArrowRight, Type, Monitor, Variable, Keyboard, Wand2, Move, Award,
 } from 'lucide-react';
 import type { WebGalNode, WebGalCommandType } from './webgal-types';
+import { typeBorderClass } from './webgal-types';
 
 export const commandIcons: Partial<Record<WebGalCommandType, typeof MessageCircle>> = {
   dialogue: MessageCircle,
@@ -36,32 +37,9 @@ export const commandIcons: Partial<Record<WebGalCommandType, typeof MessageCircl
   comment: Type,
 };
 
-/** Border + faint background classes per command type (full node card style). */
-export const typeColors: Partial<Record<WebGalCommandType, string>> = {
-  dialogue: 'border-accent bg-accent/5',
-  narrator: 'border-accent bg-accent/5',
-  intro: 'border-accent bg-accent/5',
-  choose: 'border-primary bg-primary/5',
-  changeBg: 'border-chart-5 bg-chart-5/5',
-  changeFigure: 'border-chart-5 bg-chart-5/5',
-  miniAvatar: 'border-chart-5 bg-chart-5/5',
-  changeScene: 'border-blue-400 bg-blue-400/5',
-  callScene: 'border-blue-400 bg-blue-400/5',
-  end: 'border-blue-400 bg-blue-400/5',
-  bgm: 'border-purple-400 bg-purple-400/5',
-  playEffect: 'border-purple-400 bg-purple-400/5',
-  playVideo: 'border-purple-400 bg-purple-400/5',
-  label: 'border-yellow-400 bg-yellow-400/5',
-  jumpLabel: 'border-yellow-400 bg-yellow-400/5',
-  setVar: 'border-yellow-400 bg-yellow-400/5',
-  setTextbox: 'border-yellow-400 bg-yellow-400/5',
-  getUserInput: 'border-yellow-400 bg-yellow-400/5',
-  setAnimation: 'border-primary bg-primary/5',
-  setTransform: 'border-primary bg-primary/5',
-  unlockCg: 'border-primary bg-primary/5',
-  unlockBgm: 'border-primary bg-primary/5',
-  comment: 'border-muted bg-muted/5',
-};
+/** Border + faint background classes per command type. Re-exported as
+ *  typeColors for backwards-compat with consumers like MiniNodeCard. */
+export const typeColors: Partial<Record<WebGalCommandType, string>> = typeBorderClass;
 
 /** One-line human summary of a node's payload. */
 export function getNodeSummary(node: WebGalNode): string {

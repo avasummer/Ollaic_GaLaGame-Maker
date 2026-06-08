@@ -167,14 +167,14 @@ export function CharacterPanel({
 
   const emotionColor = (emotion: string): string => {
     const key = emotion.toLowerCase();
-    if (key.includes('微笑') || key.includes('高兴') || key.includes('开心') || key.includes('笑') || key === 'happy' || key === 'smile') return '#D4A574';
-    if (key.includes('悲伤') || key.includes('低落') || key.includes('哭') || key === 'sad' || key === 'cry') return '#60A5FA';
-    if (key.includes('愤怒') || key.includes('生气') || key === 'angry') return '#F87171';
-    if (key.includes('惊讶') || key === 'surprised') return '#C084FC';
-    if (key.includes('害羞') || key.includes('羞') || key === 'shy') return '#F472B6';
-    if (key.includes('思考') || key.includes('认真') || key.includes('严肃') || key === 'serious') return '#34D399';
-    if (key.includes('默认') || key === 'default') return '#94A3B8';
-    return '#D4A574';
+    if (key.includes('微笑') || key.includes('高兴') || key.includes('开心') || key.includes('笑') || key === 'happy' || key === 'smile') return 'var(--color-emotion-happy)';
+    if (key.includes('悲伤') || key.includes('低落') || key.includes('哭') || key === 'sad' || key === 'cry') return 'var(--color-emotion-sad)';
+    if (key.includes('愤怒') || key.includes('生气') || key === 'angry') return 'var(--color-emotion-angry)';
+    if (key.includes('惊讶') || key === 'surprised') return 'var(--color-emotion-surprised)';
+    if (key.includes('害羞') || key.includes('羞') || key === 'shy') return 'var(--color-emotion-shy)';
+    if (key.includes('思考') || key.includes('认真') || key.includes('严肃') || key === 'serious') return 'var(--color-emotion-serious)';
+    if (key.includes('默认') || key === 'default') return 'var(--color-emotion-default)';
+    return 'var(--color-emotion-happy)';
   };
 
   useEffect(() => {
@@ -873,7 +873,7 @@ export function CharacterPanel({
                           value={selected.colorTheme || ''}
                           onChange={(e) => patchCharacter(selected.id, { colorTheme: e.target.value })}
                           className={`${inputClass} font-mono-family`}
-                          placeholder="#D4A574"
+                          placeholder="var(--color-character-1)"
                         />
                       </div>
                     </div>
@@ -1175,21 +1175,24 @@ export function CharacterPanel({
                     <div className="mb-3 rounded-md border border-border bg-secondary/20 p-3">
                       <div className="mb-2 text-xs text-muted-foreground">常用情绪</div>
                       <div className="flex flex-wrap gap-2">
-                        {commonEmotions.map((emotion) => (
-                          <button
-                            key={emotion}
-                            type="button"
-                            onClick={() => addEmotionPreset(selected.id, emotion)}
-                            className="px-2 py-1 rounded text-xs border transition-colors"
-                            style={{
-                              color: emotionColor(emotion),
-                              borderColor: `${emotionColor(emotion)}40`,
-                              backgroundColor: `${emotionColor(emotion)}14`,
-                            }}
-                          >
-                            {emotion}
-                          </button>
-                        ))}
+                        {commonEmotions.map((emotion) => {
+                          const color = emotionColor(emotion);
+                          return (
+                            <button
+                              key={emotion}
+                              type="button"
+                              onClick={() => addEmotionPreset(selected.id, emotion)}
+                              className="px-2 py-1 rounded text-xs border transition-colors"
+                              style={{
+                                color,
+                                borderColor: `color-mix(in srgb, ${color} 25%, transparent)`,
+                                backgroundColor: `color-mix(in srgb, ${color} 8%, transparent)`,
+                              }}
+                            >
+                              {emotion}
+                            </button>
+                          );
+                        })}
                       </div>
                       <div className="mt-3 flex gap-2">
                         <input
@@ -1239,7 +1242,10 @@ export function CharacterPanel({
                             {/* 情绪标签 — 醒目展示 */}
                             <div
                               className="px-3 py-2 flex items-center gap-1"
-                              style={{ backgroundColor: `${color}18`, borderBottom: `2px solid ${color}40` }}
+                              style={{
+                                backgroundColor: `color-mix(in srgb, ${color} 9%, transparent)`,
+                                borderBottom: `2px solid color-mix(in srgb, ${color} 25%, transparent)`,
+                              }}
                             >
                               <input
                                 value={sprite.emotion}

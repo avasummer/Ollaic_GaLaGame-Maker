@@ -18,7 +18,7 @@ import { ProjectMetadataDialog, type ExportTaskState } from './ProjectMetadataDi
 import { SnapshotManagerDialog } from './SnapshotManagerDialog';
 import { SceneManagerPanel } from './SceneManagerPanel';
 import type { WebGalNode, WebGalCommandType, SceneLink } from '../lib/webgal-types';
-import { extractSceneLinks, commandCategories, commandLabels, categoryLabels } from '../lib/webgal-types';
+import { extractSceneLinks, commandCategories, commandLabels, categoryLabels, categoryTagClass, getCommandCategory } from '../lib/webgal-types';
 import {
   parseScene, serializeScene, saveScene, loadScene,
   openProject, getScenePath, createScene,
@@ -664,7 +664,7 @@ function FullScreenWorldline({
                     <path
                       d={buildEdgePath(edge.from, edge.to)}
                       fill="none"
-                      stroke={edge.active ? 'var(--color-primary, #a43758)' : 'var(--color-outline-variant, #c8c2bf)'}
+                      stroke={edge.active ? 'var(--color-primary)' : 'var(--color-outline-variant)'}
                       strokeWidth={edge.active ? 2.5 : 1.5}
                       strokeDasharray={edge.active ? undefined : '4 4'}
                       opacity={edge.active ? 1 : 0.6}
@@ -675,8 +675,8 @@ function FullScreenWorldline({
                       cx={midX}
                       cy={midY}
                       r={6}
-                      fill="var(--color-surface-bright, #fff)"
-                      stroke={edge.active ? 'var(--color-primary, #a43758)' : 'var(--color-outline-variant, #c8c2bf)'}
+                      fill="var(--color-surface-bright)"
+                      stroke={edge.active ? 'var(--color-primary)' : 'var(--color-outline-variant)'}
                       strokeWidth={1}
                       className="pointer-events-none"
                     />
@@ -726,8 +726,8 @@ function FullScreenWorldline({
               return (
                 <svg className="pointer-events-none absolute inset-0" style={{ width, height, overflow: 'visible', zIndex: 10 }}>
                   <line x1={sx} y1={sy} x2={ex} y2={ey}
-                    stroke="var(--color-tertiary, #5b7a4c)" strokeWidth={2} strokeDasharray="6 3" opacity={0.8} />
-                  <circle cx={ex} cy={ey} r={4} fill="var(--color-tertiary, #5b7a4c)" opacity={0.8} />
+                    stroke="var(--color-tertiary)" strokeWidth={2} strokeDasharray="6 3" opacity={0.8} />
+                  <circle cx={ex} cy={ey} r={4} fill="var(--color-tertiary)" opacity={0.8} />
                 </svg>
               );
             })()}
@@ -1129,7 +1129,7 @@ function SceneWorldlinePanel({
                 key={`${edge.from.scene}-${edge.to.scene}-${idx}`}
                 d={buildEdgePath(edge.from, edge.to)}
                 fill="none"
-                stroke={edge.active ? 'var(--color-primary, #a43758)' : 'var(--color-outline-variant, #c8c2bf)'}
+                stroke={edge.active ? 'var(--color-primary)' : 'var(--color-outline-variant)'}
                 strokeWidth={edge.active ? 2 : 1.5}
                 strokeDasharray={edge.active ? undefined : '4 4'}
                 opacity={edge.active ? 1 : 0.6}
@@ -1886,11 +1886,7 @@ function ScriptCommandStream({
           const isBackground = node.type === 'changeBg';
           const isBranch = node.type === 'choose';
           const tag = isBackground ? 'BG_LOAD' : isDialogue ? 'TEXT_CMD' : isBranch ? 'BRANCH_LOGIC' : node.type.toUpperCase();
-          const tagClass = isBackground
-            ? 'bg-secondary text-on-secondary'
-            : isBranch
-            ? 'bg-tertiary text-on-tertiary'
-            : 'bg-primary text-on-primary';
+          const tagClass = categoryTagClass[getCommandCategory(node.type)];
           const charColor = isDialogue && node.character && characterColors?.[node.character]
             ? characterColors[node.character]
             : undefined;
@@ -3277,7 +3273,7 @@ export function StoryEditor() {
           />
 
           {selectedNode && !showScript && (
-            <div className="absolute bottom-0 right-80 top-0 z-30 w-80 border-l border-border bg-surface-container-lowest shadow-[-8px_0_24px_rgba(25,28,30,0.06)]">
+            <div className="absolute bottom-0 right-80 top-0 z-30 w-80 border-l border-border bg-surface-container-lowest shadow-[-8px_0_24px_var(--shadow-soft)]">
               <DetailPanel
                 node={selectedNode}
                 onUpdateNode={updateSelectedNode}

@@ -110,7 +110,7 @@ export function PerformanceTimeline({
               title={`#${m.index + 1} ${m.label}`}
               className={`absolute top-0 h-full w-1 cursor-pointer rounded-full transition-opacity hover:opacity-100 ${
                 m.tone
-              } ${isSelected ? 'opacity-100 shadow-[0_0_0_3px_rgba(164,55,88,0.35)]' : 'opacity-60'}`}
+              } ${isSelected ? 'opacity-100 shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-story)_35%,transparent)]' : 'opacity-60'}`}
               style={{ left: `${Math.min(left, 99)}%` }}
             />
           );

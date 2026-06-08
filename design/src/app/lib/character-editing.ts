@@ -1,15 +1,10 @@
 import type { Character, CharacterRelation, CharacterSprite } from './character-types';
 
-const CHARACTER_COLORS = [
-  '#D4A574',
-  '#C9946A',
-  '#7C9885',
-  '#60A5FA',
-  '#C084FC',
-  '#FACC15',
-  '#F472B6',
-  '#34D399',
-];
+const CHARACTER_COLOR_COUNT = 8;
+const CHARACTER_COLORS = Array.from(
+  { length: CHARACTER_COLOR_COUNT },
+  (_, i) => `var(--color-character-${i + 1})`,
+);
 
 export function characterColor(index: number): string {
   return CHARACTER_COLORS[index % CHARACTER_COLORS.length];
