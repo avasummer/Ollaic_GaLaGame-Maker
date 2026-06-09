@@ -40,6 +40,7 @@ import { AiMessageBubble } from './AiMessageBubble';
 import { ChangeSetCard } from './AiPendingCard';
 import { PreviewNodeCard } from './PreviewNodeCard';
 import { SceneGraph } from './SceneGraph';
+import { figureLabel } from '../lib/node-display';
 import { computeFullNodeDiff, type NodeDiffEntry } from '../lib/node-diff';
 import type { SceneEdit } from '../lib/change-set';
 import { ConflictCard, ErrorCard } from './AiStatusCard';
@@ -713,6 +714,7 @@ interface ScriptCommandStreamProps {
   onJumpToIndex?: (index: number) => void;
   clipboardNode?: WebGalNode | null;
   characterColors?: Record<string, string>;
+  characters?: Character[];
   searchQuery?: string;
   previewEntries?: NodeDiffEntry[];
 }
@@ -732,6 +734,7 @@ function ScriptCommandStream({
   onJumpToIndex,
   clipboardNode,
   characterColors,
+  characters,
   searchQuery,
   previewEntries,
 }: ScriptCommandStreamProps) {
@@ -984,7 +987,9 @@ function ScriptCommandStream({
             ) : (
               <div className="flex items-center gap-3">
                 <Icon className="h-5 w-5 shrink-0 text-primary" />
-                <span className="min-w-0 truncate text-sm">{getCommandSummary(node)}</span>
+                <span className="min-w-0 truncate text-sm">
+                  {node.type === 'changeFigure' ? figureLabel(node, characters) : getCommandSummary(node)}
+                </span>
               </div>
             )}
           </button>
@@ -2454,6 +2459,7 @@ export function StoryEditor() {
               onJumpToIndex={jumpToNode}
               clipboardNode={clipboardNode}
               characterColors={characterColors}
+              characters={charactersForAi}
               searchQuery={commandSearchQuery}
               previewEntries={aiPreviewEntries}
             />

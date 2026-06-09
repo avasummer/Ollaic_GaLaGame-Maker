@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { WebGalNode, WebGalCommandType } from './webgal-types';
 import { typeBorderClass } from './webgal-types';
+import type { Character } from './character-types';
 
 export const commandIcons: Partial<Record<WebGalCommandType, typeof MessageCircle>> = {
   dialogue: MessageCircle,
@@ -40,6 +41,33 @@ export const commandIcons: Partial<Record<WebGalCommandType, typeof MessageCircl
 /** Border + faint background classes per command type. Re-exported as
  *  typeColors for backwards-compat with consumers like MiniNodeCard. */
 export const typeColors: Partial<Record<WebGalCommandType, string>> = typeBorderClass;
+
+/**
+ * Display label for a changeFigure node: "角色：立绘名称" instead of the raw
+ * image filename. Prefers the fields written by the figure picker
+ * (figureCharacter / figureEmotion); otherwise infers the owning character and
+ * sprite form by matching the filename against each character's sprites.
+ * Falls back to the filename when no character owns the figure.
+ */
+export function figureLabel(node: WebGalNode, characters: Character[] = []): string {
+  const filename = node.asset || node.content || '';
+  let charName = node.figureCharacter;
+  let emotion = node.figureEmotion;
+
+  if (!charName && !emotion && filename && filename !== 'none') {
+    for (const character of characters) {
+      const sprite = character.sprites.find((s) => s.file === filename);
+      if (sprite) {
+        charName = character.name;
+        emotion = sprite.emotion;
+        break;
+      }
+    }
+  }
+
+  if (charName) return emotion ? `${charName}：${emotion}` : charName;
+  return filename || '未选择立绘';
+}
 
 /** One-line human summary of a node's payload. */
 export function getNodeSummary(node: WebGalNode): string {
