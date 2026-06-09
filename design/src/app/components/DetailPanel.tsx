@@ -11,7 +11,7 @@ import {
   loadAssetMetadata,
   type AssetMetadata,
 } from '../lib/asset-metadata';
-import { listScenes } from '../lib/webgal-ipc';
+import { listScenes, type SceneHeader } from '../lib/webgal-ipc';
 import {
   Dialog,
   DialogContent,
@@ -30,6 +30,10 @@ interface DetailPanelProps {
   characters?: Character[];
   projectId?: string;
   suggestedFigureCharacter?: string;
+  /** All scene filenames in the project (for scene-jump / choice target pickers). */
+  scenes?: string[];
+  /** Per-scene headers, for showing chapter names in the scene picker. */
+  sceneHeaders?: Record<string, SceneHeader>;
 }
 
 const typeOptions: { value: WebGalCommandType; label: string }[] = [
@@ -71,6 +75,8 @@ export function DetailPanel({
   characters = [],
   projectId,
   suggestedFigureCharacter,
+  scenes = [],
+  sceneHeaders = {},
 }: DetailPanelProps) {
   const [metadata, setMetadata] = useState<AssetMetadata>(() => emptyAssetMetadata());
 
@@ -125,7 +131,7 @@ export function DetailPanel({
         </div>
 
         {/* Type-specific fields */}
-        {renderTypeFields(node, onUpdateNode, characterNames, projectPath, characters, metadata, suggestedFigureCharacter)}
+        {renderTypeFields(node, onUpdateNode, characterNames, projectPath, characters, metadata, suggestedFigureCharacter, scenes, sceneHeaders)}
 
         {/* Common flags */}
         <div className="pt-3 border-t border-border space-y-3">
@@ -188,6 +194,8 @@ function renderTypeFields(
   characters: Character[] = [],
   metadata: AssetMetadata = emptyAssetMetadata(),
   suggestedFigureCharacter?: string,
+  scenes: string[] = [],
+  sceneHeaders: Record<string, SceneHeader> = {},
 ) {
   const backgroundAliases = aliasesForCategory(metadata, 'background');
   const figureAliases = aliasesForCategory(metadata, 'figure');
@@ -278,7 +286,7 @@ function renderTypeFields(
       );
 
     case 'choose':
-      return <ChoiceEditor node={node} onUpdate={onUpdate} />;
+      return <ChoiceEditor node={node} onUpdate={onUpdate} scenes={scenes} sceneHeaders={sceneHeaders} />;
 
     case 'changeBg':
       return (
@@ -400,26 +408,14 @@ function renderTypeFields(
       return (
         <div>
           <label className={`${labelClass} font-mono-family`}>
-            目标场景文件
+            目标场景
           </label>
-          <div className="flex gap-1">
-            <input
-              type="text"
-              value={node.targetScene || node.content}
-              onChange={(e) => onUpdate({ targetScene: e.target.value, content: e.target.value })}
-              className={`${inputClass} flex-1 font-mono-family`}
-              placeholder="例: Chapter-2.txt"
-              aria-label="目标场景文件"
-            />
-            {projectPath && (
-              <ScenePickerButton
-                projectPath={projectPath}
-                currentValue={node.targetScene || node.content}
-                aliases={{}}
-                onSelect={(name) => onUpdate({ targetScene: name, content: name })}
-              />
-            )}
-          </div>
+          <SceneSelect
+            value={node.targetScene || node.content || ''}
+            scenes={scenes}
+            sceneHeaders={sceneHeaders}
+            onChange={(name) => onUpdate({ targetScene: name, content: name })}
+          />
           <p className="text-[10px] text-muted-foreground mt-1">
             {node.type === 'callScene' ? 'callScene 执行完后会返回当前场景' : 'changeScene 会永久切换'}
           </p>
@@ -983,7 +979,54 @@ function ScenePickerButton({
   );
 }
 
-function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Partial<WebGalNode>) => void }) {
+/** Dropdown for picking a target scene by chapter name; stores the exact filename. */
+function SceneSelect({
+  value,
+  scenes,
+  sceneHeaders = {},
+  onChange,
+  placeholder = '选择目标场景…',
+  allowEmpty = false,
+  compact = false,
+  'aria-label': ariaLabel,
+}: {
+  value: string;
+  scenes: string[];
+  sceneHeaders?: Record<string, SceneHeader>;
+  onChange: (scene: string) => void;
+  placeholder?: string;
+  allowEmpty?: boolean;
+  compact?: boolean;
+  'aria-label'?: string;
+}) {
+  const known = !value || scenes.includes(value);
+  const cls = compact
+    ? 'w-full px-2 py-1 bg-background border border-border/50 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary/50'
+    : inputClass;
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={cls}
+      aria-label={ariaLabel ?? '目标场景'}
+    >
+      <option value="">{allowEmpty ? '（不跳转）' : placeholder}</option>
+      {!known && value && <option value={value}>{value}（未找到）</option>}
+      {scenes.map((s) => (
+        <option key={s} value={s}>
+          {sceneHeaders[s]?.chapter?.trim() || s}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function ChoiceEditor({ node, onUpdate, scenes = [], sceneHeaders = {} }: {
+  node: WebGalNode;
+  onUpdate: (u: Partial<WebGalNode>) => void;
+  scenes?: string[];
+  sceneHeaders?: Record<string, SceneHeader>;
+}) {
   const choices = node.choices || [];
 
   const add = () => {
@@ -1038,12 +1081,14 @@ function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Part
               placeholder="选项文本"
               aria-label={`Option ${idx + 1} text`}
             />
-            <input
-              type="text"
+            <SceneSelect
               value={choice.target}
-              onChange={(e) => update(idx, 'target', e.target.value)}
-              className="w-full px-2 py-1 bg-background border border-border/50 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono-family"
-              placeholder="目标场景文件 (例: scene2.txt)"
+              scenes={scenes}
+              sceneHeaders={sceneHeaders}
+              onChange={(name) => update(idx, 'target', name)}
+              placeholder="跳转到场景…（留空则不跳转）"
+              allowEmpty
+              compact
               aria-label={`Option ${idx + 1} target scene`}
             />
           </div>
