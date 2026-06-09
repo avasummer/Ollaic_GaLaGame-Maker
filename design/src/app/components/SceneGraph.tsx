@@ -1,19 +1,26 @@
 import { memo, useMemo } from 'react';
+import { Split } from 'lucide-react';
 import type { SceneLink } from '../lib/webgal-types';
 import type { SceneHeader } from '../lib/webgal-ipc';
 
-// Scene graph layout constants (SVG coordinate space). GRAPH_W is parametrized
-// (graphWidth prop) so the same graph can render narrow in the side panel and
-// wider in the full-screen view; everything else matches the master layout.
-const NODE_H = 14;
-const MAX_NODE_W = 58;
-const MIN_NODE_W = 26;
-const NODE_RX = 3;
-const NODE_GAP_X = 4;
-const ROW_H = 30;
-const TOP_PAD = 12;
-const BOTTOM_PAD = 12;
-const SIDE_PAD = 8;
+// Scene graph layout constants (SVG coordinate space). Nodes are card-style
+// (fixed CARD_W × CARD_H) so they read like the pre-refactor worldline cards;
+// the BFS-depth row layout and orthogonal edges are kept. The layout box grows
+// to fit the widest row, and the wrapper keeps that aspect ratio so it scales to
+// the container width — dense graphs shrink to fit instead of clipping.
+//
+// Edges render in an SVG (mapped 1:1 to the box via the matching aspect ratio);
+// nodes are absolutely-positioned HTML cards laid over it using percentage
+// coordinates from the same viewBox space. Nodes are deliberately NOT drawn in
+// <foreignObject>: inside a scaled SVG, hover repaints misplace foreignObject
+// content in Chromium, so the cards visibly jump on hover.
+const CARD_W = 120;
+const CARD_H = 48;
+const NODE_GAP_X = 18;
+const ROW_H = 76;
+const TOP_PAD = 16;
+const BOTTOM_PAD = 16;
+const SIDE_PAD = 12;
 
 interface NodePos {
   x: number;
@@ -24,6 +31,7 @@ interface NodePos {
 interface SceneGraphLayout {
   positions: Map<string, NodePos>;
   edges: { from: string; to: string }[];
+  width: number;
   height: number;
 }
 
@@ -41,7 +49,7 @@ function computeSceneGraphLayout(
   const edges: { from: string; to: string }[] = [];
 
   if (scenes.length === 0) {
-    return { positions, edges, height: TOP_PAD + BOTTOM_PAD };
+    return { positions, edges, width: graphWidth, height: TOP_PAD + BOTTOM_PAD };
   }
 
   // Fixed start so positions are stable regardless of which scene is open.
@@ -69,18 +77,19 @@ function computeSceneGraphLayout(
     for (const s of orphans) depths.set(s, byDepth.length - 1);
   }
 
-  const innerW = graphWidth - 2 * SIDE_PAD;
+  // Width grows to fit the widest row of fixed-size cards.
+  const maxCount = byDepth.reduce((m, row) => Math.max(m, row.length), 0);
+  const widestRow = maxCount * CARD_W + Math.max(0, maxCount - 1) * NODE_GAP_X;
+  const width = Math.max(graphWidth, widestRow + 2 * SIDE_PAD);
+
   byDepth.forEach((row, depth) => {
-    const y = TOP_PAD + NODE_H / 2 + depth * ROW_H;
+    const y = TOP_PAD + CARD_H / 2 + depth * ROW_H;
     const count = row.length;
-    const ideal = (innerW - (count - 1) * NODE_GAP_X) / count;
-    const blockW = Math.max(MIN_NODE_W, Math.min(MAX_NODE_W, ideal));
-    const slotW = blockW + NODE_GAP_X;
-    const totalW = slotW * count - NODE_GAP_X;
-    const startX = SIDE_PAD + (innerW - totalW) / 2;
+    const totalW = count * CARD_W + (count - 1) * NODE_GAP_X;
+    const startX = (width - totalW) / 2;
     row.forEach((name, i) => {
-      const x = startX + i * slotW + blockW / 2;
-      positions.set(name, { x, y, w: blockW });
+      const x = startX + i * (CARD_W + NODE_GAP_X) + CARD_W / 2;
+      positions.set(name, { x, y, w: CARD_W });
     });
   });
 
@@ -97,9 +106,9 @@ function computeSceneGraphLayout(
   }
 
   const height = byDepth.length > 0
-    ? TOP_PAD + NODE_H + (byDepth.length - 1) * ROW_H + BOTTOM_PAD
+    ? TOP_PAD + CARD_H + (byDepth.length - 1) * ROW_H + BOTTOM_PAD
     : TOP_PAD + BOTTOM_PAD;
-  return { positions, edges, height };
+  return { positions, edges, width, height };
 }
 
 /**
@@ -108,8 +117,8 @@ function computeSceneGraphLayout(
  * - "Elbow" via a mid-row horizontal bus when going down
  * - Routes around the side when going up / sideways (back-edges, cycles)
  */
-function buildOrthogonalPath(from: NodePos, to: NodePos, graphWidth: number): string {
-  const halfH = NODE_H / 2;
+function buildOrthogonalPath(from: NodePos, to: NodePos, contentWidth: number): string {
+  const halfH = CARD_H / 2;
   const startY = from.y + halfH + 1;
   const endY = to.y - halfH - 2;
 
@@ -124,7 +133,7 @@ function buildOrthogonalPath(from: NodePos, to: NodePos, graphWidth: number): st
   // Same row or back-edge: detour through the side margin
   const exitY = from.y + halfH + 6;
   const enterY = to.y - halfH - 6;
-  const sideX = from.x <= to.x ? graphWidth - 4 : 4;
+  const sideX = from.x <= to.x ? contentWidth - 4 : 4;
   return `M ${from.x},${startY} V ${exitY} H ${sideX} V ${enterY} H ${to.x} V ${endY}`;
 }
 
@@ -138,7 +147,8 @@ interface SceneGraphProps {
   onSwitchScene?: (name: string) => void;
   /** Right-click on a node (used by the full-screen view for rename / delete). */
   onNodeContextMenu?: (name: string, e: React.MouseEvent) => void;
-  /** viewBox width — narrow (224) for the side panel, larger for full-screen. */
+  /** viewBox width — narrow (224) for the side panel, larger for full-screen.
+   *  Acts as a minimum: the graph grows wider when a row needs more space. */
   graphWidth?: number;
   /** Classes for the scroll container (height, borders, …). */
   className?: string;
@@ -146,8 +156,9 @@ interface SceneGraphProps {
 
 /**
  * Static, non-draggable scene relationship graph (BFS-depth layout + orthogonal
- * edges). Ported from master's NodePanel SceneGraph. Layout depends only on
- * saved data, so switching scenes / editing nodes never rebuilds it.
+ * edges). Nodes are rendered as cards (icon + status + chapter title + filename),
+ * matching the pre-refactor worldline look. Layout depends only on saved data,
+ * so switching scenes / editing nodes never rebuilds it.
  */
 export const SceneGraph = memo(function SceneGraph({
   scenes,
@@ -164,18 +175,37 @@ export const SceneGraph = memo(function SceneGraph({
     [scenes, sceneLinkMap, graphWidth],
   );
 
-  return (
-    <div className={`relative overflow-auto overflow-x-hidden ${className ?? ''}`}>
-      {layout.positions.size === 0 ? (
+  // Incoming-edge counts per scene (for the "←N" badge), from saved links.
+  const incomingCount = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const links of Object.values(sceneLinkMap ?? {})) {
+      for (const link of links) {
+        if (link.target) counts[link.target] = (counts[link.target] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [sceneLinkMap]);
+
+  if (layout.positions.size === 0) {
+    return (
+      <div className={`relative overflow-auto overflow-x-hidden ${className ?? ''}`}>
         <div className="py-6 text-center font-mono-family text-[10px] text-muted-foreground/60">
           (无场景)
         </div>
-      ) : (
+      </div>
+    );
+  }
+
+  const { width, height } = layout;
+
+  return (
+    <div className={`relative overflow-auto overflow-x-hidden ${className ?? ''}`}>
+      <div className="relative w-full" style={{ aspectRatio: `${width} / ${height}` }}>
+        {/* Edges — mapped 1:1 onto the box (matching aspect ratio → uniform scale). */}
         <svg
-          viewBox={`0 0 ${graphWidth} ${layout.height}`}
-          preserveAspectRatio="xMidYMin meet"
-          style={{ width: '100%', height: 'auto', aspectRatio: `${graphWidth} / ${layout.height}` }}
-          className="block"
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
+          className="pointer-events-none absolute inset-0 h-full w-full"
         >
           <defs>
             <marker id="scene-arrow" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
@@ -188,7 +218,7 @@ export const SceneGraph = memo(function SceneGraph({
             return (
               <path
                 key={`${e.from}->${e.to}-${i}`}
-                d={buildOrthogonalPath(from, to, graphWidth)}
+                d={buildOrthogonalPath(from, to, width)}
                 fill="none"
                 stroke="var(--color-primary)"
                 strokeWidth={1.4}
@@ -196,61 +226,78 @@ export const SceneGraph = memo(function SceneGraph({
                 strokeLinejoin="round"
                 strokeLinecap="round"
                 markerEnd="url(#scene-arrow)"
+                vectorEffect="non-scaling-stroke"
               />
             );
           })}
-          {[...layout.positions.entries()].map(([name, pos]) => {
-            const isCurrent = name === currentSceneName;
-            const header = sceneHeaders?.[name];
-            const display = header?.chapter?.trim() || name.replace(/\.txt$/i, '');
-            const maxChars = Math.max(3, Math.floor(pos.w / 4.2) - 1);
-            const label = display.length > maxChars
-              ? display.slice(0, Math.max(1, maxChars - 1)) + '…'
-              : display;
-            const titleParts = [name];
-            if (header?.chapter) titleParts.push(`章节：${header.chapter}`);
-            if (header?.outline) titleParts.push(`大纲：${header.outline}`);
-            return (
-              <g
-                key={name}
-                onClick={() => onSwitchScene?.(name)}
-                onContextMenu={onNodeContextMenu ? (e) => { e.preventDefault(); onNodeContextMenu(name, e); } : undefined}
-                className="cursor-pointer"
-              >
-                <title>{titleParts.join('\n')}</title>
-                <rect
-                  x={pos.x - pos.w / 2}
-                  y={pos.y - NODE_H / 2}
-                  width={pos.w}
-                  height={NODE_H}
-                  rx={NODE_RX}
-                  ry={NODE_RX}
-                  className={
-                    isCurrent
-                      ? 'fill-primary stroke-primary'
-                      : 'fill-primary/15 stroke-primary/40 hover:fill-primary/30 transition-colors'
-                  }
-                  strokeWidth={0.7}
-                />
-                <text
-                  x={pos.x}
-                  y={pos.y}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fontSize="7"
-                  className={
-                    isCurrent
-                      ? 'fill-primary-foreground font-mono-family pointer-events-none'
-                      : 'fill-foreground/85 font-mono-family pointer-events-none'
-                  }
-                >
-                  {label}
-                </text>
-              </g>
-            );
-          })}
         </svg>
-      )}
+
+        {/* Nodes — HTML cards laid over the edges, positioned in viewBox %. */}
+        {[...layout.positions.entries()].map(([name, pos]) => {
+          const isCurrent = name === currentSceneName;
+          const header = sceneHeaders?.[name];
+          const outgoing = (sceneLinkMap?.[name] ?? []).filter((l) => l.target);
+          const isChoice = !isCurrent && outgoing.length >= 2;
+          const isOrphan = !isCurrent && outgoing.length === 0;
+          const incoming = incomingCount[name] ?? 0;
+
+          const status = isCurrent
+            ? '当前'
+            : isChoice
+              ? `${outgoing.length}`
+              : header?.chapter || '场景';
+          const title = header?.chapter?.replace(/[;：:]\s.*$/, '').trim()
+            || name.replace(/\.txt$/i, '');
+
+          const borderClass = isCurrent
+            ? 'border-primary ring-2 ring-primary/30'
+            : isChoice
+              ? 'border-primary/40 hover:border-primary'
+              : isOrphan
+                ? 'border-dashed border-outline-variant/40 opacity-70 hover:opacity-100'
+                : 'border-outline-variant/40 hover:border-secondary';
+
+          const titleParts = [name];
+          if (header?.chapter) titleParts.push(`章节：${header.chapter}`);
+          if (header?.outline) titleParts.push(`大纲：${header.outline}`);
+
+          return (
+            <div
+              key={name}
+              role="button"
+              tabIndex={0}
+              title={titleParts.join('\n')}
+              onClick={() => onSwitchScene?.(name)}
+              onContextMenu={onNodeContextMenu ? (ev) => { ev.preventDefault(); onNodeContextMenu(name, ev); } : undefined}
+              style={{
+                left: `${((pos.x - pos.w / 2) / width) * 100}%`,
+                top: `${((pos.y - CARD_H / 2) / height) * 100}%`,
+                width: `${(pos.w / width) * 100}%`,
+                height: `${(CARD_H / height) * 100}%`,
+              }}
+              className={`absolute flex cursor-pointer flex-col justify-center overflow-hidden rounded-md border bg-surface-container-lowest px-2 py-1 text-left shadow-sm transition-colors ${borderClass}`}
+            >
+              <div className="flex items-center gap-1">
+                {isChoice && <Split className="h-3 w-3 shrink-0 text-primary" />}
+                <span className="truncate font-mono-family text-[9px] uppercase tracking-widest text-on-surface-variant">
+                  {status}
+                </span>
+                {incoming > 0 && (
+                  <span className="ml-auto shrink-0 rounded bg-secondary-container/30 px-1 font-mono text-[8px] text-secondary">
+                    ←{incoming}
+                  </span>
+                )}
+              </div>
+              <div className="mt-0.5 truncate font-display-family text-[13px] font-semibold leading-tight text-foreground">
+                {title}
+              </div>
+              <div className="truncate font-mono text-[8px] leading-tight text-muted-foreground">
+                {name}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 });
