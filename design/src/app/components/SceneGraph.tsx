@@ -291,8 +291,8 @@ export const SceneGraph = memo(function SceneGraph({
               <div className="mt-0.5 truncate font-display-family text-[13px] font-semibold leading-tight text-foreground">
                 {title}
               </div>
-              <div className="truncate font-mono text-[8px] leading-tight text-muted-foreground">
-                {name}
+              <div className="truncate text-[8px] leading-tight text-muted-foreground">
+                {header?.outline?.trim() || name}
               </div>
             </div>
           );
