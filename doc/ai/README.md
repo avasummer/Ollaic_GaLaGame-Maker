@@ -1,0 +1,30 @@
+# AI 子系统
+
+ciallo 内置一个**对话式创作助手**:用户用自然语言描述创作意图,AI 通过多步「函数调用」读取项目上下文、暂存修改,并以**可预览、可同意/拒绝**的方式应用到脚本。除文本编辑外,还支持 **AI 生成图像(背景/CG/立绘)与语音(TTS)**。
+
+## 子文档
+
+| 文档 | 内容 |
+|------|------|
+| [对话编辑 Agent](./conversational-agent.md) | 多步 function-calling 循环、可用工具、legacy 单轮兜底、状态机、流式与重试 |
+| [修改预览与应用](./change-preview.md) | 变更集(change-set)、节点级 diff、冲突处理、缺失素材、原子落盘 |
+| [会话与记忆](./sessions-and-memory.md) | 多会话(按项目持久化)、历史截断、项目记忆(世界观/文风/偏好) |
+| [AI 素材与立绘生成](./media-generation.md) | 图像生成、TTS 语音生成、进度反馈、分模态配置 |
+| [供应商与模型配置](./providers.md) | Chat/Image/TTS 三类供应商与模型、连接测试、调用日志 |
+
+## 总览
+
+- **入口**:编辑器右侧 `AiAssistantPanel`(会话标题 + 状态徽标 + 输入框)。
+- **核心 Hook**:`useAiAgent`(状态机)、`useChatSession`(会话存储)。
+- **两种执行模式**:支持原生函数调用的供应商走**多步 Agent 循环**(读工具→写工具→暂存);其余供应商走 **legacy 单轮**(一次性返回 JSON 补丁)。
+- **安全应用**:AI 的写操作只产出「暂存变更」,经用户在变更卡片中**同意**后才原子写入磁盘;**拒绝**则丢弃。
+
+## 相关源码
+
+- `design/src/app/hooks/useAiAgent.ts` — AI 状态机与 Agent 循环
+- `design/src/app/hooks/useChatSession.ts` — 会话存储
+- `design/src/app/lib/ai-tools.ts` — 工具定义与注册表
+- `design/src/app/lib/ai-ipc.ts` — 与后端的 RPC(聊天/图像/TTS/配置)
+- `design/src/app/lib/story-agent.ts` — 提示词、上下文构建与截断
+- `design/src/app/lib/change-set.ts` — 变更暂存与校验
+- AI 组件:`AiAssistantPanel`/`AiInputBox`(在 `StoryEditor.tsx`)、`AiMessageBubble`、`AiPendingCard`、`AiStatusCard`、`AiMemoryPanel`、`MiniNodeCard`、`PreviewNodeCard`、`AiSettingsDialog`
