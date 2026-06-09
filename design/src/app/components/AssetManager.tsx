@@ -71,8 +71,9 @@ import type { WebGalNode } from '../lib/webgal-types';
 import { listCharacters } from '../lib/character-ipc';
 import { CharacterPanel } from './CharacterPanel';
 import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
+import { VoiceDubbingPanel } from './VoiceDubbingPanel';
 
-type TabId = 'scene' | 'cg' | 'music' | 'character';
+type TabId = 'scene' | 'cg' | 'music' | 'character' | 'dubbing';
 type MusicCategory = 'bgm' | 'sfx' | 'vocal';
 type SceneLibraryItem =
   | { kind: 'sceneCard'; card: SceneAssetCard; asset?: AssetInfo }
@@ -121,6 +122,7 @@ function tabToCategories(tab: TabId): string[] {
     case 'cg': return ['background'];
     case 'music': return ['bgm', 'sfx', 'vocal'];
     case 'character': return ['figure'];
+    case 'dubbing': return ['vocal'];
   }
 }
 
@@ -241,6 +243,7 @@ const tabConfig: { id: TabId; label: string; icon: typeof Image }[] = [
   { id: 'cg', label: 'CG', icon: Award },
   { id: 'music', label: '音乐', icon: Music },
   { id: 'character', label: '人物立绘', icon: Users },
+  { id: 'dubbing', label: '配音清单', icon: Music },
 ];
 
 export function AssetManager() {
@@ -390,8 +393,9 @@ export function AssetManager() {
   }, [applyMetadata, projectId, projectPath]);
 
   useEffect(() => {
-    if (!projectPath || activeTab !== 'music' || musicCategory !== 'vocal') {
-      setVoiceCards([]);
+    const isVoiceTab = activeTab === 'music' && musicCategory === 'vocal';
+    if (!projectPath || (!isVoiceTab && activeTab !== 'dubbing')) {
+      if (!isVoiceTab && activeTab !== 'dubbing') setVoiceCards([]);
       return;
     }
     let cancelled = false;
@@ -530,6 +534,7 @@ export function AssetManager() {
     cg: allAssets.filter(a => a.category === 'background').length,
     music: allAssets.filter(a => a.category === 'bgm' || a.category === 'sfx' || a.category === 'vocal').length,
     character: characterCount,
+    dubbing: voiceCards.length,
   };
 
   const importConfig = getImportConfig(activeTab, musicCategory);
@@ -1048,7 +1053,23 @@ export function AssetManager() {
                 </button>
               )}
             </div>
-            {activeTab === 'character' ? (
+            {activeTab === 'dubbing' ? (
+              <VoiceDubbingPanel
+                projectPath={projectPath}
+                voiceCards={voiceCards}
+                selectedVoiceCard={selectedVoiceCard}
+                onSelectVoiceCard={(card) => {
+                  setSelectedVoiceCard(card);
+                  setSelectedAsset(null);
+                  setSelectedSceneCard(null);
+                  setEditingSceneCard(null);
+                }}
+                onVoiceCardsChanged={async () => {
+                  const m = await loadAssetMetadata(projectPath);
+                  applyMetadata(m);
+                }}
+              />
+            ) : activeTab === 'character' ? (
               <CharacterPanel
                 projectPath={projectPath}
                 embedded
@@ -1400,7 +1421,7 @@ export function AssetManager() {
                             : 'border-border hover:border-secondary'
                         }`}
                       >
-                        <div className={`${activeTab === 'scene' ? 'aspect-video' : 'aspect-square'} story-os-blueprint bg-surface-dim relative overflow-hidden`}>
+                        <div className={`${String(activeTab) === 'scene' ? 'aspect-video' : 'aspect-square'} story-os-blueprint bg-surface-dim relative overflow-hidden`}>
                           {thumbnail ? (
                             <img
                               src={thumbnail}

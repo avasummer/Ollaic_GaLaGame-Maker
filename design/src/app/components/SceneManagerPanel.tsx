@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import {
-  X, Plus, FolderOpen, Pencil, Check,
+  X, Plus, FolderOpen, Pencil, Check, Trash2,
 } from 'lucide-react';
 import { getScenePath, updateSceneHeader, type ProjectInfo, type SceneHeader } from '../lib/webgal-ipc';
 
@@ -15,6 +15,7 @@ export interface SceneManagerPanelProps {
   onHeaderUpdated: (name: string, header: SceneHeader) => void;
   onRefreshProject: () => Promise<void>;
   onNewScene: () => Promise<void>;
+  onDeleteScene: (name: string) => Promise<void>;
 }
 
 export function SceneManagerPanel({
@@ -28,6 +29,7 @@ export function SceneManagerPanel({
   onHeaderUpdated,
   onRefreshProject,
   onNewScene,
+  onDeleteScene,
 }: SceneManagerPanelProps) {
   const [editingScene, setEditingScene] = useState<string | null>(null);
   const [editChapter, setEditChapter] = useState('');
@@ -130,20 +132,20 @@ export function SceneManagerPanel({
                       </div>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => onSwitchScene(sceneName)}
-                      className="flex w-full items-start gap-3 px-3 py-3 text-left hover:bg-surface-container-low transition-colors"
-                    >
+                    <div className="flex items-start gap-3 px-3 py-3 hover:bg-surface-container-low transition-colors">
                       <div className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${isCurrent ? 'bg-secondary' : 'bg-outline-variant/40'}`} />
-                      <div className="min-w-0 flex-1">
+                      <button
+                        type="button"
+                        onClick={() => onSwitchScene(sceneName)}
+                        className="min-w-0 flex-1 text-left"
+                      >
                         <div className="truncate text-sm font-semibold text-on-surface">
                           {header.chapter || sceneName.replace(/\.txt$/, '')}
                         </div>
                         <div className="truncate text-[10px] text-muted-foreground">
                           {header.outline || sceneName}
                         </div>
-                      </div>
+                      </button>
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); handleEdit(sceneName); }}
@@ -153,7 +155,21 @@ export function SceneManagerPanel({
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void onDeleteScene(sceneName);
+                        }}
+                        disabled={scenes.length <= 1}
+                        className="flex shrink-0 items-center gap-1 rounded border border-transparent px-2 py-1 text-[10px] text-outline-variant/70 hover:border-error/30 hover:bg-error/10 hover:text-error disabled:cursor-not-allowed disabled:opacity-30"
+                        title={scenes.length <= 1 ? '至少保留一个场景' : '删除场景'}
+                        aria-label="删除场景"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        删除
+                      </button>
+                    </div>
                   )}
                 </div>
               );
@@ -162,7 +178,7 @@ export function SceneManagerPanel({
         )}
       </div>
 
-      <div className="border-t border-border p-3">
+      <div className="space-y-2 border-t border-border p-3">
         <button
           type="button"
           onClick={() => { void onNewScene(); }}
@@ -170,6 +186,14 @@ export function SceneManagerPanel({
         >
           <Plus className="h-4 w-4" />
           新建场景
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex w-full items-center justify-center gap-2 rounded border border-border bg-surface-container-low py-2 text-sm text-on-surface-variant hover:border-outline-variant hover:text-on-surface transition-colors"
+        >
+          <X className="h-4 w-4" />
+          关闭面板
         </button>
       </div>
     </div>

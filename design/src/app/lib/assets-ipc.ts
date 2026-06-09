@@ -117,3 +117,28 @@ export async function saveProjectAssetMetadata(
 ): Promise<void> {
   return invoke<void>('save_asset_metadata', { projectPath, metadata });
 }
+
+/** Scan a scene file and create VoiceAssetCard entries for dialogue lines. */
+export async function syncSceneVoiceCards(
+  projectPath: string,
+  sceneFile: string,
+): Promise<VoiceAssetCard[]> {
+  return invoke<VoiceAssetCard[]>('sync_scene_voice_cards', { projectPath, sceneFile });
+}
+
+/** Link an imported audio file to a voice card slot. */
+export async function fillVoiceCard(
+  projectPath: string,
+  voiceCardId: string,
+  assetFilename: string,
+): Promise<VoiceAssetCard> {
+  return invoke<VoiceAssetCard>('fill_voice_card', { projectPath, voiceCardId, assetFilename });
+}
+
+/** Mark a voice card as deleted (won't be re-created on future syncs). */
+export async function deleteVoiceCard(
+  projectPath: string,
+  voiceCardId: string,
+): Promise<void> {
+  return invoke<void>('delete_voice_card', { projectPath, voiceCardId });
+}

@@ -1,4 +1,6 @@
+use crate::webgal::parser as webgal_parser;
 use crate::webgal::references;
+use crate::webgal::types::CommandType;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -232,7 +234,7 @@ fn asset_metadata_path(project_path: &str) -> PathBuf {
         .join("asset-metadata.json")
 }
 
-fn read_asset_metadata(project_path: &str) -> Result<AssetMetadata, String> {
+pub(crate) fn read_asset_metadata(project_path: &str) -> Result<AssetMetadata, String> {
     let path = asset_metadata_path(project_path);
     if !path.exists() {
         return Ok(AssetMetadata::default());
@@ -242,7 +244,7 @@ fn read_asset_metadata(project_path: &str) -> Result<AssetMetadata, String> {
     serde_json::from_str(&source).map_err(|e| format!("解析素材元数据失败 {}: {e}", path.display()))
 }
 
-fn write_asset_metadata(project_path: &str, metadata: &AssetMetadata) -> Result<(), String> {
+pub(crate) fn write_asset_metadata(project_path: &str, metadata: &AssetMetadata) -> Result<(), String> {
     let path = asset_metadata_path(project_path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
@@ -640,6 +642,195 @@ pub async fn find_asset_usages(
             .then(a.line_number.cmp(&b.line_number))
     });
     Ok(usages)
+}
+
+/// Common emotional keywords in Chinese dialogue.
+fn detect_emotion(text: &str, flags: &[serde_json::Value]) -> String {
+    // Check explicit emotion flag first
+    for f in flags {
+        if let Some(obj) = f.as_object() {
+            if obj.get("key").and_then(|v| v.as_str()) == Some("emotion") {
+                if let Some(val) = obj.get("value").and_then(|v| v.as_str()) {
+                    return val.to_string();
+                }
+            }
+        }
+    }
+    let lower = text.to_lowercase();
+    let emotion_keywords: &[(&str, &[&str])] = &[
+        ("happy", &["开心", "高兴", "太好", "哈哈", "喜欢", "微笑", "笑", "棒", "赞"]),
+        ("sad", &["伤心", "难过", "哭", "痛", "悲伤", "遗憾", "对不起", "抱歉"]),
+        ("angry", &["生气", "怒", "可恶", "过分", "混蛋", "滚", "闭嘴"]),
+        ("surprised", &["惊讶", "什么", "不会吧", "竟然", "天啊", "不可能", "真的假的"]),
+        ("fearful", &["害怕", "恐怖", "不要", "救命", "危险", "吓"]),
+        ("gentle", &["温柔", "乖", "可爱", "安静", "轻声"]),
+    ];
+    for (emotion, keywords) in emotion_keywords {
+        for kw in *keywords {
+            if lower.contains(kw) {
+                return emotion.to_string();
+            }
+        }
+    }
+    "neutral".to_string()
+}
+
+/// Generate stable ID for a voice card from scene and dialogue index.
+fn voice_card_id(scene_stem: &str, dialogue_index: u32) -> String {
+    format!("voice_{}_{}", scene_stem, dialogue_index)
+}
+
+/// Scan a scene file's dialogue lines and create VoiceAssetCard entries for any
+/// that don't already have one. Called after scene save.
+#[tauri::command]
+pub fn sync_scene_voice_cards(
+    project_path: String,
+    scene_file: String,
+) -> Result<Vec<VoiceAssetCard>, String> {
+    let scene_path = PathBuf::from(&project_path)
+        .join("game")
+        .join("scene")
+        .join(&scene_file);
+    if !scene_path.exists() {
+        return Err(format!("场景文件不存在: {}", scene_path.display()));
+    }
+    let source = fs::read_to_string(&scene_path)
+        .map_err(|e| format!("读取场景文件失败 {}: {e}", scene_path.display()))?;
+    let nodes = webgal_parser::parse_script(&source);
+    let mut metadata = read_asset_metadata(&project_path)?;
+    let scene_stem = scene_file.trim_end_matches(".txt");
+    let mut dialogue_index: u32 = 0;
+    let mut updated: Vec<VoiceAssetCard> = Vec::new();
+
+    for node in &nodes {
+        let is_dialogue = matches!(node.cmd_type, CommandType::Dialogue | CommandType::Narrator);
+        if !is_dialogue || node.content.trim().is_empty() {
+            continue;
+        }
+        let character = node.character.as_deref().unwrap_or("旁白");
+        let id = voice_card_id(scene_stem, dialogue_index);
+        dialogue_index += 1;
+
+        if metadata.voice_cards.contains_key(&id) {
+            continue;
+        }
+        if metadata.deleted_voice_cards.contains(&id) {
+            continue;
+        }
+
+        // Convert flags to serde_json::Value for emotion detection
+        let flag_values: Vec<serde_json::Value> = node
+            .flags
+            .iter()
+            .map(|f| {
+                let val = match &f.value {
+                    crate::webgal::types::FlagValue::Bool(b) => serde_json::Value::Bool(*b),
+                    crate::webgal::types::FlagValue::Str(s) => serde_json::Value::String(s.clone()),
+                };
+                serde_json::json!({"key": f.key, "value": val})
+            })
+            .collect();
+        let emotion = detect_emotion(&node.content, &flag_values);
+        let target_stem = format!("vo_{}_{}_{}", character, scene_stem, dialogue_index);
+
+        let card = VoiceAssetCard {
+            id: id.clone(),
+            character: character.to_string(),
+            text: node.content.clone(),
+            emotion: emotion.clone(),
+            voice_asset: node.voice.clone(),
+            target_stem: target_stem.clone(),
+            prompt: String::new(),
+        };
+
+        metadata.voice_cards.insert(id.clone(), card.clone());
+
+        // Set tags on the target stem
+        let tag_key = asset_metadata_key("vocal", &target_stem);
+        let mut tags: Vec<String> = metadata.tags.get(&tag_key).cloned().unwrap_or_default();
+        // scene tag
+        tags.retain(|t| !t.starts_with("scene:"));
+        tags.push(format!("scene:{}", scene_stem));
+        // character tag
+        tags.retain(|t| !t.starts_with("char:"));
+        if character != "旁白" {
+            tags.push(format!("char:{}", character));
+        }
+        // emotion tag
+        tags.retain(|t| !t.starts_with("emotion:"));
+        tags.push(format!("emotion:{}", emotion));
+        // status tag
+        tags.retain(|t| !t.starts_with("status:"));
+        tags.push("status:pending".to_string());
+        // source tag (only set if not already set)
+        if node.voice.is_some() && !tags.iter().any(|t| t.starts_with("source:")) {
+            tags.push("source:import".to_string());
+        }
+        metadata.tags.insert(tag_key, tags);
+
+        updated.push(card);
+    }
+
+    if !updated.is_empty() {
+        write_asset_metadata(&project_path, &metadata)?;
+    }
+
+    Ok(updated)
+}
+
+/// Fill a voice card slot with an imported audio file.
+#[tauri::command]
+pub fn fill_voice_card(
+    project_path: String,
+    voice_card_id: String,
+    asset_filename: String,
+) -> Result<VoiceAssetCard, String> {
+    let mut metadata = read_asset_metadata(&project_path)?;
+    // Snapshot the fields we need before taking a mutable reference.
+    let card = metadata
+        .voice_cards
+        .get(&voice_card_id)
+        .cloned()
+        .ok_or_else(|| format!("配音卡片不存在: {voice_card_id}"))?;
+    let stem = card.target_stem.clone();
+
+    // Update the card in-place
+    if let Some(c) = metadata.voice_cards.get_mut(&voice_card_id) {
+        c.voice_asset = Some(asset_filename.clone());
+    }
+
+    // Update status tag
+    let tag_key = asset_metadata_key("vocal", &stem);
+    let mut tags: Vec<String> = metadata.tags.get(&tag_key).cloned().unwrap_or_default();
+    tags.retain(|t| !t.starts_with("status:"));
+    tags.push("status:done".to_string());
+    tags.retain(|t| !t.starts_with("source:"));
+    tags.push("source:import".to_string());
+    metadata.tags.insert(tag_key, tags);
+
+    write_asset_metadata(&project_path, &metadata)?;
+    // Return updated card
+    let updated = metadata
+        .voice_cards
+        .get(&voice_card_id)
+        .cloned()
+        .unwrap_or(card);
+    Ok(updated)
+}
+
+/// Delete a voice card (mark as deleted so it won't be re-created on sync).
+#[tauri::command]
+pub fn delete_voice_card(
+    project_path: String,
+    voice_card_id: String,
+) -> Result<(), String> {
+    let mut metadata = read_asset_metadata(&project_path)?;
+    let already_deleted = metadata.deleted_voice_cards.contains(&voice_card_id);
+    metadata.voice_cards.remove(&voice_card_id);
+    if !already_deleted {
+        metadata.deleted_voice_cards.push(voice_card_id);
+    }
+    write_asset_metadata(&project_path, &metadata)
 }
 
 fn unique_path(path: PathBuf) -> PathBuf {

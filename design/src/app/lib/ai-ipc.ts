@@ -149,6 +149,40 @@ export async function getAiLogPath(): Promise<string> {
   return invoke<string>('get_ai_log_path');
 }
 
+// ── Batch TTS ──────────────────────────────────
+
+export interface BatchTtsItem {
+  voiceCardId: string;
+  text: string;
+  voicePrompt: string;
+}
+
+export interface BatchTtsProgress {
+  voiceCardId: string;
+  index: number;
+  total: number;
+  status: 'generating' | 'done' | 'error';
+  message: string;
+  assetName?: string | null;
+}
+
+export async function generateBatchTts(
+  projectPath: string,
+  items: BatchTtsItem[],
+  model: string,
+  format: string,
+): Promise<BatchTtsProgress[]> {
+  return invoke<BatchTtsProgress[]>('generate_batch_tts', { projectPath, items, model, format });
+}
+
+export async function listenBatchTtsProgress(
+  handler: (progress: BatchTtsProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<BatchTtsProgress>('batch-tts-progress', (event) => {
+    handler(event.payload);
+  });
+}
+
 export interface StreamHandlers {
   onChunk?: (content: string) => void;
   onDone?: () => void;

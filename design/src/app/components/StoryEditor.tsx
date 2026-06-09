@@ -8,7 +8,7 @@ import {
   MessageCircle, GitBranch, Users, Music, Wand2, ArrowRight,
   GripVertical, MoreHorizontal, Copy, Trash2, Clipboard, Scissors,
   BookOpen,
-  MessageSquarePlus, Pencil,
+  MessageSquarePlus, Pencil, AlertCircle,
 } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -33,6 +33,8 @@ import type { Character } from '../lib/character-types';
 import { characterColor } from '../lib/character-editing';
 import { useAiAgent } from '../hooks/useAiAgent';
 import { insertSceneNode, reorderSceneNodes, pasteSceneNode } from '../lib/scene-editing';
+import { syncSceneVoiceCards } from '../lib/assets-ipc';
+import { loadAssetMetadata, saveAssetMetadata, ensureSceneCard } from '../lib/asset-metadata';
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
 import { ChangeSetCard } from './AiPendingCard';
@@ -752,17 +754,39 @@ function ScriptCommandStream({
 
   function InsertZone({ atIndex, onInsert }: { atIndex: number; onInsert: (type: WebGalCommandType, atIndex: number) => void }) {
     const [open, setOpen] = useState(false);
+    const containerRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+      if (!open) return;
+      const handlePointerDown = (event: PointerEvent) => {
+        if (!containerRef.current?.contains(event.target as Node)) {
+          setOpen(false);
+        }
+      };
+      document.addEventListener('pointerdown', handlePointerDown);
+      return () => document.removeEventListener('pointerdown', handlePointerDown);
+    }, [open]);
+
+    const toggleMenu = useCallback(() => {
+      setOpen((value) => !value);
+    }, []);
+
+    const insertCommand = useCallback((type: WebGalCommandType) => {
+      onInsert(type, atIndex);
+      setOpen(false);
+    }, [atIndex, onInsert]);
+
     return (
       <div
-        className="group relative mx-auto flex h-2 max-w-3xl items-center justify-center hover:h-8"
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
+        ref={containerRef}
+        className="group relative mx-auto flex h-6 max-w-3xl items-center justify-center"
       >
         <div className="absolute inset-x-0 top-1/2 h-px bg-outline-variant/20 group-hover:bg-secondary/40 transition-colors" />
         <button
           type="button"
-          onClick={() => setOpen(!open)}
-          className="relative z-10 flex h-5 w-5 items-center justify-center rounded-full border border-outline-variant/30 bg-surface-bright text-[10px] text-muted-foreground opacity-0 shadow-sm transition-all group-hover:opacity-100 hover:border-secondary hover:text-secondary"
+          onClick={toggleMenu}
+          className="relative z-10 flex h-5 w-5 items-center justify-center rounded-full border border-outline-variant/30 bg-surface-bright text-[10px] text-muted-foreground opacity-0 shadow-sm transition-colors transition-opacity duration-150 group-hover:opacity-100 hover:border-secondary hover:text-secondary data-[open=true]:opacity-100"
+          data-open={open}
           title="插入指令"
           aria-label="插入指令"
         >
@@ -770,8 +794,7 @@ function ScriptCommandStream({
         </button>
         {open && (
           <div
-            className="absolute left-1/2 top-full z-50 mt-1 w-72 -translate-x-1/2 rounded border border-border bg-surface-container-high p-3 shadow-lg"
-            onMouseEnter={() => setOpen(true)}
+            className="absolute left-1/2 top-5 z-50 w-72 -translate-x-1/2 rounded border border-border bg-surface-container-high p-3 shadow-lg"
           >
             <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">插入指令</div>
             {Object.entries(commandCategories).map(([category, types]) => (
@@ -784,7 +807,7 @@ function ScriptCommandStream({
                     <button
                       key={type}
                       type="button"
-                      onClick={() => { onInsert(type, atIndex); setOpen(false); }}
+                      onClick={() => insertCommand(type)}
                       className="rounded-sm border border-outline-variant/30 px-2 py-1 text-[10px] text-on-surface-variant hover:border-secondary hover:text-secondary transition-colors"
                     >
                       {commandLabels[type]}
@@ -1231,6 +1254,10 @@ export function StoryEditor() {
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotStatus, setSnapshotStatus] = useState<string | null>(null);
   const [sceneManagerOpen, setSceneManagerOpen] = useState(false);
+  const [newSceneOpen, setNewSceneOpen] = useState(false);
+  const [newSceneName, setNewSceneName] = useState('');
+  const [newSceneError, setNewSceneError] = useState('');
+  const [creatingScene, setCreatingScene] = useState(false);
   const [charactersForAi, setCharactersForAi] = useState<Character[]>([]);
   const [characterColors, setCharacterColors] = useState<Record<string, string>>({});
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
@@ -1667,6 +1694,12 @@ export function StoryEditor() {
       sceneDraftCache.current.delete(currentSceneName);
       // Refresh header + scene-graph link entry for the saved scene
       if (projectPath) void loadSceneHeaders(projectPath, projectInfo?.scenes ?? [currentSceneName]);
+      // Sync voice cards from the dialogue lines
+      if (projectPath) {
+        syncSceneVoiceCards(projectPath, currentSceneName).catch((e) =>
+          console.warn('[voice] sync voice cards failed:', e),
+        );
+      }
       setSceneLinkMap((prev) => ({ ...prev, [currentSceneName]: extractSceneLinks(nodes) }));
       setSaveStatus('saved');
       // Reset status after 2s
@@ -1907,14 +1940,35 @@ export function StoryEditor() {
   // ---------------------------------------------------------------------------
   const handleNewScene = useCallback(async () => {
     if (!projectPath) return;
-    const name = prompt('新场景文件名（不含 .txt）:');
-    if (!name) return;
+    setNewSceneName('');
+    setNewSceneError('');
+    setNewSceneOpen(true);
+  }, [projectPath]);
+
+  const handleCreateSceneConfirm = useCallback(async () => {
+    if (!projectPath || creatingScene) return;
+    const name = newSceneName.trim();
+    if (!name) {
+      setNewSceneError('请输入场景文件名。');
+      return;
+    }
+    if (/[\\/:*?"<>|]/.test(name)) {
+      setNewSceneError('文件名不能包含 \\ / : * ? " < > |。');
+      return;
+    }
+    const baseName = name.replace(/\.txt$/i, '');
+    const sceneName = `${baseName}.txt`;
+    if (projectInfo?.scenes?.includes(sceneName)) {
+      setNewSceneError(`场景 ${sceneName} 已存在。`);
+      return;
+    }
+    setCreatingScene(true);
+    setNewSceneError('');
     try {
-      await createScene(projectPath, name);
+      await createScene(projectPath, baseName);
       // Refresh project info
       const info = await openProject(projectPath);
       setProjectInfo(info);
-      const sceneName = name.endsWith('.txt') ? name : `${name}.txt`;
       // Immediately create a matching background card in the asset library so the
       // new scene shows up under 素材库 > 背景, ready to fill in / generate.
       try {
@@ -1927,10 +1981,15 @@ export function StoryEditor() {
       }
       // Switch to new scene
       await handleSwitchScene(sceneName);
+      setNewSceneOpen(false);
+      setNewSceneName('');
     } catch (e) {
       console.error('Create scene failed:', e);
+      setNewSceneError(`创建场景失败: ${String(e)}`);
+    } finally {
+      setCreatingScene(false);
     }
-  }, [projectPath, projectId, handleSwitchScene]);
+  }, [projectPath, creatingScene, newSceneName, projectInfo?.scenes, projectId, handleSwitchScene]);
 
   const handleDeleteScene = useCallback(async (sceneName: string) => {
     if (!projectPath) return;
@@ -2496,7 +2555,93 @@ export function StoryEditor() {
           onHeaderUpdated={handleHeaderUpdated}
           onRefreshProject={refreshProjectInfo}
           onNewScene={handleNewScene}
+          onDeleteScene={handleDeleteScene}
         />
+
+        <Dialog open={newSceneOpen} onOpenChange={(open) => {
+          setNewSceneOpen(open);
+          if (!open && !creatingScene) {
+            setNewSceneName('');
+            setNewSceneError('');
+          }
+        }}>
+          <DialogContent className="max-w-md overflow-hidden border-border bg-surface-container-lowest p-0 shadow-2xl">
+            <DialogHeader className="border-b border-border bg-surface-container px-5 py-4 text-left">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded border border-secondary/30 bg-secondary/10 text-secondary">
+                  <FolderOpen className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <DialogTitle className="font-display-family text-base text-on-surface">新建场景</DialogTitle>
+                  <DialogDescription className="mt-1 text-xs text-muted-foreground">
+                    在 game/scene 下创建新的 WebGAL 场景脚本。
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+            <div className="space-y-4 px-5 py-5">
+              <label className="block space-y-2">
+                <span className="font-mono-family text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">
+                  场景文件名
+                </span>
+                <div className="flex items-center rounded border border-border bg-surface-container-low focus-within:border-secondary">
+                  <input
+                    autoFocus
+                    value={newSceneName}
+                    onChange={(e) => {
+                      setNewSceneName(e.target.value);
+                      if (newSceneError) setNewSceneError('');
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void handleCreateSceneConfirm();
+                      }
+                    }}
+                    className="min-w-0 flex-1 bg-transparent px-3 py-2.5 text-sm text-on-surface outline-none placeholder:text-muted-foreground/60"
+                    placeholder="chapter_02"
+                    aria-label="场景文件名"
+                    disabled={creatingScene}
+                  />
+                  {!newSceneName.trim().toLowerCase().endsWith('.txt') && (
+                    <span className="border-l border-border px-3 font-mono-family text-xs text-muted-foreground">.txt</span>
+                  )}
+                </div>
+              </label>
+              <div className="rounded border border-outline-variant/30 bg-surface-container px-3 py-2">
+                <div className="font-mono-family text-[10px] uppercase tracking-widest text-muted-foreground">预览</div>
+                <div className="mt-1 truncate text-xs text-on-surface-variant">
+                  game/scene/{newSceneName.trim() ? (newSceneName.trim().endsWith('.txt') ? newSceneName.trim() : `${newSceneName.trim()}.txt`) : 'chapter_02.txt'}
+                </div>
+              </div>
+              {newSceneError && (
+                <div className="flex items-start gap-2 rounded border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{newSceneError}</span>
+                </div>
+              )}
+            </div>
+            <DialogFooter className="border-t border-border bg-surface-container px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setNewSceneOpen(false)}
+                disabled={creatingScene}
+                className="rounded border border-border bg-surface-container-low px-3 py-2 text-sm text-on-surface-variant transition-colors hover:border-outline-variant hover:text-on-surface disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => { void handleCreateSceneConfirm(); }}
+                disabled={creatingScene || !newSceneName.trim()}
+                className="flex items-center gap-2 rounded bg-primary px-3 py-2 text-sm font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+              >
+                {creatingScene ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                创建场景
+              </button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Rename session — in-app dialog (Tauri has no native prompt). */}
         <Dialog open={renameTarget !== null} onOpenChange={(o) => { if (!o) setRenameTarget(null); }}>

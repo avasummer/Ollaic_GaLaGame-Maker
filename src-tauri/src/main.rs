@@ -195,6 +195,7 @@ fn main() {
             ai::commands::list_ai_logs,
             ai::commands::clear_ai_logs,
             ai::commands::get_ai_log_path,
+            ai::commands::generate_batch_tts,
             // Assets
             assets::commands::list_assets,
             assets::commands::list_all_assets,
@@ -205,6 +206,9 @@ fn main() {
             assets::commands::find_asset_usages,
             assets::commands::load_asset_metadata,
             assets::commands::save_asset_metadata,
+            assets::commands::sync_scene_voice_cards,
+            assets::commands::fill_voice_card,
+            assets::commands::delete_voice_card,
             // Characters
             characters::commands::list_characters,
             characters::commands::get_character,
