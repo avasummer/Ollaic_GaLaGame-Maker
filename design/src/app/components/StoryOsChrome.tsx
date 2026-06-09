@@ -6,7 +6,6 @@ import {
   Camera,
   Cloud,
   CloudOff,
-  Eye,
   FileDown,
   FileUp,
   FolderOpen,
@@ -14,8 +13,6 @@ import {
   Home,
   Loader2,
   Play,
-  Plus,
-  Rocket,
   RotateCcw,
   RotateCw,
   Save,
@@ -23,7 +20,6 @@ import {
   Settings,
   Upload,
   UserCircle,
-  Users,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -72,10 +68,7 @@ const navItems: Array<{ id: StoryOsSection; label: string; icon: LucideIcon }> =
   { id: 'home', label: '项目', icon: Home },
   { id: 'script', label: '脚本流', icon: BookOpen },
   { id: 'world', label: '场景', icon: GitBranch },
-  { id: 'characters', label: '立绘', icon: Users },
   { id: 'assets', label: '资源库', icon: Boxes },
-  { id: 'preview', label: '预览', icon: Eye },
-  { id: 'build', label: '导出', icon: Rocket },
 ];
 
 export function StoryOsTopBar({
@@ -226,7 +219,7 @@ export function StoryOsTopBar({
   );
 }
 
-export function StoryOsSideNav({ active, projectId, projectLabel = 'ALPHA', onCreate, onBeforeNavigate }: StoryOsSideNavProps) {
+export function StoryOsSideNav({ active, projectId, projectLabel = 'ALPHA', onBeforeNavigate }: StoryOsSideNavProps) {
   const navigate = useNavigate();
 
   const doNavigate = (target: StoryOsSection) => {
@@ -269,12 +262,6 @@ export function StoryOsSideNav({ active, projectId, projectLabel = 'ALPHA', onCr
         <div className="story-os-avatar">
           {active === 'home' ? <Home className="h-6 w-6" /> : <UserCircle className="h-6 w-6" />}
         </div>
-        <div className="text-[9px] font-semibold uppercase tracking-widest text-primary">
-          STORY
-        </div>
-        <div className="w-full truncate text-[8px] text-muted-foreground opacity-70">
-          {active === 'home' ? '创作者控制台' : '编辑中'}
-        </div>
       </div>
 
       <nav className="flex w-full flex-1 flex-col gap-2">
@@ -293,18 +280,6 @@ export function StoryOsSideNav({ active, projectId, projectLabel = 'ALPHA', onCr
           </button>
         ))}
       </nav>
-
-      {onCreate && (
-        <button
-          type="button"
-          onClick={onCreate}
-          className="story-os-add-button mt-auto"
-          aria-label="新建剧情分支"
-          title="新建剧情分支"
-        >
-          <Plus className="h-5 w-5" />
-        </button>
-      )}
     </aside>
   );
 }

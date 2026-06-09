@@ -3,7 +3,6 @@ import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
-  ArrowLeft,
   Upload,
   Search,
   Image,
@@ -992,14 +991,6 @@ export function AssetManager() {
         <div className="story-os-workspace flex bg-surface-container-lowest">
           <main className="relative flex-1 flex flex-col overflow-hidden bg-surface">
             <div className="flex h-12 items-end gap-1 border-b border-border bg-surface-container-low px-4 pt-2">
-              <button
-                onClick={() => navigate(`/editor/${projectId}`)}
-                className="story-os-command mb-1 mr-2 text-muted-foreground"
-                aria-label="返回编辑器"
-              >
-                <ArrowLeft className="mr-1 inline h-3.5 w-3.5" />
-                编辑器
-              </button>
               {tabConfig.map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
