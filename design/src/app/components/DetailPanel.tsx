@@ -11,7 +11,7 @@ import {
   loadAssetMetadata,
   type AssetMetadata,
 } from '../lib/asset-metadata';
-import { listScenes, type SceneHeader } from '../lib/webgal-ipc';
+import { listScenes, sceneDisplayName, type SceneHeader } from '../lib/webgal-ipc';
 import {
   Dialog,
   DialogContent,
@@ -988,6 +988,7 @@ function SceneSelect({
   placeholder = '选择目标场景…',
   allowEmpty = false,
   compact = false,
+  showOutline = false,
   'aria-label': ariaLabel,
 }: {
   value: string;
@@ -997,6 +998,8 @@ function SceneSelect({
   placeholder?: string;
   allowEmpty?: boolean;
   compact?: boolean;
+  /** Show "章节 — 大纲" instead of just the chapter name in the option list. */
+  showOutline?: boolean;
   'aria-label'?: string;
 }) {
   const known = !value || scenes.includes(value);
@@ -1014,7 +1017,7 @@ function SceneSelect({
       {!known && value && <option value={value}>{value}（未找到）</option>}
       {scenes.map((s) => (
         <option key={s} value={s}>
-          {sceneHeaders[s]?.chapter?.trim() || s}
+          {showOutline ? sceneDisplayName(s, sceneHeaders[s]) : (sceneHeaders[s]?.chapter?.trim() || s)}
         </option>
       ))}
     </select>
@@ -1089,6 +1092,7 @@ function ChoiceEditor({ node, onUpdate, scenes = [], sceneHeaders = {} }: {
               placeholder="跳转到场景…（留空则不跳转）"
               allowEmpty
               compact
+              showOutline
               aria-label={`Option ${idx + 1} target scene`}
             />
           </div>

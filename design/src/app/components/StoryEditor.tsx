@@ -127,6 +127,18 @@ function getCommandSummary(node: WebGalNode): string {
   }
 }
 
+/** Shallow equality for a scene's outgoing links — used to skip graph updates
+ *  when an edit didn't change any jump/choose target. */
+function sceneLinksEqual(a: SceneLink[], b: SceneLink[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].target !== b[i].target || a[i].kind !== b[i].kind || a[i].label !== b[i].label) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function commandIconFor(type: WebGalCommandType) {
   switch (type) {
     case 'dialogue':
@@ -1300,6 +1312,30 @@ export function StoryEditor() {
     setSceneLinkMap(Object.fromEntries(entries));
   }, []);
 
+  // Keep the current scene's outgoing links live so the relationship graph
+  // reflects edits — AI changes, manual edits, added/removed jump & control
+  // nodes — without waiting for a save. extractSceneLinks only looks at
+  // changeScene / callScene / choose targets, and sceneLinksEqual skips updates
+  // that don't change any target, so editing dialogue never churns the graph.
+  //
+  // On a scene switch, currentSceneName updates a render before `nodes` (which
+  // load async). In that in-between render `nodes` still belongs to the previous
+  // scene, so attributing them to the new scene would write wrong links and make
+  // the graph flicker (wrong → corrected). The prevNodes guard skips renders
+  // where only currentSceneName changed; we only sync when `nodes` itself
+  // changed, at which point currentSceneName already reflects its scene.
+  const prevNodesRef = useRef(nodes);
+  useEffect(() => {
+    if (prevNodesRef.current === nodes) return;
+    prevNodesRef.current = nodes;
+    const links = extractSceneLinks(nodes);
+    setSceneLinkMap((prev) => {
+      const prevLinks = prev[currentSceneName];
+      if (prevLinks && sceneLinksEqual(prevLinks, links)) return prev;
+      return { ...prev, [currentSceneName]: links };
+    });
+  }, [nodes, currentSceneName]);
+
   const loadCharacterColors = useCallback(async (projectPath: string) => {
     try {
       const refs = await listCharacterNames(projectPath);
@@ -2316,6 +2352,9 @@ export function StoryEditor() {
       const info = await openProject(projectPath);
       setProjectInfo(info);
       void loadSceneHeaders(projectPath, info.scenes);
+      // Refresh the relationship graph for AI edits that touch other scenes'
+      // jump/choose nodes (the current scene stays live via the nodes effect).
+      void loadSceneLinkMap(projectPath, info.scenes);
     },
   });
 
