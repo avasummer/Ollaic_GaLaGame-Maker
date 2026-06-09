@@ -36,7 +36,7 @@ import { insertSceneNode, reorderSceneNodes, pasteSceneNode } from '../lib/scene
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
 import { ChangeSetCard } from './AiPendingCard';
-import { MiniNodeCard } from './MiniNodeCard';
+import { PreviewNodeCard } from './PreviewNodeCard';
 import { computeFullNodeDiff, type NodeDiffEntry } from '../lib/node-diff';
 import type { SceneEdit } from '../lib/change-set';
 import { ConflictCard, ErrorCard } from './AiStatusCard';
@@ -1851,14 +1851,14 @@ function ScriptCommandStream({
       </div>
 
       {previewEntries ? (
-        <div className="relative z-10 flex-1 overflow-y-auto p-8">
-          <div className="mx-auto max-w-4xl pb-20">
-            <div className="mb-4 border border-primary/25 bg-primary/10 px-4 py-2 text-center text-xs font-semibold text-primary">
-              AI 修改预览 - 同意后生效
-            </div>
-            <div className="grid gap-3">
+        <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
+          <div className="shrink-0 border-b border-primary/30 bg-primary/10 px-4 py-2 text-center text-xs font-semibold text-primary">
+            预览模式
+          </div>
+          <div className="flex-1 overflow-y-auto p-8">
+            <div className="mx-auto flex max-w-xl flex-col items-center pb-20">
               {previewEntries.map((entry, index) => (
-                <MiniNodeCard key={`${entry.kind}-${index}`} entry={entry} />
+                <PreviewNodeCard key={`${entry.kind}-${index}`} entry={entry} />
               ))}
             </div>
           </div>
