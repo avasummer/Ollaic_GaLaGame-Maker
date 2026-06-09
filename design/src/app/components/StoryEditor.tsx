@@ -71,6 +71,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from './ui/context-menu';
 import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
 import { PerformanceTimeline } from './PerformanceTimeline';
 
@@ -751,6 +758,35 @@ function ScriptCommandStream({
   previewEntries,
 }: ScriptCommandStreamProps) {
   const query = searchQuery?.trim().toLowerCase() ?? '';
+
+  // Right-click on empty area (between/around cards) → paste at the position
+  // nearest the cursor, so the user can choose where the clipboard node lands.
+  const [areaMenu, setAreaMenu] = useState<{ x: number; y: number; atIndex: number } | null>(null);
+  useEffect(() => {
+    if (!areaMenu) return;
+    const close = () => setAreaMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [areaMenu]);
+
+  // Compute the paste anchor for an empty-area right-click from its Y position.
+  // onPasteNode(atIndex) inserts *after* node atIndex (pasteSceneNode uses
+  // atIndex + 1), so to drop between two cards we return the index of the card
+  // just above the cursor: the card before the first one whose vertical midpoint
+  // is below the cursor. Above the first card → -1 (start); below all → last.
+  const areaPasteIndex = useCallback((container: HTMLElement, clientY: number): number => {
+    const cards = container.querySelectorAll<HTMLElement>('[data-cmd-card]');
+    for (const el of Array.from(cards)) {
+      const rect = el.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return Number(el.dataset.cmdIndex) - 1;
+    }
+    return nodes.length - 1;
+  }, [nodes.length]);
   const visibleNodes = query
     ? nodes
         .map((node, index) => ({ node, index }))
@@ -911,7 +947,7 @@ function ScriptCommandStream({
     drag(drop(ref));
 
     return (
-      <div ref={preview} key={node.id} className="group flex gap-3" style={{ opacity: isDragging ? 0.4 : 1 }}>
+      <div ref={preview} key={node.id} data-cmd-card data-cmd-index={index} className="group flex gap-3" style={{ opacity: isDragging ? 0.4 : 1 }}>
         <div className="flex w-12 shrink-0 flex-col items-center pt-2">
           <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-[10px] font-bold ${
             selected ? 'border-primary text-primary' : 'border-outline-variant/30 text-on-surface-variant/40'
@@ -920,6 +956,8 @@ function ScriptCommandStream({
           </div>
           <div className="my-2 w-px flex-1 bg-outline-variant/20" />
         </div>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
         <div
           ref={ref}
           className={`relative w-full max-w-3xl overflow-hidden border shadow-sm transition-all ${
@@ -1072,6 +1110,33 @@ function ScriptCommandStream({
             </DropdownMenu>
           </div>
         </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-40">
+            {onCopyNode && (
+              <ContextMenuItem onClick={() => onCopyNode(node.id)} className="gap-2 text-xs">
+                <Copy className="h-3.5 w-3.5" /> 复制
+              </ContextMenuItem>
+            )}
+            {onCutNode && (
+              <ContextMenuItem onClick={() => onCutNode(node.id)} className="gap-2 text-xs">
+                <Scissors className="h-3.5 w-3.5" /> 剪切
+              </ContextMenuItem>
+            )}
+            {onPasteNode && (
+              <ContextMenuItem onClick={() => onPasteNode(index)} disabled={!clipboardNode} className="gap-2 text-xs">
+                <Clipboard className="h-3.5 w-3.5" /> 粘贴到此处
+              </ContextMenuItem>
+            )}
+            {onDeleteNode && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => onDeleteNode(node.id)} className="gap-2 text-xs text-error focus:text-error">
+                  <Trash2 className="h-3.5 w-3.5" /> 删除
+                </ContextMenuItem>
+              </>
+            )}
+          </ContextMenuContent>
+        </ContextMenu>
       </div>
     );
   }
@@ -1126,7 +1191,17 @@ function ScriptCommandStream({
           </div>
         </div>
       ) : (
-      <div className="relative z-10 flex-1 overflow-y-auto p-8">
+      <div
+        className="relative z-10 flex-1 overflow-y-auto p-8"
+        onContextMenu={(e) => {
+          if (!clipboardNode || !onPasteNode) return;
+          // A card right-click is handled by the card's own context menu.
+          if ((e.target as HTMLElement).closest('[data-cmd-card]')) return;
+          e.preventDefault();
+          const atIndex = areaPasteIndex(e.currentTarget, e.clientY);
+          setAreaMenu({ x: e.clientX, y: e.clientY, atIndex });
+        }}
+      >
         <div className="mx-auto max-w-4xl space-y-6 pb-20">
         {nodes.length === 0 ? (
           <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 border border-dashed border-outline-variant/50 bg-surface-bright p-8 text-center text-muted-foreground">
@@ -1189,35 +1264,26 @@ function ScriptCommandStream({
         )}
         </div>
 
-        {/* Right-click context menu on empty area for paste */}
-        {clipboardNode && onPasteNode && (
+        {/* Right-click on empty area → paste at the position nearest the cursor */}
+        {areaMenu && clipboardNode && onPasteNode && (
           <div
-            className="pointer-events-none absolute inset-0 z-20"
-            onContextMenu={(e) => {
-              e.preventDefault();
-              const menu = document.createElement('div');
-              menu.className = 'fixed z-50 min-w-[140px] rounded border border-border bg-surface-container-high p-1 shadow-lg';
-              menu.style.left = `${e.clientX}px`;
-              menu.style.top = `${e.clientY}px`;
-              menu.innerHTML = '';
-              const btn = document.createElement('button');
-              btn.className = 'flex w-full items-center gap-2 rounded px-3 py-2 text-sm hover:bg-surface-container-low';
-              btn.innerHTML = '<span style="display:flex;align-items:center;gap:0.5rem"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>粘贴到此处</span>';
-              btn.onclick = () => {
-                onPasteNode(nodes.length);
-                menu.remove();
-              };
-              menu.appendChild(btn);
-              document.body.appendChild(menu);
-              const close = (ev: MouseEvent) => {
-                if (!menu.contains(ev.target as Node)) {
-                  menu.remove();
-                  document.removeEventListener('click', close);
-                }
-              };
-              setTimeout(() => document.addEventListener('click', close), 0);
-            }}
-          />
+            className="fixed z-50 min-w-[160px] rounded border border-border bg-surface-container-high p-1 shadow-lg"
+            style={{ left: areaMenu.x, top: areaMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded px-3 py-1.5 text-xs hover:bg-surface-container-low"
+              onClick={() => { onPasteNode(areaMenu.atIndex); setAreaMenu(null); }}
+            >
+              <Clipboard className="h-3.5 w-3.5" />
+              粘贴到{areaMenu.atIndex < 0
+                ? '开头'
+                : areaMenu.atIndex >= nodes.length - 1
+                  ? '末尾'
+                  : `第 ${areaMenu.atIndex + 1} 句后`}
+            </button>
+          </div>
         )}
 
       </div>
