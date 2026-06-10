@@ -1,5 +1,19 @@
 use super::types::*;
 
+fn is_voice_file_flag(key: &str) -> bool {
+    let lower = key.to_lowercase();
+    [".mp3", ".ogg", ".wav", ".flac", ".aac"]
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+}
+
+fn is_managed_voice_flag(key: &str) -> bool {
+    ((key.starts_with('v') || key.starts_with('V'))
+        && key.len() > 1
+        && key.as_bytes()[1].is_ascii_digit())
+        || is_voice_file_flag(key)
+}
+
 fn serialize_flags(node: &WebGalNode) -> String {
     let mut parts = Vec::new();
 
@@ -17,7 +31,7 @@ fn serialize_flags(node: &WebGalNode) -> String {
         "name",
     ];
     for flag in &node.flags {
-        if managed_keys.contains(&flag.key.as_str()) {
+        if managed_keys.contains(&flag.key.as_str()) || is_managed_voice_flag(&flag.key) {
             continue;
         }
         match &flag.value {
@@ -218,4 +232,24 @@ pub fn serialize_script(nodes: &[WebGalNode]) -> String {
     let mut lines: Vec<String> = nodes.iter().map(serialize_node).collect();
     lines.push(String::new()); // trailing newline
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serialize_script;
+    use crate::webgal::parser::parse_script;
+
+    #[test]
+    fn serializing_parsed_voice_flag_does_not_duplicate_it() {
+        let nodes = parse_script("Alice:hello -v1.wav;\n:aside -narrator_01.mp3;\n");
+        let serialized_once = serialize_script(&nodes);
+        assert!(serialized_once.contains("Alice:hello -v1.wav;"));
+        assert!(serialized_once.contains(":aside -narrator_01.mp3;"));
+        assert_eq!(serialized_once.matches("-v1.wav").count(), 1);
+        assert_eq!(serialized_once.matches("-narrator_01.mp3").count(), 1);
+
+        let serialized_twice = serialize_script(&parse_script(&serialized_once));
+        assert_eq!(serialized_twice.matches("-v1.wav").count(), 1);
+        assert_eq!(serialized_twice.matches("-narrator_01.mp3").count(), 1);
+    }
 }

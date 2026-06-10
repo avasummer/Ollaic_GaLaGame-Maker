@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -74,24 +74,24 @@ import { StoryOsSideNav, StoryOsTopBar } from './StoryOsChrome';
 import { VoiceDubbingPanel } from './VoiceDubbingPanel';
 
 type TabId = 'scene' | 'cg' | 'music' | 'character' | 'dubbing';
-type MusicCategory = 'bgm' | 'sfx' | 'vocal';
+type MusicCategory = 'bgm' | 'sfx' | 'dubbing' | 'vocal';
 type SceneLibraryItem =
   | { kind: 'sceneCard'; card: SceneAssetCard; asset?: AssetInfo }
   | { kind: 'asset'; asset: AssetInfo };
-type VoiceLibraryItem =
-  | { kind: 'voiceCard'; card: VoiceAssetCard; asset?: AssetInfo }
-  | { kind: 'asset'; asset: AssetInfo };
+type VoiceLibraryItem = { kind: 'asset'; asset: AssetInfo };
 
 const musicTabs: { id: MusicCategory; label: string }[] = [
   { id: 'bgm', label: 'BGM 背景音乐' },
   { id: 'sfx', label: 'SFX 音效' },
-  { id: 'vocal', label: '语音 Vocal' },
+  { id: 'dubbing', label: '配音清单' },
+  { id: 'vocal', label: '语音文件' },
 ];
 
 const musicCategoryLabels: Record<MusicCategory, string> = {
   bgm: 'BGM',
   sfx: '音效',
-  vocal: '语音',
+  dubbing: '配音清单',
+  vocal: '语音文件',
 };
 
 const voiceEmotionOptions = [
@@ -195,6 +195,19 @@ function voiceTargetStem(character: string, text: string): string {
   return `v_${safeStem(character || 'narrator')}_${hashText(text).slice(0, 8)}`;
 }
 
+function normalizeVoiceFilename(value: string): string {
+  const trimmed = value.trim();
+  const withExtension = /\.(mp3|ogg|wav|flac|aac)$/i.test(trimmed) ? trimmed : `${trimmed}.wav`;
+  return withExtension
+    .replace(/\s+/g, '_')
+    .replace(/[\\/:*?"<>|#%&{}$!'@+`=]/g, '')
+    || 'voice.wav';
+}
+
+function voiceFilenameStem(filename: string): string {
+  return normalizeVoiceFilename(filename).replace(/\.(mp3|ogg|wav|flac|aac)$/i, '');
+}
+
 function countUsages(usages: AssetUsage[], _filename: string): number {
   // AssetUsage is per-call (one filename), so any returned entry is one usage reference.
   return usages.length;
@@ -216,6 +229,7 @@ function getImportConfig(tab: TabId, musicCategory: MusicCategory) {
     };
   }
   if (tab === 'music') {
+    if (musicCategory === 'dubbing') return null;
     return {
       title: `上传${musicCategoryLabels[musicCategory]}`,
       buttonLabel: `上传${musicCategoryLabels[musicCategory]}`,
@@ -241,9 +255,8 @@ function getAudioDurationLabel(
 const tabConfig: { id: TabId; label: string; icon: typeof Image }[] = [
   { id: 'scene', label: '场景', icon: Image },
   { id: 'cg', label: 'CG', icon: Award },
-  { id: 'music', label: '音乐', icon: Music },
+  { id: 'music', label: '音频', icon: Music },
   { id: 'character', label: '人物立绘', icon: Users },
-  { id: 'dubbing', label: '配音清单', icon: Music },
 ];
 
 export function AssetManager() {
@@ -289,6 +302,11 @@ export function AssetManager() {
     setMetadata(metadata);
   }, []);
 
+  const vocalAssetNames = useMemo(
+    () => new Set(allAssets.filter((asset) => asset.category === 'vocal').map((asset) => asset.name)),
+    [allAssets],
+  );
+
   // Load project path
   useEffect(() => {
     const path = localStorage.getItem(`project-path-${projectId}`);
@@ -313,7 +331,9 @@ export function AssetManager() {
     setLoading(true);
     setError(null);
     try {
-      const cats = tab === 'music' ? [musicSubtab] : tabToCategories(tab);
+      const cats = tab === 'music'
+        ? [musicSubtab === 'dubbing' ? 'vocal' : musicSubtab]
+        : tabToCategories(tab);
       const results = await Promise.all(cats.map(c => listAssets(path, c)));
       const all = results.flat();
       setAssets(all);
@@ -393,9 +413,9 @@ export function AssetManager() {
   }, [applyMetadata, projectId, projectPath]);
 
   useEffect(() => {
-    const isVoiceTab = activeTab === 'music' && musicCategory === 'vocal';
-    if (!projectPath || (!isVoiceTab && activeTab !== 'dubbing')) {
-      if (!isVoiceTab && activeTab !== 'dubbing') setVoiceCards([]);
+    const isVoiceWorkspace = activeTab === 'music' && (musicCategory === 'dubbing' || musicCategory === 'vocal');
+    if (!projectPath || (!isVoiceWorkspace && activeTab !== 'dubbing')) {
+      if (!isVoiceWorkspace && activeTab !== 'dubbing') setVoiceCards([]);
       return;
     }
     let cancelled = false;
@@ -403,28 +423,29 @@ export function AssetManager() {
       try {
         const info = await openProject(projectPath);
         const cardMap = new Map<string, VoiceAssetCard>();
+        let metadataChanged = false;
+        const nextMetadata: AssetMetadata = {
+          ...metadataRef.current,
+          voiceCards: { ...(metadataRef.current.voiceCards ?? {}) },
+        };
         for (const sceneName of info.scenes) {
           const scenePath = await getScenePath(projectPath, sceneName);
           const nodes = await loadScene(scenePath);
-          let sceneChanged = false;
           nodes.forEach((node: WebGalNode, index: number) => {
             if (node.type !== 'dialogue') return;
             const text = node.content.trim();
             if (!text) return;
             const character = (node.character ?? '').trim();
-            const storedCards = metadataRef.current.voiceCards ?? {};
+            const storedCards = nextMetadata.voiceCards ?? {};
             const legacyId = hashText(`${character}\n${text}`);
             const legacyStored = storedCards[legacyId];
             const emotion = legacyStored?.emotion || '默认';
             const id = voiceCardId(character, text, emotion);
-            if ((metadataRef.current.deletedVoiceCards ?? []).includes(id)) return;
+            if ((nextMetadata.deletedVoiceCards ?? []).includes(id)) return;
             const stored = storedCards[id] ?? legacyStored;
             const targetStem = stored?.targetStem || voiceTargetStem(character, text);
-            const targetVoice = stored?.voiceAsset ?? node.voice ?? `${targetStem}.wav`;
-            if (!node.voice) {
-              node.voice = targetVoice;
-              sceneChanged = true;
-            }
+            const linkedVoice = stored?.voiceAsset ?? node.voice ?? null;
+            const voiceAsset = linkedVoice && vocalAssetNames.has(linkedVoice) ? linkedVoice : null;
             const existing = cardMap.get(id);
             const usage: AssetUsage = {
               sceneFile: sceneName,
@@ -434,23 +455,46 @@ export function AssetManager() {
             };
             if (existing) {
               existing.usages = [...(existing.usages ?? []), usage];
-              if (!existing.voiceAsset) existing.voiceAsset = targetVoice;
+              if (!existing.voiceAsset && voiceAsset) existing.voiceAsset = voiceAsset;
               return;
             }
-            cardMap.set(id, {
+            const card: VoiceAssetCard = {
               id,
               character,
               text,
               emotion: stored?.emotion || emotion,
-              voiceAsset: targetVoice,
+              voiceAsset,
               targetStem,
               prompt: stored?.prompt || '',
               usages: [usage],
-            });
+            };
+            cardMap.set(id, card);
+
+            const storedCard = nextMetadata.voiceCards[id];
+            if (
+              !storedCard
+              || storedCard.character !== card.character
+              || storedCard.text !== card.text
+              || storedCard.emotion !== card.emotion
+              || storedCard.targetStem !== card.targetStem
+              || (storedCard.prompt ?? '') !== card.prompt
+            ) {
+              nextMetadata.voiceCards[id] = {
+                id: card.id,
+                character: card.character,
+                text: card.text,
+                emotion: card.emotion,
+                voiceAsset: stored?.voiceAsset ?? null,
+                targetStem: card.targetStem,
+                prompt: card.prompt,
+              };
+              metadataChanged = true;
+            }
           });
-          if (sceneChanged) {
-            await saveScene(scenePath, nodes);
-          }
+        }
+        if (metadataChanged) {
+          await saveAssetMetadata(projectPath, nextMetadata);
+          if (!cancelled) applyMetadata(nextMetadata);
         }
         if (!cancelled) setVoiceCards(Array.from(cardMap.values()));
       } catch (e) {
@@ -461,7 +505,7 @@ export function AssetManager() {
       }
     })();
     return () => { cancelled = true; };
-  }, [activeTab, musicCategory, projectPath, metadata]);
+  }, [activeTab, applyMetadata, musicCategory, projectPath, metadata, vocalAssetNames]);
 
   const aliasForAsset = (asset: Pick<AssetInfo, 'category' | 'name'>): string =>
     assetMetadataEntry(metadata.aliases, asset.category, asset.name) ?? '';
@@ -506,38 +550,29 @@ export function AssetManager() {
   })();
 
   const voiceLibraryItems: VoiceLibraryItem[] = (() => {
-    const assetByName = new Map(assets.map((asset) => [asset.name, asset]));
-    const usedAssets = new Set<string>();
-    const cardItems = voiceCards.map((card) => {
-      const asset = card.voiceAsset ? assetByName.get(card.voiceAsset) : undefined;
-      if (asset) usedAssets.add(asset.name);
-      return { kind: 'voiceCard' as const, card, asset };
-    });
-    const looseAssets = assets
-      .filter((asset) => !usedAssets.has(asset.name))
+    const fileItems = assets
+      .filter((asset) => asset.category === 'vocal')
       .map((asset) => ({ kind: 'asset' as const, asset }));
     const q = searchQuery.toLowerCase();
-    return [...cardItems, ...looseAssets].filter((item) => {
+    return fileItems.filter((item) => {
       if (!q) return true;
-      if (item.kind === 'voiceCard') {
-        return item.card.character.toLowerCase().includes(q)
-          || item.card.text.toLowerCase().includes(q)
-          || (item.card.voiceAsset ?? '').toLowerCase().includes(q);
-      }
       return item.asset.name.toLowerCase().includes(q) || aliasForAsset(item.asset).toLowerCase().includes(q);
     });
   })();
 
-  // Tab counts from all assets and metadata, independent of the currently loaded tab assets.
+  // Tab counts from real files only. Planning cards such as scene cards and
+  // dubbing tasks have their own workspace and should not inflate asset counts.
   const tabCounts = {
-    scene: sceneLibraryItems.length || allAssets.filter(a => a.category === 'background').length,
+    scene: allAssets.filter(a => a.category === 'background').length,
     cg: allAssets.filter(a => a.category === 'background').length,
     music: allAssets.filter(a => a.category === 'bgm' || a.category === 'sfx' || a.category === 'vocal').length,
     character: characterCount,
-    dubbing: voiceCards.length,
+    dubbing: 0,
   };
 
   const importConfig = getImportConfig(activeTab, musicCategory);
+  const isDubbingWorkspace = activeTab === 'music' && musicCategory === 'dubbing';
+  const showAiAction = !(activeTab === 'music' && (musicCategory === 'dubbing' || musicCategory === 'vocal'));
   const aiActionLabel = activeTab === 'scene'
     ? '新建场景'
     : activeTab === 'cg'
@@ -796,6 +831,19 @@ export function AssetManager() {
     return () => { cancelled = true; };
   }, [projectPath, selectedAsset]);
 
+  const displayedAssetUsages = useMemo(() => {
+    if (!selectedAsset || selectedAsset.category !== 'vocal') return assetUsages;
+    const linkedVoiceUsages = voiceCards
+      .filter((card) => card.voiceAsset === selectedAsset.name)
+      .flatMap((card) => card.usages ?? []);
+    const usageMap = new Map<string, AssetUsage>();
+    for (const usage of [...assetUsages, ...linkedVoiceUsages]) {
+      const key = `${usage.sceneFile}:${usage.lineNumber}:${usage.command}:${usage.lineContent}`;
+      usageMap.set(key, usage);
+    }
+    return Array.from(usageMap.values());
+  }, [assetUsages, selectedAsset, voiceCards]);
+
   const openUsage = useCallback((usage: AssetUsage) => {
     navigate(`/editor/${projectId}?scene=${encodeURIComponent(usage.sceneFile)}&line=${usage.lineNumber}`);
   }, [navigate, projectId]);
@@ -1023,25 +1071,27 @@ export function AssetManager() {
               <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
                 {projectPath}
               </span>
-              <button
-                onClick={() => {
-                  if (activeTab === 'character') {
-                    setCharacterGenerationRequestToken((value) => value + 1);
-                    return;
-                  }
-                  if (activeTab === 'scene') {
-                    handleNewSceneCard();
-                    return;
-                  }
-                  setEditingSceneCard(null);
-                  setAiAssetPrompt('');
-                  setAiGenerateOpen(true);
-                }}
-                className="story-os-command border-primary/30 bg-primary/10 text-primary"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                {aiActionLabel}
-              </button>
+              {showAiAction && (
+                <button
+                  onClick={() => {
+                    if (activeTab === 'character') {
+                      setCharacterGenerationRequestToken((value) => value + 1);
+                      return;
+                    }
+                    if (activeTab === 'scene') {
+                      handleNewSceneCard();
+                      return;
+                    }
+                    setEditingSceneCard(null);
+                    setAiAssetPrompt('');
+                    setAiGenerateOpen(true);
+                  }}
+                  className="story-os-command border-primary/30 bg-primary/10 text-primary"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  {aiActionLabel}
+                </button>
+              )}
               {importConfig && (
                 <button
                   onClick={handleImport}
@@ -1057,6 +1107,7 @@ export function AssetManager() {
               <VoiceDubbingPanel
                 projectPath={projectPath}
                 voiceCards={voiceCards}
+                vocalAssetNames={vocalAssetNames}
                 selectedVoiceCard={selectedVoiceCard}
                 onSelectVoiceCard={(card) => {
                   setSelectedVoiceCard(card);
@@ -1065,6 +1116,7 @@ export function AssetManager() {
                   setEditingSceneCard(null);
                 }}
                 onVoiceCardsChanged={async () => {
+                  await loadAllAssets(projectPath);
                   const m = await loadAssetMetadata(projectPath);
                   applyMetadata(m);
                 }}
@@ -1103,18 +1155,21 @@ export function AssetManager() {
                     ))}
                   </div>
                 )}
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="搜索素材名称..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 bg-input-background border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  />
-                </div>
+                {!isDubbingWorkspace && (
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <input
+                      type="text"
+                      placeholder="搜索素材名称..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 bg-input-background border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    />
+                  </div>
+                )}
               </div>
 
+              {!isDubbingWorkspace && (
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-1 bg-secondary/50 rounded-md p-1">
                   <button
@@ -1137,6 +1192,7 @@ export function AssetManager() {
                   </button>
                 </div>
               </div>
+              )}
             </div>
 
             {/* Error banner */}
@@ -1237,41 +1293,47 @@ export function AssetManager() {
                     })}
                   </div>
                 )
+              ) : activeTab === 'music' && musicCategory === 'dubbing' ? (
+                <VoiceDubbingPanel
+                  projectPath={projectPath}
+                  voiceCards={voiceCards}
+                  vocalAssetNames={vocalAssetNames}
+                  selectedVoiceCard={selectedVoiceCard}
+                  onSelectVoiceCard={(card) => {
+                    setSelectedVoiceCard(card);
+                    setSelectedAsset(null);
+                    setSelectedSceneCard(null);
+                    setEditingSceneCard(null);
+                  }}
+                  onVoiceCardsChanged={async () => {
+                    await loadAllAssets(projectPath);
+                    const m = await loadAssetMetadata(projectPath);
+                    applyMetadata(m);
+                  }}
+                />
               ) : activeTab === 'music' && musicCategory === 'vocal' ? (
                 voiceLibraryItems.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
                     <FolderOpen className="w-16 h-16 mb-4 opacity-50" />
-                    <p className="text-lg mb-2">暂无语音</p>
-                    <p className="text-sm">故事编织室中出现对话后会自动生成待配音条目</p>
+                    <p className="text-lg mb-2">暂无语音文件</p>
+                    <p className="text-sm">对白配音请在“配音清单”中生成或导入；这里仅管理 game/vocal 文件</p>
                   </div>
                 ) : (
                   <div className={viewMode === 'grid' ? 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4' : 'space-y-2'}>
                     {voiceLibraryItems.map((item) => {
-                      const card = item.kind === 'voiceCard' ? item.card : null;
                       const asset = item.asset;
-                      const isSelected = card ? selectedVoiceCard?.id === card.id : selectedAsset?.path === asset?.path;
-                      const title = card
-                        ? `${card.character || '旁白'}：${card.text}`
-                        : asset ? (aliasForAsset(asset) || asset.name) : '';
-                      const subtitle = card
-                        ? `${card.emotion || '默认'} · ${card.voiceAsset || '尚未生成语音'}`
-                        : asset ? `${asset.extension.toUpperCase()} · ${getAudioDurationLabel(asset.path, audioDurations, audioMetadataErrors)}` : '';
+                      const isSelected = selectedAsset?.path === asset.path;
+                      const title = aliasForAsset(asset) || asset.name;
+                      const subtitle = `${asset.extension.toUpperCase()} · ${getAudioDurationLabel(asset.path, audioDurations, audioMetadataErrors)}`;
                       if (viewMode === 'list') {
                         return (
                           <div
-                            key={card ? `voice-${card.id}` : `asset-${asset?.path}`}
+                            key={`asset-${asset.path}`}
                             onClick={() => {
-                              if (card) {
-                                setSelectedVoiceCard(card);
-                                setSelectedAsset(null);
-                                setSelectedSceneCard(null);
-                                setEditingSceneCard(null);
-                              } else if (asset) {
-                                setSelectedAsset(asset);
-                                setSelectedVoiceCard(null);
-                                setSelectedSceneCard(null);
-                                setEditingSceneCard(null);
-                              }
+                              setSelectedAsset(asset);
+                              setSelectedVoiceCard(null);
+                              setSelectedSceneCard(null);
+                              setEditingSceneCard(null);
                             }}
                             className={`flex items-center gap-4 p-4 rounded-lg cursor-pointer transition-all ${
                               isSelected ? 'bg-primary/10 ring-1 ring-primary' : 'bg-card/50 hover:bg-card'
@@ -1283,60 +1345,36 @@ export function AssetManager() {
                             <div className="flex-1 min-w-0">
                               <h3 className="font-medium truncate">{title}</h3>
                               <p className="text-sm text-muted-foreground truncate">{subtitle}</p>
-                              {asset && (audioProgress[asset.path] ?? 0) > 0 && (
+                              {(audioProgress[asset.path] ?? 0) > 0 && (
                                 <div className="mt-2 h-1 rounded bg-secondary overflow-hidden">
                                   <div className="h-full bg-primary transition-all" style={{ width: `${Math.min((audioProgress[asset.path] ?? 0) * 100, 100)}%` }} />
                                 </div>
                               )}
                             </div>
                             <div className="flex items-center gap-2">
-                              {card && (
-                                <span className="rounded-md bg-secondary px-2 py-1 text-xs text-muted-foreground">{card.emotion || '默认'}</span>
-                              )}
-                              {card && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteVoiceCard(card);
-                                  }}
-                                  className="p-2 rounded-full hover:bg-destructive/10 transition-colors"
-                                  aria-label="删除语音"
-                                >
-                                  <Trash2 className="w-4 h-4 text-muted-foreground hover:text-destructive" />
-                                </button>
-                              )}
-                              {asset && (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); handlePlayToggle(asset.path); }}
-                                  className="p-2 rounded-full hover:bg-secondary transition-colors"
-                                  aria-label="切换音频播放"
-                                >
-                                  {playingAudio === asset.path ? (
-                                    <Pause className="w-4 h-4" />
-                                  ) : (
-                                    <Play className="w-4 h-4" />
-                                  )}
-                                </button>
-                              )}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handlePlayToggle(asset.path); }}
+                                className="p-2 rounded-full hover:bg-secondary transition-colors"
+                                aria-label="切换音频播放"
+                              >
+                                {playingAudio === asset.path ? (
+                                  <Pause className="w-4 h-4" />
+                                ) : (
+                                  <Play className="w-4 h-4" />
+                                )}
+                              </button>
                             </div>
                           </div>
                         );
                       }
                       return (
                         <div
-                          key={card ? `voice-${card.id}` : `asset-${asset?.path}`}
+                          key={`asset-${asset.path}`}
                           onClick={() => {
-                            if (card) {
-                              setSelectedVoiceCard(card);
-                              setSelectedAsset(null);
-                              setSelectedSceneCard(null);
-                              setEditingSceneCard(null);
-                            } else if (asset) {
-                              setSelectedAsset(asset);
-                              setSelectedVoiceCard(null);
-                              setSelectedSceneCard(null);
-                              setEditingSceneCard(null);
-                            }
+                            setSelectedAsset(asset);
+                            setSelectedVoiceCard(null);
+                            setSelectedSceneCard(null);
+                            setEditingSceneCard(null);
                           }}
                           className={`group relative rounded-lg overflow-hidden cursor-pointer transition-all hover:scale-[1.02] ${
                             isSelected
@@ -1347,41 +1385,33 @@ export function AssetManager() {
                           <div className="aspect-square bg-secondary/30 relative overflow-hidden flex flex-col items-center justify-center gap-4">
                             <Music className="w-10 h-10 text-muted-foreground" />
                             <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,color-mix(in_srgb,var(--color-primary)_25%,transparent)_0_3px,transparent_3px_7px)]" />
-                            {(asset || card) && (
-                              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                                <div className="absolute right-2 top-2">
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (asset) {
-                                        void handleDelete(asset);
-                                      } else if (card) {
-                                        handleDeleteVoiceCard(card);
-                                      }
-                                    }}
-                                    className="p-2 rounded-full bg-destructive/90 text-destructive-foreground hover:bg-destructive transition-colors"
-                                    aria-label={asset ? '删除素材' : '删除语音'}
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
-                                </div>
-                                {asset && (
-                                  <div className="absolute bottom-0 left-0 right-0 p-3 flex gap-2">
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); handlePlayToggle(asset.path); }}
-                                      className="p-2 rounded-full bg-primary/90 hover:bg-primary transition-colors"
-                                      aria-label="切换音频播放"
-                                    >
-                                      {playingAudio === asset.path ? (
-                                        <Pause className="w-3 h-3 text-primary-foreground" />
-                                      ) : (
-                                        <Play className="w-3 h-3 text-primary-foreground" />
-                                      )}
-                                    </button>
-                                  </div>
-                                )}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="absolute right-2 top-2">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void handleDelete(asset);
+                                  }}
+                                  className="p-2 rounded-full bg-destructive/90 text-destructive-foreground hover:bg-destructive transition-colors"
+                                  aria-label="删除素材"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
                               </div>
-                            )}
+                              <div className="absolute bottom-0 left-0 right-0 p-3 flex gap-2">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handlePlayToggle(asset.path); }}
+                                  className="p-2 rounded-full bg-primary/90 hover:bg-primary transition-colors"
+                                  aria-label="切换音频播放"
+                                >
+                                  {playingAudio === asset.path ? (
+                                    <Pause className="w-3 h-3 text-primary-foreground" />
+                                  ) : (
+                                    <Play className="w-3 h-3 text-primary-foreground" />
+                                  )}
+                                </button>
+                              </div>
+                            </div>
                           </div>
                           <div className="p-3 bg-card border-t border-border">
                             <h3 className="text-sm font-medium truncate mb-1">{title}</h3>
@@ -1700,6 +1730,7 @@ export function AssetManager() {
               <VoiceCardDetails
                 card={selectedVoiceCard}
                 projectPath={projectPath}
+                vocalAssetNames={vocalAssetNames}
                 onSave={handleSaveVoiceCard}
                 onGenerate={(card) => {
                   handleSaveVoiceCard(card);
@@ -1707,7 +1738,6 @@ export function AssetManager() {
                   setAiAssetPrompt('');
                   setAiGenerateOpen(true);
                 }}
-                onOpenUsage={openUsage}
               />
             ) : selectedAsset ? (
               <div className="h-full overflow-auto">
@@ -1765,72 +1795,76 @@ export function AssetManager() {
                     </div>
                   )}
 
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="text-xs uppercase tracking-wide text-muted-foreground">
-                        {activeTab === 'music' ? '参考音频' : '参考图'}
-                      </label>
-                      <button
-                        type="button"
-                        onClick={handleReferenceUpload}
-                        disabled={referenceUploading}
-                        className="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs flex items-center gap-1 disabled:opacity-50"
-                      >
-                        {referenceUploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
-                        上传
-                      </button>
+                  {selectedAsset.category !== 'vocal' && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-xs uppercase tracking-wide text-muted-foreground">
+                          {activeTab === 'music' ? '参考音频' : '参考图'}
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleReferenceUpload}
+                          disabled={referenceUploading}
+                          className="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs flex items-center gap-1 disabled:opacity-50"
+                        >
+                          {referenceUploading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+                          上传
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        {referencesForAsset(selectedAsset).length === 0 ? (
+                          <div className="text-xs text-muted-foreground rounded-md border border-dashed border-border p-3">暂无参考资料。</div>
+                        ) : referencesForAsset(selectedAsset).map((filename) => {
+                          const sourcePath = referenceFilePath(projectPath, selectedAsset.category, selectedAsset.name, filename);
+                          if (!sourcePath) return null;
+                          return (
+                            <div key={filename} className="flex items-center gap-2 rounded-md bg-secondary/20 p-2">
+                              {selectedAsset.category !== 'background' ? (
+                                <audio controls src={convertFileSrc(sourcePath)} className="min-w-0 flex-1 h-8" />
+                              ) : (
+                                <img src={convertFileSrc(sourcePath)} alt="" className="w-10 h-10 rounded object-cover bg-secondary" />
+                              )}
+                              <span className="min-w-0 flex-1 truncate text-xs font-mono-family">{filename}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleReferenceRemove(filename)}
+                                className="p-1 rounded hover:bg-destructive/10"
+                                aria-label="删除参考资料"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <div className="space-y-2">
-                      {referencesForAsset(selectedAsset).length === 0 ? (
-                        <div className="text-xs text-muted-foreground rounded-md border border-dashed border-border p-3">暂无参考资料。</div>
-                      ) : referencesForAsset(selectedAsset).map((filename) => {
-                        const sourcePath = referenceFilePath(projectPath, selectedAsset.category, selectedAsset.name, filename);
-                        if (!sourcePath) return null;
-                        return (
-                          <div key={filename} className="flex items-center gap-2 rounded-md bg-secondary/20 p-2">
-                            {selectedAsset.category !== 'background' ? (
-                              <audio controls src={convertFileSrc(sourcePath)} className="min-w-0 flex-1 h-8" />
-                            ) : (
-                              <img src={convertFileSrc(sourcePath)} alt="" className="w-10 h-10 rounded object-cover bg-secondary" />
-                            )}
-                            <span className="min-w-0 flex-1 truncate text-xs font-mono-family">{filename}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleReferenceRemove(filename)}
-                              className="p-1 rounded hover:bg-destructive/10"
-                              aria-label="删除参考资料"
-                            >
-                              <Trash2 className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  )}
 
-                  <div>
-                    <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
-                      描述
-                    </label>
-                    <textarea
-                      value={descriptionForAsset(selectedAsset)}
-                      onChange={(e) => handleDescriptionChange(selectedAsset, e.target.value)}
-                      rows={6}
-                      placeholder={activeTab === 'scene'
-                        ? '描述要生成或重绘的背景：地点、时间、天气、氛围、镜头角度、画面主体。'
-                        : '描述要生成的音频：情绪、节奏、乐器、用途或台词内容。'}
-                      className="w-full resize-y rounded-md border border-border bg-input-background px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                    />
-                  </div>
+                  {selectedAsset.category !== 'vocal' && (
+                    <div>
+                      <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
+                        描述
+                      </label>
+                      <textarea
+                        value={descriptionForAsset(selectedAsset)}
+                        onChange={(e) => handleDescriptionChange(selectedAsset, e.target.value)}
+                        rows={6}
+                        placeholder={activeTab === 'scene'
+                          ? '描述要生成或重绘的背景：地点、时间、天气、氛围、镜头角度、画面主体。'
+                          : '描述要生成的音频：情绪、节奏、乐器、用途或台词内容。'}
+                        className="w-full resize-y rounded-md border border-border bg-input-background px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-primary/50"
+                      />
+                    </div>
+                  )}
 
                   <div>
                     <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
                       剧本引用
                     </label>
                     <div className="space-y-2">
-                      {assetUsages.length === 0 ? (
+                      {displayedAssetUsages.length === 0 ? (
                         <div className="text-xs text-muted-foreground rounded-md border border-dashed border-border p-3">未在剧本中找到引用。</div>
-                      ) : assetUsages.map((usage, index) => (
+                      ) : displayedAssetUsages.map((usage, index) => (
                         <button
                           key={`${usage.sceneFile}-${usage.lineNumber}-${index}`}
                           type="button"
@@ -1854,14 +1888,16 @@ export function AssetManager() {
                     <Edit3 className="w-4 h-4" />
                     重命名
                   </button>
-                  <button
-                    onClick={() => handleGenerateFromAsset(selectedAsset)}
-                    className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2"
-                    aria-label="AI 生成"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    AI 生成
-                  </button>
+                  {selectedAsset.category !== 'vocal' && (
+                    <button
+                      onClick={() => handleGenerateFromAsset(selectedAsset)}
+                      className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2"
+                      aria-label="AI 生成"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      AI 生成
+                    </button>
+                  )}
                 </div>
               </div>
               </div>
@@ -1909,7 +1945,7 @@ export function AssetManager() {
               }
             }
           }
-          if (activeTab === 'music' && musicCategory === 'vocal' && selectedVoiceCard) {
+          if (activeTab === 'music' && selectedVoiceCard) {
             handleSaveVoiceCard({ ...selectedVoiceCard, voiceAsset: asset.name });
           }
         }}
@@ -1973,25 +2009,25 @@ function AssetAiGenerateDialog({
   const [generationProgress, setGenerationProgress] = useState<AiMediaGenerationProgress | null>(null);
 
   const isImageGeneration = activeTab === 'scene' || activeTab === 'cg';
+  const isVoiceGeneration = activeTab === 'music' && Boolean(initialVoiceCard);
   const title = isImageGeneration
     ? activeTab === 'cg' ? 'AI 生成 CG 剧情画' : 'AI 生成背景素材'
-    : `AI 生成${musicCategoryLabels[musicCategory]}`;
+    : isVoiceGeneration ? 'AI 生成配音' : `AI 生成${musicCategoryLabels[musicCategory]}`;
   const configuredModels = config ? parseConfiguredModels(config.model) : [];
   const effectiveModel = selectedModel || configuredModels[0] || config?.model.trim() || '';
   const promptSource = isImageGeneration
     ? initialSceneCard?.prompt.trim() || (initialAssetPrompt ?? '').trim()
-    : musicCategory === 'vocal'
+    : isVoiceGeneration
       ? [
           initialVoiceCard?.text.trim(),
           initialVoiceCard?.character ? `角色：${initialVoiceCard.character}` : '',
           initialVoiceCard?.emotion ? `情绪：${initialVoiceCard.emotion}` : '',
-          initialVoiceCard?.prompt.trim(),
         ].filter(Boolean).join('\n')
       : (initialAssetPrompt ?? '').trim();
-  const targetCategory = isImageGeneration ? 'background' : musicCategory;
+  const targetCategory = isImageGeneration ? 'background' : isVoiceGeneration ? 'vocal' : musicCategory;
   const targetFilename = isImageGeneration
     ? `${initialSceneCard?.targetStem || initialSceneCard?.imageAsset?.replace(/\.[^.]+$/, '') || 'generated_background'}.png`
-    : musicCategory === 'vocal'
+    : isVoiceGeneration
       ? initialVoiceCard?.voiceAsset || `${initialVoiceCard?.targetStem || initialVoiceCard?.id || 'generated_voice'}.wav`
       : `generated_${musicCategory}.wav`;
 
@@ -2049,7 +2085,13 @@ function AssetAiGenerateDialog({
       return;
     }
     if (!promptSource.trim()) {
-      setError(isImageGeneration ? '请先在右侧详情里填写描述。' : '请先在右侧详情里填写台词或描述。');
+      setError(
+        isImageGeneration
+          ? '请先在右侧详情里填写描述。'
+          : isVoiceGeneration
+            ? '请先在右侧详情里填写台词。'
+            : '请先在右侧详情里填写台词或描述。',
+      );
       return;
     }
     setError(null);
@@ -2059,9 +2101,9 @@ function AssetAiGenerateDialog({
       const media = isImageGeneration
         ? await aiGenerateImage(promptSource, effectiveModel)
         : await aiGenerateTts(
-            musicCategory === 'vocal' ? (initialVoiceCard?.text ?? promptSource) : promptSource,
-            musicCategory === 'vocal'
-              ? `${initialVoiceCard?.character || '旁白'} ${initialVoiceCard?.emotion || '默认'} ${initialVoiceCard?.prompt || ''}`
+            isVoiceGeneration ? (initialVoiceCard?.text ?? promptSource) : promptSource,
+            isVoiceGeneration
+              ? `${initialVoiceCard?.character || '旁白'} ${initialVoiceCard?.emotion || '默认'}`
               : promptSource,
             effectiveModel,
             targetFilename.split('.').pop() || 'mp3',
@@ -2124,11 +2166,13 @@ function AssetAiGenerateDialog({
 
           {promptSource.trim() ? (
             <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
-              将使用右侧详情中的描述、台词和情绪作为生成提示词。
+              {isVoiceGeneration
+                ? '将使用右侧详情中的台词、角色和情绪作为生成提示词。'
+                : '将使用右侧详情中的描述、台词和情绪作为生成提示词。'}
             </div>
           ) : (
             <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
-              右侧详情还没有可用于生成的描述。
+              {isVoiceGeneration ? '右侧详情还没有可用于生成的台词。' : '右侧详情还没有可用于生成的描述。'}
             </div>
           )}
 
@@ -2195,17 +2239,18 @@ function parseConfiguredModels(value: string): string[] {
 function VoiceCardDetails({
   card,
   projectPath,
+  vocalAssetNames,
   onSave,
   onGenerate,
-  onOpenUsage,
 }: {
   card: VoiceAssetCard;
   projectPath: string;
+  vocalAssetNames: Set<string>;
   onSave: (card: VoiceAssetCard) => void;
   onGenerate: (card: VoiceAssetCard) => void;
-  onOpenUsage: (usage: AssetUsage) => void;
 }) {
   const [draft, setDraft] = useState<VoiceAssetCard>(card);
+  const [filenameDraft, setFilenameDraft] = useState('');
 
   useEffect(() => {
     setDraft(card);
@@ -2213,15 +2258,29 @@ function VoiceCardDetails({
 
   const targetStem = draft.targetStem || draft.voiceAsset?.replace(/\.[^.]+$/, '') || draft.id;
   const targetFilename = draft.voiceAsset || `${targetStem}.wav`;
-  const targetPath = projectPath ? `${projectPath}\\game\\vocal\\${targetFilename}` : targetFilename;
+  const editableTargetFilename = draft.voiceAsset ? targetFilename : normalizeVoiceFilename(filenameDraft || targetFilename);
+  const targetPath = projectPath ? `${projectPath}\\game\\vocal\\${editableTargetFilename}` : editableTargetFilename;
+  const hasFilenameConflict = !draft.voiceAsset && vocalAssetNames.has(editableTargetFilename);
   const update = (patch: Partial<VoiceAssetCard>) => setDraft((current) => ({ ...current, ...patch }));
 
+  useEffect(() => {
+    setFilenameDraft(targetFilename);
+  }, [targetFilename]);
+
   const handleRenameVoice = () => {
-    const currentStem = targetStem.replace(/\.(mp3|ogg|wav|flac|aac)$/i, '');
-    const nextStem = prompt('输入新名称:', currentStem);
-    if (!nextStem || nextStem === currentStem) return;
-    const normalizedStem = nextStem.replace(/\.(mp3|ogg|wav|flac|aac)$/i, '');
+    const nextName = prompt('输入音频文件名:', targetFilename);
+    if (!nextName || nextName === targetFilename) return;
+    const normalizedStem = voiceFilenameStem(nextName);
     const next = { ...draft, targetStem: normalizedStem };
+    setDraft(next);
+    onSave(next);
+  };
+
+  const commitFilenameChange = (value: string) => {
+    if (draft.voiceAsset) return;
+    const normalized = normalizeVoiceFilename(value);
+    setFilenameDraft(normalized);
+    const next = { ...draft, targetStem: voiceFilenameStem(normalized) };
     setDraft(next);
     onSave(next);
   };
@@ -2234,7 +2293,7 @@ function VoiceCardDetails({
           <div className="w-2/3 h-8 rounded overflow-hidden bg-[repeating-linear-gradient(90deg,color-mix(in_srgb,var(--color-primary)_25%,transparent)_0_3px,transparent_3px_7px)]" />
         </div>
         <h2 className="text-xl mb-2 font-display-family">
-          {targetFilename}
+          {editableTargetFilename}
         </h2>
         <p className="text-xs text-muted-foreground truncate font-mono-family">
           {targetPath}
@@ -2244,18 +2303,31 @@ function VoiceCardDetails({
       <div className="space-y-4 mb-6">
         <div>
           <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
-            显示名称
+            音频文件名
           </label>
           <input
             type="text"
-            value={`${draft.character || '旁白'}：${draft.text}`}
-            readOnly
-            className="w-full px-3 py-2 bg-input-background border border-border rounded-md text-sm"
-            aria-label="语音显示名称"
+            value={filenameDraft || targetFilename}
+            readOnly={Boolean(draft.voiceAsset)}
+            onChange={(e) => setFilenameDraft(e.target.value)}
+            onBlur={(e) => commitFilenameChange(e.target.value)}
+            className={`w-full px-3 py-2 bg-input-background border rounded-md text-sm font-mono-family focus:outline-none focus:ring-2 ${
+              hasFilenameConflict
+                ? 'border-destructive/60 focus:ring-destructive/30'
+                : 'border-border focus:ring-primary/50'
+            }`}
+            aria-label="音频文件名"
           />
           <p className="mt-1 text-[10px] text-muted-foreground">
-            相同角色、台词和情绪会复用同一条语音。
+            {draft.voiceAsset
+              ? '已生成/导入的真实文件请在“音频 > 语音文件”中重命名。'
+              : '未生成前可自定义目标文件名；不写扩展名时默认使用 .wav。'}
           </p>
+          {hasFilenameConflict && (
+            <p className="mt-1 text-[10px] text-destructive">
+              game/vocal 中已存在同名文件，请换一个文件名后再生成。
+            </p>
+          )}
         </div>
 
         <div>
@@ -2297,39 +2369,6 @@ function VoiceCardDetails({
           />
         </div>
 
-        <div>
-          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
-            描述
-          </label>
-          <textarea
-            value={draft.prompt}
-            onChange={(e) => update({ prompt: e.target.value })}
-            rows={5}
-            placeholder="描述要生成的角色语音：情绪、语气、语速、音色、停顿。"
-            className="w-full resize-y rounded-md border border-border bg-input-background px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-primary/50"
-          />
-        </div>
-
-        <div>
-          <label className="text-xs uppercase tracking-wide text-muted-foreground block mb-2">
-            剧本引用
-          </label>
-          <div className="space-y-2">
-            {(draft.usages ?? []).length === 0 ? (
-              <div className="text-xs text-muted-foreground rounded-md border border-dashed border-border p-3">未在剧本中找到引用。</div>
-            ) : (draft.usages ?? []).map((usage, index) => (
-              <button
-                key={`${usage.sceneFile}-${usage.lineNumber}-${index}`}
-                type="button"
-                onClick={() => onOpenUsage(usage)}
-                className="w-full rounded-md bg-secondary/20 p-2 text-left hover:bg-primary/10 transition-colors"
-              >
-                <div className="text-xs text-primary">{usage.sceneFile} 第 {usage.lineNumber} 行</div>
-                <div className="mt-1 truncate text-[10px] text-muted-foreground font-mono-family">{usage.lineContent}</div>
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
 
       <div className="space-y-2">
@@ -2343,8 +2382,18 @@ function VoiceCardDetails({
         </button>
         <button
           type="button"
-          onClick={() => onGenerate(draft)}
-          className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-all flex items-center justify-center gap-2"
+          onClick={() => {
+            const next = draft.voiceAsset
+              ? draft
+              : { ...draft, targetStem: voiceFilenameStem(editableTargetFilename) };
+            if (!draft.voiceAsset) {
+              setDraft(next);
+              onSave(next);
+            }
+            onGenerate(next);
+          }}
+          disabled={hasFilenameConflict}
+          className="w-full px-4 py-2 rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 transition-all flex items-center justify-center gap-2"
         >
           <Sparkles className="w-4 h-4" />
           AI 生成

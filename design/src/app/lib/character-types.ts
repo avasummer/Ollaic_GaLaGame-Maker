@@ -18,7 +18,7 @@ export interface Character {
   id: string;
   name: string;            // primary name used in script dialogue
   aliases: string[];       // nicknames / alternative names
-  description: string;     // backstory / role description
+  description: string;     // visual appearance description for sprite generation
   personality: string;     // personality traits
   referenceImages?: string[]; // filenames in game/config/references/
   stance: string;          // moral/faction stance: "正义", "混沌", "中立", "邪恶"

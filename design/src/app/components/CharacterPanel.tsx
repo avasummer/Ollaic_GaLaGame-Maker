@@ -10,7 +10,6 @@ import {
   Users,
   X,
   Image as ImageIcon,
-  Music,
   Palette,
   Loader2,
   Search,
@@ -19,18 +18,15 @@ import {
   FileText,
   Upload,
 } from 'lucide-react';
-import type { Character, CharacterRelation, CharacterRef, CharacterSprite } from '../lib/character-types';
+import type { Character, CharacterSprite } from '../lib/character-types';
 import {
-  appendCharacterRelation,
   appendCharacterSprite,
   appendEmotionPreset,
   characterColor,
   createDraftCharacter,
   patchCharacter as patchCharacterList,
   referenceSpriteIndex,
-  removeCharacterRelation,
   removeCharacterSprite,
-  updateCharacterRelation,
   updateCharacterSprite,
   withReferenceSprite,
 } from '../lib/character-editing';
@@ -227,12 +223,6 @@ export function CharacterPanel({
     onCharacterCountChange?.(characters.length);
   }, [characters.length, onCharacterCountChange]);
 
-  const otherCharacters = useCallback((excludeId: string): CharacterRef[] =>
-    characters
-      .filter((c) => c.id !== excludeId && c.name.trim())
-      .map((c) => ({ id: c.id, name: c.name })),
-  [characters]);
-
   const patchCharacter = useCallback((id: string, partial: Partial<Character>) => {
     setCharacters((prev) => patchCharacterList(prev, id, partial));
   }, []);
@@ -384,18 +374,6 @@ export function CharacterPanel({
       referenceImages: (persisted.referenceImages ?? []).filter((name) => name !== filename),
     }, { showSavedBadge: false });
   }, [ensurePersistedCharacter, persistCharacter, projectPath]);
-
-  const updateRelation = useCallback((charId: string, index: number, field: keyof CharacterRelation, value: string) => {
-    setCharacters((prev) => updateCharacterRelation(prev, charId, index, field, value));
-  }, []);
-
-  const addRelation = useCallback((charId: string) => {
-    setCharacters((prev) => appendCharacterRelation(prev, charId));
-  }, []);
-
-  const removeRelation = useCallback((charId: string, index: number) => {
-    setCharacters((prev) => removeCharacterRelation(prev, charId, index));
-  }, []);
 
   const containerClass = embedded
     ? 'h-full flex flex-col overflow-hidden'
@@ -787,10 +765,21 @@ export function CharacterPanel({
             ) : mode === 'info' ? (
               <div className="relative z-10 p-4 space-y-4 max-w-5xl">
                 <section className="story-os-panel p-4">
-                  <h4 className="mb-3 text-xs uppercase tracking-wide text-muted-foreground font-mono-family">基本信息</h4>
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">基本信息</h4>
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        姓名、外观设定、性格气质、剧情定位和关键词会进入立绘生成上下文；关键词同时用于人物搜索。
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary">影响生成</span>
+                      <span className="rounded bg-secondary/50 px-1.5 py-0.5 text-[9px] text-muted-foreground">用于检索</span>
+                    </div>
+                  </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className={labelClass}>姓名 *</label>
+                      <label className={labelClass}>姓名 * <span className="text-primary">生成/脚本</span></label>
                       <input
                         value={selected.name}
                         onChange={(e) => patchCharacter(selected.id, { name: e.target.value })}
@@ -799,7 +788,7 @@ export function CharacterPanel({
                       />
                     </div>
                     <div>
-                      <label className={labelClass}>别名</label>
+                      <label className={labelClass}>别名 <span className="text-muted-foreground">检索</span></label>
                       <input
                         value={selected.aliases.join(', ')}
                         onChange={(e) => patchCharacter(selected.id, {
@@ -810,7 +799,7 @@ export function CharacterPanel({
                       />
                     </div>
                     <div>
-                      <label className={labelClass}>性别</label>
+                      <label className={labelClass}>性别 <span className="text-primary">生成</span></label>
                       <input
                         value={selected.gender}
                         onChange={(e) => patchCharacter(selected.id, { gender: e.target.value })}
@@ -818,7 +807,7 @@ export function CharacterPanel({
                       />
                     </div>
                     <div>
-                      <label className={labelClass}>年龄</label>
+                      <label className={labelClass}>年龄 <span className="text-primary">生成</span></label>
                       <input
                         value={selected.age}
                         onChange={(e) => patchCharacter(selected.id, { age: e.target.value })}
@@ -826,42 +815,51 @@ export function CharacterPanel({
                       />
                     </div>
                     <div>
-                      <label className={labelClass}>性格</label>
+                      <label className={labelClass}>性格气质 <span className="text-primary">生成/检索</span></label>
                       <input
                         value={selected.personality}
                         onChange={(e) => patchCharacter(selected.id, { personality: e.target.value })}
                         className={inputClass}
+                        placeholder="例：冷静、克制、对陌生人保持距离"
                       />
                     </div>
                     <div>
-                      <label className={labelClass}>立场</label>
+                      <label className={labelClass}>剧情定位 <span className="text-primary">生成/检索</span></label>
                       <input
                         value={selected.stance}
                         onChange={(e) => patchCharacter(selected.id, { stance: e.target.value })}
                         className={inputClass}
+                        placeholder="例：转校生 / 学生会成员 / 反派协力者"
                       />
                     </div>
                     <div className="md:col-span-2">
-                      <label className={labelClass}>简介</label>
+                      <label className={labelClass}>外观设定 <span className="text-primary">立绘生成核心</span></label>
                       <textarea
                         value={selected.description}
                         onChange={(e) => patchCharacter(selected.id, { description: e.target.value })}
-                        className={`${inputClass} h-20 resize-none`}
+                        className={`${inputClass} h-24 resize-none`}
+                        placeholder="只写可画出来的内容：发型、瞳色、服装、体型、配饰、标志物。不要在这里写长篇背景故事。"
                       />
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        这个字段会作为“外观设定”传给立绘生成。
+                      </p>
                     </div>
                     <div>
-                      <label className={labelClass}>关键词</label>
+                      <label className={labelClass}>关键词 <span className="text-primary">生成补充/搜索标签</span></label>
                       <input
                         value={selected.keywords.join(', ')}
                         onChange={(e) => patchCharacter(selected.id, {
                           keywords: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
                         })}
                         className={inputClass}
-                        placeholder="用逗号分隔"
+                        placeholder="例：学生, 傲娇, 学生会；用逗号分隔"
                       />
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        用于左侧搜索，也会作为补充词放进立绘生成 prompt；不影响配音。
+                      </p>
                     </div>
                     <div>
-                      <label className={labelClass}>标识颜色</label>
+                      <label className={labelClass}>标识颜色 <span className="text-muted-foreground">列表展示</span></label>
                       <div className="flex items-center gap-2">
                         <input
                           type="color"
@@ -878,90 +876,27 @@ export function CharacterPanel({
                       </div>
                     </div>
                     <div className="md:col-span-2">
-                      <label className={labelClass}>对话风格</label>
+                      <label className={labelClass}>说话风格 <span className="text-muted-foreground">文本/角色上下文</span></label>
                       <textarea
                         value={selected.dialogueStyle}
                         onChange={(e) => patchCharacter(selected.id, { dialogueStyle: e.target.value })}
                         className={`${inputClass} h-16 resize-none`}
+                        placeholder="例：句子短，少用感叹号；紧张时会回避称呼对方名字。"
                       />
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        用于角色上下文和后续文本生成，不决定立绘外观。
+                      </p>
                     </div>
                   </div>
-                </section>
-
-                <section className="story-os-panel grid grid-cols-1 md:grid-cols-2 gap-3 p-4">
-                  <h4 className="md:col-span-2 text-xs uppercase tracking-wide text-muted-foreground font-mono-family">语音设置</h4>
-                  <div>
-                    <label className={labelClass}>默认语音</label>
-                    <div className="flex items-center gap-2">
-                      <Music className="w-3.5 h-3.5 text-muted-foreground" />
-                      <input
-                        value={selected.defaultVoice || ''}
-                        onChange={(e) => patchCharacter(selected.id, { defaultVoice: e.target.value || undefined })}
-                        className={inputClass}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className={labelClass}>音色</label>
-                    <input
-                      value={selected.voiceTimbre || ''}
-                      onChange={(e) => patchCharacter(selected.id, { voiceTimbre: e.target.value || undefined })}
-                      className={inputClass}
-                    />
-                  </div>
-                </section>
-
-                <section className="story-os-panel space-y-2 p-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">人物关系</h4>
-                    <button
-                      onClick={() => addRelation(selected.id)}
-                      className="px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs flex items-center gap-1"
-                    >
-                      <Plus className="w-3 h-3" />
-                      添加
-                    </button>
-                  </div>
-                  {selected.relations.map((rel, index) => (
-                    <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto] gap-2 rounded-md bg-secondary/20 p-2">
-                      <select
-                        value={rel.targetId}
-                        onChange={(e) => updateRelation(selected.id, index, 'targetId', e.target.value)}
-                        className={inputClass}
-                      >
-                        <option value="">目标人物</option>
-                        {otherCharacters(selected.id).map((target) => (
-                          <option key={target.id} value={target.id}>{target.name}</option>
-                        ))}
-                      </select>
-                      <input
-                        value={rel.relationType}
-                        onChange={(e) => updateRelation(selected.id, index, 'relationType', e.target.value)}
-                        className={inputClass}
-                        placeholder="关系"
-                      />
-                      <input
-                        value={rel.description}
-                        onChange={(e) => updateRelation(selected.id, index, 'description', e.target.value)}
-                        className={inputClass}
-                        placeholder="说明"
-                      />
-                      <button
-                        onClick={() => removeRelation(selected.id, index)}
-                        className="p-1.5 hover:bg-destructive/10 rounded transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
-                      </button>
-                    </div>
-                  ))}
                 </section>
 
                 <section className="story-os-panel p-4">
-                  <label className={labelClass}>备注</label>
+                  <label className={labelClass}>内部备注 <span className="text-muted-foreground">不参与生成</span></label>
                   <textarea
                     value={selected.notes}
                     onChange={(e) => patchCharacter(selected.id, { notes: e.target.value })}
                     className={`${inputClass} h-20 resize-none`}
+                    placeholder="只记录制作备注、待办、设定来源；不会进入立绘或配音生成。"
                   />
                 </section>
               </div>

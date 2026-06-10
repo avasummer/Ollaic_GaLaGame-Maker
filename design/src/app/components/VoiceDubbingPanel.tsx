@@ -11,12 +11,14 @@ import {
 import {
   generateBatchTts, listenBatchTtsProgress,
   getAiTtsConfig,
+  type AiProviderConfig,
   type BatchTtsItem, type BatchTtsProgress,
 } from '../lib/ai-ipc';
 
 interface Props {
   projectPath: string;
   voiceCards: VoiceAssetCard[];
+  vocalAssetNames?: Set<string>;
   selectedVoiceCard: VoiceAssetCard | null;
   onSelectVoiceCard: (card: VoiceAssetCard | null) => void;
   onVoiceCardsChanged: () => void;
@@ -25,9 +27,34 @@ interface Props {
 type FilterStatus = 'all' | 'pending' | 'done';
 type GroupMode = 'scene' | 'character';
 
+function legacySceneKeyFromId(id: string): string | null {
+  const match = /^voice_(.+)_\d+$/.exec(id);
+  return match?.[1] || null;
+}
+
+function sceneKeysForCard(card: VoiceAssetCard): string[] {
+  const scenes = Array.from(new Set(
+    (card.usages ?? [])
+      .map((usage) => usage.sceneFile?.trim())
+      .filter((scene): scene is string => Boolean(scene)),
+  ));
+  if (scenes.length > 0) return scenes;
+  return [legacySceneKeyFromId(card.id) ?? '未关联场景'];
+}
+
+function parseConfiguredModels(value: string): string[] {
+  return Array.from(new Set(
+    value
+      .split(/[\n,，]/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  ));
+}
+
 export function VoiceDubbingPanel({
   projectPath,
   voiceCards,
+  vocalAssetNames,
   selectedVoiceCard,
   onSelectVoiceCard,
   onVoiceCardsChanged,
@@ -37,9 +64,19 @@ export function VoiceDubbingPanel({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState<Map<string, BatchTtsProgress>>(new Map());
+  const [batchTotal, setBatchTotal] = useState(0);
+  const [batchDialogOpen, setBatchDialogOpen] = useState(false);
+  const [batchConfig, setBatchConfig] = useState<AiProviderConfig | null>(null);
+  const [batchModel, setBatchModel] = useState('');
+  const [batchFormat, setBatchFormat] = useState('mp3');
+  const [batchConfigError, setBatchConfigError] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [importingId, setImportingId] = useState<string | null>(null);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
+  const isGenerated = useCallback(
+    (card: VoiceAssetCard) => !!card.voiceAsset && (!vocalAssetNames || vocalAssetNames.has(card.voiceAsset)),
+    [vocalAssetNames],
+  );
 
   // Reload metadata on mount so voice cards are fresh (e.g. after scene save)
   useEffect(() => {
@@ -48,30 +85,28 @@ export function VoiceDubbingPanel({
 
   // Filter cards
   const filteredCards = voiceCards.filter((card) => {
-    if (filterStatus === 'pending') return !card.voiceAsset;
-    if (filterStatus === 'done') return !!card.voiceAsset;
+    if (filterStatus === 'pending') return !isGenerated(card);
+    if (filterStatus === 'done') return isGenerated(card);
     return true;
   });
 
   // Group cards
   const groups = new Map<string, VoiceAssetCard[]>();
   for (const card of filteredCards) {
-    // Extract group key from tags (not available here, derive from ID)
-    // voice card IDs are formatted as "voice_{sceneStem}_{index}"
-    const parts = card.id.split('_');
-    const key = groupMode === 'scene'
-      ? (parts.length >= 2 ? parts[1] : '未分类')
-      : (card.character || '旁白');
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(card);
+    const keys = groupMode === 'scene' ? sceneKeysForCard(card) : [card.character || '旁白'];
+    for (const key of keys) {
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(card);
+    }
   }
   // Sort groups by name
   const sortedGroups = Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
+  const sortedGroupKeys = sortedGroups.map(([key]) => key).join('\u0000');
 
   // Auto-expand all groups
   useEffect(() => {
     setExpandedGroups(new Set(sortedGroups.map(([k]) => k)));
-  }, [groupMode, filterStatus, voiceCards.length]);
+  }, [groupMode, filterStatus, voiceCards.length, sortedGroupKeys]);
 
   const toggleGroup = (key: string) => {
     setExpandedGroups((prev) => {
@@ -90,7 +125,7 @@ export function VoiceDubbingPanel({
   };
 
   const toggleSelectAll = () => {
-    const pendingCards = filteredCards.filter((c) => !c.voiceAsset);
+    const pendingCards = filteredCards.filter((c) => !isGenerated(c));
     if (pendingCards.every((c) => selectedIds.has(c.id))) {
       setSelectedIds(new Set());
     } else {
@@ -98,20 +133,44 @@ export function VoiceDubbingPanel({
     }
   };
 
-  // Batch generate
-  const handleBatchGenerate = useCallback(async () => {
-    const targets = voiceCards.filter((c) => selectedIds.has(c.id) && !c.voiceAsset);
-    if (targets.length === 0) return;
+  const selectedPendingCards = voiceCards.filter((c) => selectedIds.has(c.id) && !isGenerated(c));
+  const configuredModels = batchConfig ? parseConfiguredModels(batchConfig.model) : [];
+  const effectiveBatchModel = batchModel || configuredModels[0] || batchConfig?.model.trim() || '';
+  const completedBatchCount = Array.from(batchProgress.values()).filter((p) => p.status === 'done' || p.status === 'error').length;
+  const doneBatchCount = Array.from(batchProgress.values()).filter((p) => p.status === 'done').length;
+  const errorBatchCount = Array.from(batchProgress.values()).filter((p) => p.status === 'error').length;
+  const batchPercent = batchTotal > 0 ? Math.min(100, Math.round((completedBatchCount / batchTotal) * 100)) : 0;
 
-    setBatchRunning(true);
-    setBatchProgress(new Map());
-
+  const openBatchGenerateDialog = useCallback(async () => {
+    const targets = voiceCards.filter((c) => selectedIds.has(c.id) && !isGenerated(c));
+    if (targets.length === 0 || batchRunning) return;
+    setBatchDialogOpen(true);
+    setBatchConfigError(null);
     const ttsConfig = await getAiTtsConfig().catch(() => null);
-    if (!ttsConfig || !ttsConfig.model) {
-      alert('请先在 AI 设置中配置 TTS 供应商和模型。');
-      setBatchRunning(false);
+    if (!ttsConfig || !ttsConfig.model.trim()) {
+      setBatchConfig(null);
+      setBatchModel('');
+      setBatchConfigError('请先在 AI 设置中配置 TTS 供应商和模型。');
       return;
     }
+    const models = parseConfiguredModels(ttsConfig.model);
+    setBatchConfig(ttsConfig);
+    setBatchModel((current) => current || models[0] || ttsConfig.model.trim());
+  }, [batchRunning, isGenerated, selectedIds, voiceCards]);
+
+  // Batch generate
+  const handleBatchGenerate = useCallback(async () => {
+    const targets = voiceCards.filter((c) => selectedIds.has(c.id) && !isGenerated(c));
+    if (targets.length === 0) return;
+    if (!effectiveBatchModel) {
+      setBatchConfigError('请选择用于配音生成的模型。');
+      return;
+    }
+
+    setBatchRunning(true);
+    setBatchDialogOpen(false);
+    setBatchTotal(targets.length);
+    setBatchProgress(new Map());
 
     const items: BatchTtsItem[] = targets.map((card) => ({
       voiceCardId: card.id,
@@ -128,16 +187,22 @@ export function VoiceDubbingPanel({
     });
 
     try {
-      await generateBatchTts(projectPath, items, ttsConfig.model, 'mp3');
+      const results = await generateBatchTts(projectPath, items, effectiveBatchModel, batchFormat);
+      setBatchProgress((prev) => {
+        const next = new Map(prev);
+        for (const result of results) next.set(result.voiceCardId, result);
+        return next;
+      });
       onVoiceCardsChanged();
     } catch (e) {
       console.error('Batch TTS failed:', e);
+      alert(`批量生成失败: ${e}`);
     } finally {
       unlisten();
       setBatchRunning(false);
       setSelectedIds(new Set());
     }
-  }, [projectPath, voiceCards, selectedIds, onVoiceCardsChanged]);
+  }, [batchFormat, effectiveBatchModel, projectPath, voiceCards, selectedIds, onVoiceCardsChanged, isGenerated]);
 
   // Single generate
   const handleSingleGenerate = useCallback(async (card: VoiceAssetCard) => {
@@ -204,8 +269,8 @@ export function VoiceDubbingPanel({
     }
   }, [projectPath, selectedVoiceCard, onSelectVoiceCard, onVoiceCardsChanged]);
 
-  const pendingCount = voiceCards.filter((c) => !c.voiceAsset).length;
-  const doneCount = voiceCards.filter((c) => !!c.voiceAsset).length;
+  const pendingCount = voiceCards.filter((c) => !isGenerated(c)).length;
+  const doneCount = voiceCards.filter((c) => isGenerated(c)).length;
 
   return (
     <div className="flex h-full flex-col bg-surface-container-lowest">
@@ -250,14 +315,14 @@ export function VoiceDubbingPanel({
               onClick={toggleSelectAll}
               className="flex items-center gap-1 rounded-sm px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
             >
-              {filteredCards.filter((c) => !c.voiceAsset).every((c) => selectedIds.has(c.id))
+              {filteredCards.filter((c) => !isGenerated(c)).every((c) => selectedIds.has(c.id))
                 ? <CheckSquare className="h-3.5 w-3.5" />
                 : <Square className="h-3.5 w-3.5" />
               }
               全选待配音
             </button>
             <button
-              onClick={handleBatchGenerate}
+              onClick={openBatchGenerateDialog}
               disabled={batchRunning || selectedIds.size === 0}
               className="flex items-center gap-1.5 rounded-sm bg-primary px-3 py-1.5 text-[11px] font-semibold text-on-primary hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
@@ -274,17 +339,14 @@ export function VoiceDubbingPanel({
           <div className="flex items-center gap-2 text-xs">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
             <span className="text-primary font-semibold">
-              生成中... {Array.from(batchProgress.values()).filter((p) => p.status === 'done').length}/{batchProgress.size}
+              生成中... {doneBatchCount}/{batchTotal}
+              {errorBatchCount > 0 && <span className="ml-2 text-error">失败 {errorBatchCount}</span>}
             </span>
           </div>
           <div className="mt-1 h-1 rounded-full bg-secondary/30 overflow-hidden">
             <div
               className="h-full bg-primary rounded-full transition-all duration-300"
-              style={{
-                width: `${batchProgress.size > 0
-                  ? (Array.from(batchProgress.values()).filter((p) => p.status === 'done').length / batchProgress.size) * 100
-                  : 0}%`,
-              }}
+              style={{ width: `${batchPercent}%` }}
             />
           </div>
         </div>
@@ -306,8 +368,8 @@ export function VoiceDubbingPanel({
           <div className="space-y-1 p-2">
             {sortedGroups.map(([groupKey, cards]) => {
               const isExpanded = expandedGroups.has(groupKey);
-              const groupPending = cards.filter((c) => !c.voiceAsset).length;
-              const groupDone = cards.filter((c) => !!c.voiceAsset).length;
+              const groupPending = cards.filter((c) => !isGenerated(c)).length;
+              const groupDone = cards.filter((c) => isGenerated(c)).length;
               return (
                 <div key={groupKey}>
                   {/* Group header */}
@@ -331,7 +393,7 @@ export function VoiceDubbingPanel({
                         const isChecked = selectedIds.has(card.id);
                         const progress = batchProgress.get(card.id);
                         const isGenerating = generatingId === card.id || progress?.status === 'generating';
-                        const hasAudio = !!card.voiceAsset || progress?.status === 'done';
+                        const hasAudio = isGenerated(card) || progress?.status === 'done';
 
                         return (
                           <div
@@ -344,7 +406,7 @@ export function VoiceDubbingPanel({
                             }`}
                           >
                             {/* Checkbox (only for pending) */}
-                            {!card.voiceAsset && !isGenerating && (
+                            {!isGenerated(card) && !isGenerating && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); toggleSelect(card.id); }}
                                 className="shrink-0"
@@ -394,7 +456,7 @@ export function VoiceDubbingPanel({
 
                             {/* Actions */}
                             <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              {!card.voiceAsset && !isGenerating && (
+                              {!isGenerated(card) && !isGenerating && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); handleSingleGenerate(card); }}
                                   className="rounded p-1.5 hover:bg-primary/10 text-primary transition-colors"
@@ -403,7 +465,7 @@ export function VoiceDubbingPanel({
                                   <Wand2 className="h-3.5 w-3.5" />
                                 </button>
                               )}
-                              {!card.voiceAsset && !isGenerating && (
+                              {!isGenerated(card) && !isGenerating && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); handleImportFill(card); }}
                                   disabled={importingId === card.id}
@@ -435,6 +497,97 @@ export function VoiceDubbingPanel({
           </div>
         )}
       </div>
+      {batchDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-[460px] max-w-full rounded-lg border border-border bg-card shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div>
+                <h3 className="text-sm font-semibold">AI 配音生成</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  将生成 {selectedPendingCards.length} 条待配音台词
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBatchDialogOpen(false)}
+                className="rounded-sm px-2 py-1 text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="space-y-4 p-4">
+              {batchConfigError ? (
+                <div className="rounded-md border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
+                  {batchConfigError}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="mb-2 block text-xs uppercase tracking-wide text-muted-foreground">
+                      生成模型
+                    </label>
+                    {configuredModels.length > 0 ? (
+                      <select
+                        value={effectiveBatchModel}
+                        onChange={(event) => setBatchModel(event.target.value)}
+                        className="w-full rounded-md border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                      >
+                        {configuredModels.map((model) => (
+                          <option key={model} value={model}>{model}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={batchModel}
+                        onChange={(event) => setBatchModel(event.target.value)}
+                        className="w-full rounded-md border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                        placeholder="输入 TTS 模型"
+                      />
+                    )}
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-xs uppercase tracking-wide text-muted-foreground">
+                      输出格式
+                    </label>
+                    <select
+                      value={batchFormat}
+                      onChange={(event) => setBatchFormat(event.target.value)}
+                      className="w-full rounded-md border border-border bg-input-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    >
+                      <option value="mp3">MP3</option>
+                      <option value="wav">WAV</option>
+                    </select>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      实际可用格式取决于当前 TTS 供应商；MP3 最稳定。
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+                    生成时会逐条写入 game/vocal，并在列表中显示每条台词的生成状态。
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border p-4">
+              <button
+                type="button"
+                onClick={() => setBatchDialogOpen(false)}
+                className="rounded-md bg-secondary px-4 py-2 text-sm hover:bg-secondary/70"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleBatchGenerate}
+                disabled={Boolean(batchConfigError) || !effectiveBatchModel || selectedPendingCards.length === 0}
+                className="inline-flex min-w-24 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Wand2 className="h-4 w-4" />
+                开始生成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

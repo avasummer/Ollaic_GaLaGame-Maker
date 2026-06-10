@@ -201,6 +201,7 @@ function renderTypeFields(
   const figureAliases = aliasesForCategory(metadata, 'figure');
   const bgmAliases = aliasesForCategory(metadata, 'bgm');
   const sfxAliases = aliasesForCategory(metadata, 'sfx');
+  const vocalAliases = aliasesForCategory(metadata, 'vocal');
   const videoAliases = aliasesForCategory(metadata, 'video');
 
   switch (node.type) {
@@ -243,30 +244,67 @@ function renderTypeFields(
           </div>
           <div>
             <label className={`${labelClass} font-mono-family`}>语音文件</label>
-            <input
-              type="text"
-              value={node.voice || ''}
-              onChange={(e) => onUpdate({ voice: e.target.value || undefined })}
-              className={`${inputClass} font-mono-family`}
-              placeholder="例: v1.wav"
-              aria-label="语音文件"
-            />
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={node.voice || ''}
+                onChange={(e) => onUpdate({ voice: e.target.value || undefined })}
+                className={`${inputClass} flex-1 font-mono-family`}
+                placeholder="例: v1.wav"
+                aria-label="语音文件"
+              />
+              {projectPath && (
+                <AssetPickerButton
+                  projectPath={projectPath}
+                  category="vocal"
+                  currentValue={node.voice || ''}
+                  aliases={vocalAliases}
+                  onSelect={(name) => onUpdate({ voice: name === 'none' ? undefined : name })}
+                />
+              )}
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">作为当前对白的 -voice 标记保存，不会新建独立音频指令</p>
           </div>
         </>
       );
 
     case 'narrator':
       return (
-        <div>
-          <label className={`${labelClass} font-mono-family`}>旁白内容</label>
-          <textarea
-            value={node.content}
-            onChange={(e) => onUpdate({ content: e.target.value })}
-            className={`${inputClass} h-24 resize-none font-body-family`}
-            placeholder="输入旁白文本..."
-            aria-label="旁白内容"
-          />
-        </div>
+        <>
+          <div>
+            <label className={`${labelClass} font-mono-family`}>旁白内容</label>
+            <textarea
+              value={node.content}
+              onChange={(e) => onUpdate({ content: e.target.value })}
+              className={`${inputClass} h-24 resize-none font-body-family`}
+              placeholder="输入旁白文本..."
+              aria-label="旁白内容"
+            />
+          </div>
+          <div>
+            <label className={`${labelClass} font-mono-family`}>语音文件</label>
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={node.voice || ''}
+                onChange={(e) => onUpdate({ voice: e.target.value || undefined })}
+                className={`${inputClass} flex-1 font-mono-family`}
+                placeholder="例: narrator_01.wav"
+                aria-label="旁白语音文件"
+              />
+              {projectPath && (
+                <AssetPickerButton
+                  projectPath={projectPath}
+                  category="vocal"
+                  currentValue={node.voice || ''}
+                  aliases={vocalAliases}
+                  onSelect={(name) => onUpdate({ voice: name === 'none' ? undefined : name })}
+                />
+              )}
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">作为当前旁白的 -voice 标记保存，不会新建独立音频指令</p>
+          </div>
+        </>
       );
 
     case 'intro':

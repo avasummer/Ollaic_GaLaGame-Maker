@@ -982,6 +982,27 @@ function ScriptCommandStream({
                   <p className="mb-1 font-bold text-foreground">设置背景: {node.asset || node.content || '未选择背景'}</p>
                 </div>
               </div>
+            ) : node.type === 'bgm' || node.type === 'playEffect' || node.type === 'playVideo' ? (
+              <div className="flex items-center gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center border border-audio/25 bg-audio-soft">
+                  <Music className="h-5 w-5 text-audio" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold text-audio">
+                      {node.type === 'bgm' ? '背景音乐' : node.type === 'playEffect' ? '音效' : '视频'}
+                    </span>
+                    {node.volume !== undefined && (
+                      <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">
+                        音量 {node.volume}
+                      </span>
+                    )}
+                  </div>
+                  <p className="truncate font-mono-family text-sm text-foreground">
+                    {node.asset || node.content || '未选择素材'}
+                  </p>
+                </div>
+              </div>
             ) : isDialogue ? (
               <div className="flex items-start gap-3">
                 {charColor ? (
