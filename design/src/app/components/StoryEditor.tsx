@@ -33,8 +33,14 @@ import type { Character } from '../lib/character-types';
 import { characterColor } from '../lib/character-editing';
 import { useAiAgent } from '../hooks/useAiAgent';
 import { insertSceneNode, reorderSceneNodes, pasteSceneNode } from '../lib/scene-editing';
-import { syncSceneVoiceCards } from '../lib/assets-ipc';
-import { loadAssetMetadata, saveAssetMetadata, ensureSceneCard } from '../lib/asset-metadata';
+import { listAssets, syncSceneVoiceCards } from '../lib/assets-ipc';
+import {
+  ensureSceneCard,
+  extractSceneBackgroundAssets,
+  loadAssetMetadata,
+  saveAssetMetadata,
+  syncSceneCardsFromBackgrounds,
+} from '../lib/asset-metadata';
 import { AiMemoryPanel } from './AiMemoryPanel';
 import { AiMessageBubble } from './AiMessageBubble';
 import { ChangeSetCard } from './AiPendingCard';
@@ -1795,16 +1801,47 @@ export function StoryEditor() {
     );
   }, [currentSceneName]);
 
+  const syncSceneBackgroundCard = useCallback(async (sceneFile: string, sceneNodes: WebGalNode[]) => {
+    if (!projectPath) return;
+    try {
+      const backgroundAssets = await listAssets(projectPath, 'background');
+      const availableBackgrounds = new Set(backgroundAssets.map((asset) => asset.name));
+      const backgroundFilenames = extractSceneBackgroundAssets(sceneNodes);
+      if (backgroundFilenames.length === 0) return;
+      const metadata = await loadAssetMetadata(projectPath, projectId);
+      const next = syncSceneCardsFromBackgrounds(
+        metadata,
+        sceneFile,
+        backgroundFilenames,
+        availableBackgrounds,
+      );
+      if (next !== metadata) await saveAssetMetadata(projectPath, next);
+    } catch (e) {
+      console.warn('[asset] sync scene background card failed:', e);
+    }
+  }, [projectId, projectPath]);
+
+  // 场景背景卡片同步只在保存时进行（见 handleSave），避免用户逐字输入文件名
+  // 时把 t / te / tes 等中间状态都建成卡片。
+
   // ---------------------------------------------------------------------------
   // Save
   // ---------------------------------------------------------------------------
   const handleSave = useCallback(async (): Promise<boolean> => {
     setSaveStatus('saving');
     try {
+      let nodesToSave = nodesRef.current.length > 0 ? nodesRef.current : nodes;
+      if (showScript) {
+        nodesToSave = await parseScene(scriptSource);
+        nodesRef.current = nodesToSave;
+        setNodes(nodesToSave);
+        setSelectedNode(null);
+      }
       if (projectPath) {
         // Save to project's game/scene/ directory
         const scenePath = await getScenePath(projectPath, currentSceneName);
-        await saveScene(scenePath, nodes);
+        await saveScene(scenePath, nodesToSave);
+        await syncSceneBackgroundCard(currentSceneName, nodesToSave);
       } else {
         // No project open, prompt user to pick a save location.
         const selected = await saveDialog({
@@ -1816,7 +1853,7 @@ export function StoryEditor() {
           setSaveStatus('idle');
           return false;
         }
-        await saveScene(selected, nodes);
+        await saveScene(selected, nodesToSave);
       }
       setDirty(false);
       sceneDraftCache.current.delete(currentSceneName);
@@ -1828,7 +1865,7 @@ export function StoryEditor() {
           console.warn('[voice] sync voice cards failed:', e),
         );
       }
-      setSceneLinkMap((prev) => ({ ...prev, [currentSceneName]: extractSceneLinks(nodes) }));
+      setSceneLinkMap((prev) => ({ ...prev, [currentSceneName]: extractSceneLinks(nodesToSave) }));
       setSaveStatus('saved');
       // Reset status after 2s
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -1841,7 +1878,16 @@ export function StoryEditor() {
       saveTimerRef.current = setTimeout(() => setSaveStatus('idle'), 3000);
       return false;
     }
-  }, [projectPath, currentSceneName, nodes]);
+  }, [
+    currentSceneName,
+    loadSceneHeaders,
+    nodes,
+    projectInfo?.scenes,
+    projectPath,
+    scriptSource,
+    showScript,
+    syncSceneBackgroundCard,
+  ]);
 
   // Guard navigation that would discard unsaved changes (back to home, window close)
   const guardedNavigate = useCallback((action: () => void) => {
@@ -2563,7 +2609,10 @@ export function StoryEditor() {
               </div>
               <textarea
                 value={scriptSource}
-                onChange={(e) => setScriptSource(e.target.value)}
+                onChange={(e) => {
+                  setScriptSource(e.target.value);
+                  markDirty();
+                }}
                 className="flex-1 p-4 bg-transparent resize-none focus:outline-none text-sm leading-relaxed font-mono-family"
                 spellCheck={false}
                 aria-label="WebGAL 脚本编辑器"

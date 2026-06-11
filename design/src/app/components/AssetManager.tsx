@@ -49,6 +49,7 @@ import {
   loadAssetMetadata,
   referenceCategoryForAsset,
   referenceFilePath,
+  renameAssetMetadataFilename,
   saveAssetMetadata,
   setAssetAlias,
   setAssetDescription,
@@ -252,6 +253,38 @@ function getAudioDurationLabel(
   return formatDuration(audioDurations[assetPath]);
 }
 
+function normalizeRenamedAssetFilename(value: string, extension: string): string {
+  const normalizedExt = extension.replace(/^\./, '');
+  const trimmed = value.trim();
+  const withoutExtension = trimmed.replace(new RegExp(`\\.${normalizedExt}$`, 'i'), '');
+  return `${withoutExtension}.${normalizedExt}`;
+}
+
+async function replaceBackgroundReferencesInScenes(
+  projectPath: string,
+  usages: AssetUsage[],
+  oldName: string,
+  newName: string,
+): Promise<number> {
+  const sceneFiles = Array.from(new Set(usages.map((usage) => usage.sceneFile).filter(Boolean)));
+  let updatedCount = 0;
+  for (const sceneFile of sceneFiles) {
+    const scenePath = await getScenePath(projectPath, sceneFile);
+    const nodes = await loadScene(scenePath);
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+      if (node.type !== 'changeBg') return node;
+      const current = (node.asset || node.content || '').trim();
+      if (current !== oldName) return node;
+      changed = true;
+      updatedCount += 1;
+      return { ...node, asset: newName, content: newName };
+    });
+    if (changed) await saveScene(scenePath, nextNodes);
+  }
+  return updatedCount;
+}
+
 const tabConfig: { id: TabId; label: string; icon: typeof Image }[] = [
   { id: 'scene', label: '场景', icon: Image },
   { id: 'cg', label: 'CG', icon: Award },
@@ -359,7 +392,13 @@ export function AssetManager() {
     if (!projectPath) return;
     loadAssetsForTab(activeTab, projectPath, musicCategory);
     loadAllAssets(projectPath);
-  }, [projectPath, activeTab, musicCategory, loadAssetsForTab, loadAllAssets]);
+    // 切换到场景 Tab 时重新加载 metadata，以便看到脚本流中新建的场景卡片
+    if (activeTab === 'scene') {
+      loadAssetMetadata(projectPath, projectId)
+        .then(applyMetadata)
+        .catch((e) => setError(String(e)));
+    }
+  }, [projectPath, activeTab, musicCategory, loadAssetsForTab, loadAllAssets, applyMetadata, projectId]);
 
   useEffect(() => {
     if (!projectPath) return;
@@ -543,7 +582,8 @@ export function AssetManager() {
         return item.card.title.toLowerCase().includes(q)
           || item.card.prompt.toLowerCase().includes(q)
           || (item.card.sceneFile ?? '').toLowerCase().includes(q)
-          || (item.card.imageAsset ?? '').toLowerCase().includes(q);
+          || (item.card.imageAsset ?? '').toLowerCase().includes(q)
+          || (item.card.targetStem ?? '').toLowerCase().includes(q);
       }
       return item.asset.name.toLowerCase().includes(q) || aliasForAsset(item.asset).toLowerCase().includes(q);
     });
@@ -640,18 +680,39 @@ export function AssetManager() {
     const newName = prompt('输入新名称:', stem);
     if (!newName || newName === stem) return;
 
-    const fullNewName = `${newName}.${ext}`;
+    const fullNewName = normalizeRenamedAssetFilename(newName, ext);
+    if (fullNewName === selectedAsset.name) return;
     try {
       await flushAssetMetadataSaves(projectPath);
+      const usages = selectedAsset.category === 'background'
+        ? await findAssetUsages(projectPath, selectedAsset.name, selectedAsset.category)
+        : [];
+      if (usages.length > 0) {
+        const ok = confirm(`该图片被 ${usages.length} 处剧本引用。重命名后将同步更新这些引用。\n\n${selectedAsset.name} -> ${fullNewName}`);
+        if (!ok) return;
+      }
       const info = await renameAsset(projectPath, selectedAsset.category, selectedAsset.name, fullNewName);
+      if (selectedAsset.category === 'background') {
+        await replaceBackgroundReferencesInScenes(projectPath, usages, selectedAsset.name, fullNewName);
+      }
       setAssets(prev => prev.map(a => a.path === selectedAsset.path ? info : a));
       setAllAssets(prev => prev.map(a => a.path === selectedAsset.path ? info : a));
-      applyMetadata(await loadAssetMetadata(projectPath));
+      const nextMetadata = renameAssetMetadataFilename(
+        await loadAssetMetadata(projectPath),
+        selectedAsset.category,
+        selectedAsset.name,
+        fullNewName,
+      );
+      await saveAssetMetadata(projectPath, nextMetadata);
+      applyMetadata(nextMetadata);
       setSelectedAsset(info);
+      if (selectedSceneCard?.imageAsset === selectedAsset.name) {
+        setSelectedSceneCard({ ...selectedSceneCard, imageAsset: fullNewName });
+      }
     } catch (e) {
       setError(String(e));
     }
-  }, [applyMetadata, selectedAsset, projectPath]);
+  }, [applyMetadata, projectPath, selectedAsset, selectedSceneCard]);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -1225,7 +1286,7 @@ export function AssetManager() {
                       const thumbnail = asset ? getThumbnail(asset) : null;
                       const title = card?.title || (asset ? (aliasForAsset(asset) || asset.name) : '');
                       const subtitle = card
-                        ? [card.sceneFile, card.imageAsset].filter(Boolean).join(' · ') || '尚未生成图片'
+                        ? [card.sceneFile, card.imageAsset || `${card.targetStem}.png`].filter(Boolean).join(' · ') || '尚未生成图片'
                         : asset ? asset.name : '';
                       const isSelected = card
                         ? selectedSceneCard?.id === card.id
@@ -1725,6 +1786,7 @@ export function AssetManager() {
                   setAiAssetPrompt('');
                   setAiGenerateOpen(true);
                 }}
+                onOpenUsage={openUsage}
               />
             ) : selectedVoiceCard ? (
               <VoiceCardDetails
@@ -2286,7 +2348,8 @@ function VoiceCardDetails({
   };
 
   return (
-    <div className="p-6">
+    <div className="h-full overflow-auto">
+      <div className="p-6">
       <div className="mb-6">
         <div className="aspect-square rounded-lg overflow-hidden bg-secondary/30 mb-4 flex flex-col items-center justify-center gap-4">
           <Music className="w-16 h-16 text-muted-foreground" />
@@ -2399,6 +2462,7 @@ function VoiceCardDetails({
           AI 生成
         </button>
       </div>
+      </div>
     </div>
   );
 }
@@ -2414,6 +2478,7 @@ function SceneCardDetails({
   onReferenceRemove,
   onSave,
   onGenerate,
+  onOpenUsage,
 }: {
   card: SceneAssetCard;
   projectPath: string;
@@ -2425,8 +2490,10 @@ function SceneCardDetails({
   onReferenceRemove: (card: SceneAssetCard, filename: string) => void;
   onSave: (card: SceneAssetCard) => void;
   onGenerate: (card: SceneAssetCard) => void;
+  onOpenUsage: (usage: AssetUsage) => void;
 }) {
   const [draft, setDraft] = useState<SceneAssetCard>(card);
+  const [usages, setUsages] = useState<AssetUsage[]>([]);
 
   useEffect(() => {
     setDraft({ ...card, targetStem: card.targetStem || card.imageAsset?.replace(/\.[^.]+$/, '') || card.id });
@@ -2437,6 +2504,19 @@ function SceneCardDetails({
   const targetStem = draft.targetStem || draft.imageAsset?.replace(/\.[^.]+$/, '') || draft.id;
   const targetFilename = sceneCardTargetFilename(draft);
   const targetPath = projectPath ? `${projectPath}\\game\\background\\${targetFilename}` : targetFilename;
+
+  // 查找当前背景图（无论是否已生成）被哪些剧本行引用。
+  useEffect(() => {
+    if (!projectPath || !targetFilename) {
+      setUsages([]);
+      return;
+    }
+    let cancelled = false;
+    findAssetUsages(projectPath, targetFilename, 'background')
+      .then((rows) => { if (!cancelled) setUsages(rows); })
+      .catch(() => { if (!cancelled) setUsages([]); });
+    return () => { cancelled = true; };
+  }, [projectPath, targetFilename]);
 
   const update = (patch: Partial<SceneAssetCard>) => {
     setDraft((current) => {
@@ -2456,7 +2536,8 @@ function SceneCardDetails({
   };
 
   return (
-    <div className="p-6">
+    <div className="h-full overflow-auto">
+      <div className="p-6">
       <div className="mb-6">
         <div className="aspect-video rounded-lg overflow-hidden bg-secondary/30 mb-4">
           {previewUrl ? (
@@ -2556,14 +2637,19 @@ function SceneCardDetails({
             剧本引用
           </label>
           <div className="space-y-2">
-            {draft.sceneFile ? (
-              <div className="rounded-md bg-secondary/20 p-2 text-left">
-                <div className="text-xs text-primary">{draft.sceneFile}</div>
-                <div className="mt-1 truncate text-[10px] text-muted-foreground font-mono-family">新场景生成后可在剧本中引用。</div>
-              </div>
-            ) : (
+            {usages.length === 0 ? (
               <div className="text-xs text-muted-foreground rounded-md border border-dashed border-border p-3">未在剧本中找到引用。</div>
-            )}
+            ) : usages.map((usage, index) => (
+              <button
+                key={`${usage.sceneFile}-${usage.lineNumber}-${index}`}
+                type="button"
+                onClick={() => onOpenUsage(usage)}
+                className="w-full rounded-md bg-secondary/20 p-2 text-left hover:bg-primary/10 transition-colors"
+              >
+                <div className="text-xs text-primary">{usage.sceneFile} 第 {usage.lineNumber} 行</div>
+                <div className="mt-1 truncate text-[10px] text-muted-foreground font-mono-family">{usage.lineContent}</div>
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -2585,6 +2671,7 @@ function SceneCardDetails({
           <Sparkles className="w-4 h-4" />
           AI 生成
         </button>
+      </div>
       </div>
     </div>
   );

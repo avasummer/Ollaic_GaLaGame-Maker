@@ -727,6 +727,17 @@ function findSpriteSelection(characters: Character[], filename: string) {
   return null;
 }
 
+function figureAliasesFromCharacters(characters: Character[]): Record<string, string> {
+  const aliases: Record<string, string> = {};
+  for (const character of characters) {
+    for (const sprite of character.sprites) {
+      if (!sprite.file) continue;
+      aliases[sprite.file] = `${character.name}_${sprite.emotion || '默认'}`;
+    }
+  }
+  return aliases;
+}
+
 function CharacterFigurePicker({
   node,
   onUpdate,
@@ -744,6 +755,7 @@ function CharacterFigurePicker({
   const inferred = useMemo(() => findSpriteSelection(characters, filename), [characters, filename]);
   const selectedCharacterName = node.figureCharacter || inferred?.character.name || suggestedFigureCharacter || '';
   const selectedCharacter = characters.find((character) => character.name === selectedCharacterName);
+  const figureAliases = useMemo(() => figureAliasesFromCharacters(characters), [characters]);
 
   useEffect(() => {
     if (!node.figureCharacter && !node.figureEmotion && inferred) {
@@ -823,6 +835,7 @@ function CharacterFigurePicker({
                 projectPath={projectPath}
                 category="figure"
                 currentValue={filename}
+                aliases={figureAliases}
                 onSelect={(name) => onUpdate({
                   asset: name,
                   content: name,
@@ -870,12 +883,12 @@ function CharacterEmotionDialog({
               <img src={convertFileSrc(`${projectPath}/game/figure/${selectedSprite.file}`)} alt="" className="w-full h-full object-cover object-top" />
             </div>
             <div className="min-w-0">
-              <div className="text-sm truncate">{selectedSprite.emotion}</div>
+              <div className="text-sm truncate">{character.name} · {selectedSprite.emotion || '默认'}</div>
               <div className="mt-1 text-[11px] text-muted-foreground truncate font-mono-family">{selectedSprite.file}</div>
             </div>
           </div>
         ) : (
-          <div className="p-3 text-sm text-muted-foreground">选择表情形态</div>
+          <div className="p-3 text-sm text-muted-foreground">选择 {character.name} 的表情/姿态</div>
         )}
       </button>
 
@@ -892,7 +905,7 @@ function CharacterEmotionDialog({
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜索表情..."
+                placeholder="搜索表情、姿态或文件名..."
                 className="w-full pl-10 pr-3 py-2 text-sm bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50"
                 aria-label="搜索表情"
                 autoFocus
@@ -903,7 +916,7 @@ function CharacterEmotionDialog({
             {character.sprites.length === 0 ? (
               <div className="py-12 text-center text-sm text-muted-foreground">该角色暂无立绘，请先在素材库中添加。</div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {filtered.map((sprite) => {
                   const selected = sprite.file === currentFile;
                   return (
@@ -911,18 +924,21 @@ function CharacterEmotionDialog({
                       type="button"
                       key={`${character.id}-${sprite.file}-${sprite.emotion}`}
                       onClick={() => { onSelect(sprite); setOpen(false); }}
-                      className={`w-24 h-32 rounded-md border overflow-hidden bg-card/60 hover:bg-secondary/50 transition-colors text-left ${
+                      className={`min-h-40 rounded-md border overflow-hidden bg-card/60 hover:bg-secondary/50 transition-colors text-left ${
                         selected ? 'border-primary bg-primary/10 text-primary' : 'border-border'
                       }`}
                     >
-                      <div className="h-24 bg-secondary/30 flex items-center justify-center overflow-hidden">
+                      <div className="h-28 bg-secondary/30 flex items-center justify-center overflow-hidden">
                         {projectPath ? (
                           <img src={convertFileSrc(`${projectPath}/game/figure/${sprite.file}`)} alt="" className="w-full h-full object-cover object-top" />
                         ) : (
                           <Image className="w-7 h-7 text-muted-foreground/40" />
                         )}
                       </div>
-                      <div className="px-2 py-1 text-xs truncate text-center">{sprite.emotion}</div>
+                      <div className="px-2 py-1 text-center">
+                        <div className="truncate text-xs">{character.name} · {sprite.emotion || '默认'}</div>
+                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground font-mono-family">{sprite.file}</div>
+                      </div>
                     </button>
                   );
                 })}
