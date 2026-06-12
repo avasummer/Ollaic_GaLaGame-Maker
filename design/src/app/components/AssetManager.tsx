@@ -306,7 +306,6 @@ export function AssetManager() {
   const [playingAudio, setPlayingAudio] = useState<string | null>(null);
   const [musicCategory, setMusicCategory] = useState<MusicCategory>('bgm');
   const [characterCount, setCharacterCount] = useState(0);
-  const [characterGenerationRequestToken, setCharacterGenerationRequestToken] = useState(0);
   const [figureLibraryRefreshToken, setFigureLibraryRefreshToken] = useState(0);
   const [audioDurations, setAudioDurations] = useState<Record<string, number>>({});
   const [audioMetadataErrors, setAudioMetadataErrors] = useState<Record<string, boolean>>({});
@@ -1132,13 +1131,9 @@ export function AssetManager() {
               <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
                 {projectPath}
               </span>
-              {showAiAction && (
+              {showAiAction && activeTab !== 'character' && (
                 <button
                   onClick={() => {
-                    if (activeTab === 'character') {
-                      setCharacterGenerationRequestToken((value) => value + 1);
-                      return;
-                    }
                     if (activeTab === 'scene') {
                       handleNewSceneCard();
                       return;
@@ -1153,7 +1148,7 @@ export function AssetManager() {
                   {aiActionLabel}
                 </button>
               )}
-              {importConfig && (
+              {importConfig && activeTab !== 'character' && (
                 <button
                   onClick={handleImport}
                   disabled={!projectPath || importing}
@@ -1187,7 +1182,6 @@ export function AssetManager() {
                 projectPath={projectPath}
                 embedded
                 onCharacterCountChange={setCharacterCount}
-                generationRequestToken={characterGenerationRequestToken}
                 figureLibraryRefreshToken={figureLibraryRefreshToken}
               />
             ) : (

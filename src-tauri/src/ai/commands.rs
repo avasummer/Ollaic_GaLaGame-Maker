@@ -274,6 +274,7 @@ pub async fn ai_generate_image(
     app_handle: AppHandle,
     prompt: String,
     model: String,
+    reference_image_path: Option<String>,
 ) -> Result<GeneratedMedia, String> {
     let cfg = config::load_image_config();
     validate_provider_config_basics(&cfg, "图片")?;
@@ -285,12 +286,23 @@ pub async fn ai_generate_image(
         return Err("图片生成描述为空".to_string());
     }
 
+    // 可选参考图（图生图）：读成 (mime, base64)，仅部分 provider 适配，其余忽略。
+    let reference = match reference_image_path {
+        Some(path) if !path.trim().is_empty() => Some(read_image_as_base64(path.trim())?),
+        _ => None,
+    };
+
     match cfg.provider.trim() {
-        "openai" | "custom" | "zhipu" | "siliconflow" | "midjourney" | "volcengine" => {
-            generate_openai_compatible_image(&cfg, model, &prompt).await
+        "openai" | "custom" | "zhipu" | "siliconflow" | "midjourney" => {
+            generate_openai_compatible_image(&cfg, model, &prompt, reference.as_ref()).await
+        }
+        "volcengine" => {
+            // 火山引擎 Seedream 图生图需要公网 URL，不支持本地 base64，静默忽略参考图。
+            // 角色一致性依赖提示词中已包含的详细外观描述（buildSpritePrompt）。
+            generate_openai_compatible_image(&cfg, model, &prompt, None).await
         }
         "aliyun" => generate_dashscope_image(&app_handle, &cfg, model, &prompt).await,
-        "gemini" => generate_gemini_image(&cfg, model, &prompt).await,
+        "gemini" => generate_gemini_image(&cfg, model, &prompt, reference.as_ref()).await,
         "sd-webui" => generate_sd_webui_image(&cfg, &prompt).await,
         "stability" => Err("Stability AI 图片接口需要 multipart/form-data；当前客户端尚未启用该格式，请先通过自定义 OpenAI 兼容网关接入。".to_string()),
         "baidu" => Err("百度千帆/文心一格图片接口需要 Access Token 获取流程；当前配置不足以直连。请使用 OpenAI 兼容网关或后续补充 OAuth 配置。".to_string()),
@@ -677,14 +689,34 @@ fn is_placeholder_base_url(value: &str) -> bool {
     value.to_ascii_lowercase().contains("api.example.com")
 }
 
+/// Read a local image file into `(mime_type, base64_without_prefix)` for use as
+/// an image-to-image reference. Used by providers that support a reference image.
+fn read_image_as_base64(path: &str) -> Result<(String, String), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("读取参考图失败 {path}: {e}"))?;
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("png")
+        .to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => "image/png",
+    };
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok((mime.to_string(), b64))
+}
+
 async fn generate_openai_compatible_image(
     cfg: &AiProviderConfig,
     model: &str,
     prompt: &str,
+    reference: Option<&(String, String)>,
 ) -> Result<GeneratedMedia, String> {
     let endpoint = media_endpoint(cfg, "images/generations");
     let body = if is_seedream_model(model) {
-        serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
             "prompt": prompt,
             "size": "2K",
@@ -692,8 +724,15 @@ async fn generate_openai_compatible_image(
             "stream": false,
             "watermark": false,
             "sequential_image_generation": "disabled"
-        })
+        });
+        // Seedream 4.x 支持图生图：image 字段传参考图。
+        // 火山引擎要求纯 base64（不带 data: 前缀），而非 data URI。
+        if let Some((_mime, b64)) = reference {
+            body["image"] = serde_json::json!(b64);
+        }
+        body
     } else {
+        // 非 Seedream 的 OpenAI 兼容图片接口（DALL·E/gpt-image 协议不同）暂忽略参考图。
         serde_json::json!({
         "model": model,
         "prompt": prompt,
@@ -854,11 +893,20 @@ async fn generate_gemini_image(
     cfg: &AiProviderConfig,
     model: &str,
     prompt: &str,
+    reference: Option<&(String, String)>,
 ) -> Result<GeneratedMedia, String> {
     let endpoint = gemini_endpoint(cfg, model, "generateContent");
+    // 有参考图时走图生图：parts 追加 inline_data。
+    let parts = match reference {
+        Some((mime, b64)) => serde_json::json!([
+            { "inline_data": { "mime_type": mime, "data": b64 } },
+            { "text": prompt }
+        ]),
+        None => serde_json::json!([{ "text": prompt }]),
+    };
     let body = serde_json::json!({
         "contents": [{
-            "parts": [{ "text": prompt }]
+            "parts": parts
         }]
     });
     let body = serde_json::to_string(&body).map_err(|e| format!("序列化 Gemini 图片生成请求失败: {e}"))?;

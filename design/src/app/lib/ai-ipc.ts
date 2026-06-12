@@ -116,8 +116,16 @@ export async function validateAiConfig(config: AiConfig): Promise<AiValidationRe
   return invoke<AiValidationResult>('validate_ai_config', { config });
 }
 
-export async function aiGenerateImage(prompt: string, model: string): Promise<GeneratedMedia> {
-  return invoke<GeneratedMedia>('ai_generate_image', { prompt, model });
+export async function aiGenerateImage(
+  prompt: string,
+  model: string,
+  referenceImagePath?: string,
+): Promise<GeneratedMedia> {
+  return invoke<GeneratedMedia>('ai_generate_image', {
+    prompt,
+    model,
+    referenceImagePath: referenceImagePath ?? null,
+  });
 }
 
 export async function listenAiMediaGenerationProgress(

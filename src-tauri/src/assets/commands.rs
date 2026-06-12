@@ -90,13 +90,26 @@ fn category_to_dir(category: &str) -> Option<String> {
     match category {
         "scene" | "background" => Some("background".to_string()),
         "character" | "figure" => Some("figure".to_string()),
+        // Per-character figure subdirectory: figure/<characterId>. Validate each
+        // path segment to reject traversal, mirroring the reference/ branch below.
+        _ if category.starts_with("figure/") => {
+            let tail = category.trim_start_matches("figure/");
+            if tail
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == ".." || part.contains('\\'))
+            {
+                None
+            } else {
+                Some(format!("figure/{tail}"))
+            }
+        }
         "music" | "bgm" => Some("bgm".to_string()),
         "sfx" => Some("sfx".to_string()),
         "vocal" => Some("vocal".to_string()),
         "video" => Some("video".to_string()),
         "animation" => Some("animation".to_string()),
         "tex" => Some("tex".to_string()),
-        "reference" => Some("config/references".to_string()),
+        "reference" => Some("reference".to_string()),
         _ if category.starts_with("reference/") => {
             let tail = category.trim_start_matches("reference/");
             if tail
@@ -105,7 +118,7 @@ fn category_to_dir(category: &str) -> Option<String> {
             {
                 None
             } else {
-                Some(format!("config/references/{tail}"))
+                Some(format!("reference/{tail}"))
             }
         }
         _ => None,
@@ -369,6 +382,29 @@ pub fn list_assets(project_path: String, category: String) -> Result<Vec<AssetIn
     for a in &mut assets {
         a.category = subdir.to_string();
     }
+
+    // The bare "figure" category also surfaces per-character subdirectory sprites
+    // (one level deep) with subdirectory-qualified names, so the global figure
+    // picker can still browse/select any character's立绘. Per-character listing
+    // (category "figure/<id>") returns only that subdir with flat names above.
+    if subdir == "figure" {
+        let entries =
+            fs::read_dir(&dir).map_err(|e| format!("无法读取目录 {}: {e}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let sub_path = entry.path();
+            if !sub_path.is_dir() {
+                continue;
+            }
+            let sub_name = entry.file_name().to_string_lossy().to_string();
+            for mut asset in list_dir_files(&sub_path)? {
+                asset.name = format!("{sub_name}/{}", asset.name);
+                asset.category = subdir.to_string();
+                assets.push(asset);
+            }
+        }
+    }
+
     Ok(assets)
 }
 
@@ -863,6 +899,36 @@ fn unique_path(path: PathBuf) -> PathBuf {
 mod tests {
     use super::*;
     use futures::executor::block_on;
+
+    #[test]
+    fn figure_assets_are_isolated_per_character_subdirectory() {
+        let tmp = std::env::temp_dir().join("webgal_test_figure_subdirs");
+        let _ = fs::remove_dir_all(&tmp);
+        let project = tmp.to_string_lossy().to_string();
+        let figure_dir = tmp.join("game").join("figure");
+        fs::create_dir_all(figure_dir.join("char_a")).unwrap();
+        fs::create_dir_all(figure_dir.join("char_b")).unwrap();
+        fs::write(figure_dir.join("legacy.webp"), "x").unwrap();
+        fs::write(figure_dir.join("char_a").join("stand.webp"), "x").unwrap();
+        fs::write(figure_dir.join("char_b").join("smile.webp"), "x").unwrap();
+
+        // Per-character listing only returns that character's sprites (flat names).
+        let a = list_assets(project.clone(), "figure/char_a".to_string()).unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].name, "stand.webp");
+
+        // Bare "figure" surfaces top-level files plus subdir-qualified sprites.
+        let all = list_assets(project.clone(), "figure".to_string()).unwrap();
+        let names: std::collections::HashSet<String> =
+            all.into_iter().map(|asset| asset.name).collect();
+        assert!(names.contains("legacy.webp"));
+        assert!(names.contains("char_a/stand.webp"));
+        assert!(names.contains("char_b/smile.webp"));
+
+        // Path traversal in the subdirectory segment is rejected.
+        assert!(list_assets(project, "figure/../scene".to_string()).is_err());
+        let _ = fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn asset_usage_requires_an_exact_semantic_reference() {

@@ -487,5 +487,5 @@ export function referenceFilePath(
 ): string | null {
   const referenceCategory = referenceCategoryForAsset(category, assetFilename);
   if (!referenceCategory) return null;
-  return `${projectPath}/game/config/references/${referenceCategory.slice('reference/'.length)}/${referenceFilename}`;
+  return `${projectPath}/game/${referenceCategory}/${referenceFilename}`;
 }

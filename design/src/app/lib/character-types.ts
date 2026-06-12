@@ -20,7 +20,7 @@ export interface Character {
   aliases: string[];       // nicknames / alternative names
   description: string;     // visual appearance description for sprite generation
   personality: string;     // personality traits
-  referenceImages?: string[]; // filenames in game/config/references/
+  referenceImages?: string[]; // filenames in game/reference/<characterId>/
   stance: string;          // moral/faction stance: "正义", "混沌", "中立", "邪恶"
   keywords: string[];      // searchable tags: ["学生", "傲娇", "学生会"]
   dialogueStyle: string;   // character voice / speech style guide for AI

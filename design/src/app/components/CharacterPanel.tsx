@@ -17,6 +17,7 @@ import {
   Save,
   FileText,
   Upload,
+  Check,
 } from 'lucide-react';
 import type { Character, CharacterSprite } from '../lib/character-types';
 import {
@@ -52,7 +53,6 @@ import {
   type AiMediaGenerationProgress,
   type AiProviderConfig,
 } from '../lib/ai-ipc';
-import { AssetPickerButton } from './AssetPicker';
 
 interface Props {
   projectPath: string;
@@ -111,6 +111,16 @@ function sanitizeFilenamePart(value: string, fallback: string): string {
   return normalized || fallback;
 }
 
+// 与 generateSprite 的命名规则保持一致：文件名为
+// `${characterPart}_${emotionPart}_${timestamp}.${ext}`。用前缀判断某情绪是否已生成。
+function characterFilenamePart(character: Character): string {
+  return sanitizeFilenamePart(character.name || character.id, 'character');
+}
+
+function spritePrefix(characterPart: string, emotion: string): string {
+  return `${characterPart}_${sanitizeFilenamePart(emotion, 'sprite')}_`;
+}
+
 function buildSpritePrompt(character: Character, sprite: CharacterSprite, isReference: boolean, instruction: string): string {
   return [
     'visual novel character sprite, full body, transparent background, clean anime game asset, consistent character design',
@@ -127,6 +137,19 @@ function buildSpritePrompt(character: Character, sprite: CharacterSprite, isRefe
     instruction ? `本次生成提示词：${instruction}` : '',
     'avoid background scene, avoid text, avoid watermark, avoid extra characters',
   ].filter(Boolean).join('\n');
+}
+
+// 立绘按角色存放在 game/figure/<角色ID>/ 子目录；sprite.file 存子目录限定路径
+// "<角色ID>/<文件名>"。以下两个工具在「限定路径」与「平铺文件名」之间转换。
+function qualifyFigureFile(charId: string, name: string): string {
+  if (!name) return '';
+  return name.includes('/') ? name : `${charId}/${name}`;
+}
+
+function figureFileTail(file: string): string {
+  if (!file) return '';
+  const slash = file.lastIndexOf('/');
+  return slash >= 0 ? file.slice(slash + 1) : file;
 }
 
 export function CharacterPanel({
@@ -154,11 +177,18 @@ export function CharacterPanel({
   const [figureAssetsLoading, setFigureAssetsLoading] = useState(true);
   const [figureAssetImporting, setFigureAssetImporting] = useState(false);
   const [figureAssetDeleting, setFigureAssetDeleting] = useState<string | null>(null);
+  // 主体图候选（存于 figure/<角色ID>/main/，与下方素材库隔离）。
+  const [mainCandidates, setMainCandidates] = useState<AssetInfo[]>([]);
+  const [mainCandidateDeleting, setMainCandidateDeleting] = useState<string | null>(null);
+  // 本次生成主体图选用的参考图（图生图输入），单选；空表示纯文本生成。
+  const [selectedReferenceImage, setSelectedReferenceImage] = useState<string | null>(null);
   const [spriteUsages, setSpriteUsages] = useState<SpriteUsage[]>([]);
   const [usageOpen, setUsageOpen] = useState(false);
   const [figureLibraryOpen, setFigureLibraryOpen] = useState(false);
   const [spriteGeneratingKey, setSpriteGeneratingKey] = useState<string | null>(null);
   const [pendingSpriteGeneration, setPendingSpriteGeneration] = useState<PendingSpriteGeneration | null>(null);
+  // 当前展开提示词编辑框的变体索引；null 表示全部折叠为摘要行。
+  const [expandedPromptIndex, setExpandedPromptIndex] = useState<number | null>(null);
   const savingRef = useRef(false);
 
   const emotionColor = (emotion: string): string => {
@@ -190,20 +220,41 @@ export function CharacterPanel({
   }, [projectPath]);
 
   useEffect(() => {
+    if (!selectedId) {
+      setFigureAssets([]);
+      setFigureAssetsLoading(false);
+      return;
+    }
     let cancelled = false;
     (async () => {
       setFigureAssetsLoading(true);
       try {
-        const list = await listAssets(projectPath, 'figure');
-        if (!cancelled) setFigureAssets(list);
+        // 每个角色的立绘存放在 game/figure/<角色ID>/ 子目录，按角色隔离。
+        // 变体/备用图在顶层；主体候选在 main/ 子目录（不进素材库）。
+        const [variants, candidates] = await Promise.all([
+          listAssets(projectPath, `figure/${selectedId}`),
+          listAssets(projectPath, `figure/${selectedId}/main`).catch(() => [] as AssetInfo[]),
+        ]);
+        if (!cancelled) {
+          setFigureAssets(variants);
+          setMainCandidates(candidates);
+        }
       } catch {
-        if (!cancelled) setFigureAssets([]);
+        if (!cancelled) {
+          setFigureAssets([]);
+          setMainCandidates([]);
+        }
       } finally {
         if (!cancelled) setFigureAssetsLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [projectPath, figureLibraryRefreshToken]);
+  }, [projectPath, selectedId, figureLibraryRefreshToken]);
+
+  // 切换角色时重置本次选用的参考图。
+  useEffect(() => {
+    setSelectedReferenceImage(null);
+  }, [selectedId]);
 
   const selected = useMemo(
     () => characters.find((c) => c.id === selectedId) ?? null,
@@ -226,13 +277,6 @@ export function CharacterPanel({
   const patchCharacter = useCallback((id: string, partial: Partial<Character>) => {
     setCharacters((prev) => patchCharacterList(prev, id, partial));
   }, []);
-
-  const handleCreate = useCallback(() => {
-    const ch = createDraftCharacter(characters.length);
-    setCharacters((prev) => [...prev, ch]);
-    setSelectedId(ch.id);
-    setMode('info');
-  }, [characters.length]);
 
   const persistCharacter = useCallback(async (ch: Character, options: PersistOptions = {}) => {
     if (!ch.name.trim() || savingRef.current) return null;
@@ -264,6 +308,19 @@ export function CharacterPanel({
     await persistCharacter(ch);
   }, [persistCharacter]);
 
+  const handleCreate = useCallback(async () => {
+    // 立即落盘，避免切换 Tab 后 CharacterPanel 卸载导致未保存的草稿丢失。
+    const draft = { ...createDraftCharacter(characters.length), name: '新角色' };
+    setCharacters((prev) => [...prev, draft]);
+    setSelectedId(draft.id);
+    setMode('info');
+    const saved = await persistCharacter(draft, { showSavedBadge: false });
+    if (!saved) {
+      // 落盘失败时回滚乐观插入的草稿，避免遗留无法保存的临时角色。
+      setCharacters((prev) => prev.filter((c) => c.id !== draft.id));
+    }
+  }, [characters.length, persistCharacter]);
+
   const ensurePersistedCharacter = useCallback(async (charId: string, actionLabel: string) => {
     const current = characters.find((c) => c.id === charId);
     if (!current) return null;
@@ -276,6 +333,9 @@ export function CharacterPanel({
   }, [characters, persistCharacter]);
 
   const handleDelete = useCallback(async (id: string) => {
+    const target = characters.find((c) => c.id === id);
+    const name = target?.name?.trim() || '未命名角色';
+    if (!confirm(`确定删除角色「${name}」？\n\n此操作不可撤销，角色数据将永久丢失。`)) return;
     setError(null);
     try {
       if (!id.startsWith('tmp_')) {
@@ -289,7 +349,7 @@ export function CharacterPanel({
     } catch (e) {
       setError(String(e));
     }
-  }, [projectPath, selectedId]);
+  }, [characters, projectPath, selectedId]);
 
   const updateSprite = useCallback((charId: string, index: number, field: keyof CharacterSprite, value: string) => {
     setCharacters((prev) => updateCharacterSprite(prev, charId, index, field, value));
@@ -311,7 +371,9 @@ export function CharacterPanel({
       : current;
     if (!base) return;
 
-    await persistCharacter(withReferenceSprite(base, filename), { showSavedBadge: false });
+    // 存子目录限定路径 <角色ID>/<文件名>，空值表示清除主体。
+    const qualified = qualifyFigureFile(base.id, filename);
+    await persistCharacter(withReferenceSprite(base, qualified), { showSavedBadge: false });
   }, [characters, ensurePersistedCharacter, persistCharacter]);
 
   const setReferencePrompt = useCallback((charId: string, prompt: string) => {
@@ -330,6 +392,19 @@ export function CharacterPanel({
       };
     }));
   }, []);
+
+  // 提示词修改后自动保存（防抖）
+  const debouncedPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!selected || selected.id.startsWith('tmp_')) return;
+    if (debouncedPersistRef.current) clearTimeout(debouncedPersistRef.current);
+    debouncedPersistRef.current = setTimeout(() => {
+      persistCharacter(selected, { showSavedBadge: false });
+    }, 800);
+    return () => {
+      if (debouncedPersistRef.current) clearTimeout(debouncedPersistRef.current);
+    };
+  }, [selected?.sprites, persistCharacter]);
 
   const removeSprite = useCallback((charId: string, index: number) => {
     setCharacters((prev) => removeCharacterSprite(prev, charId, index));
@@ -420,9 +495,13 @@ export function CharacterPanel({
   }, [navigate, projectId]);
 
   const refreshFigureAssets = useCallback(async () => {
+    if (!selectedId) {
+      setFigureAssets([]);
+      return;
+    }
     setFigureAssetsLoading(true);
     try {
-      const list = await listAssets(projectPath, 'figure');
+      const list = await listAssets(projectPath, `figure/${selectedId}`);
       setFigureAssets(list);
     } catch (e) {
       setError(String(e));
@@ -430,7 +509,54 @@ export function CharacterPanel({
     } finally {
       setFigureAssetsLoading(false);
     }
-  }, [projectPath]);
+  }, [projectPath, selectedId]);
+
+  // 判断某情绪是否已在素材库生成过（按文件名前缀匹配，命名规则同 generateSprite）。
+  const hasGeneratedAsset = useCallback((emotion: string): boolean => {
+    if (!selected) return false;
+    const prefix = spritePrefix(characterFilenamePart(selected), emotion);
+    return figureAssets.some((asset) => figureFileTail(asset.name).startsWith(prefix));
+  }, [figureAssets, selected]);
+
+  const refreshMainCandidates = useCallback(async () => {
+    if (!selectedId) {
+      setMainCandidates([]);
+      return;
+    }
+    try {
+      const list = await listAssets(projectPath, `figure/${selectedId}/main`);
+      setMainCandidates(list);
+    } catch {
+      setMainCandidates([]);
+    }
+  }, [projectPath, selectedId]);
+
+  // 从主体候选中选定当前主体（file 用 <角色ID>/main/<文件名> 限定路径）。
+  const setMainFromCandidate = useCallback((asset: AssetInfo) => {
+    if (!selectedId) return;
+    void setReferenceFile(selectedId, `${selectedId}/main/${figureFileTail(asset.name)}`);
+  }, [selectedId, setReferenceFile]);
+
+  const removeMainCandidate = useCallback(async (asset: AssetInfo) => {
+    if (!selectedId) return;
+    const tail = figureFileTail(asset.name);
+    setMainCandidateDeleting(asset.name);
+    setError(null);
+    try {
+      await deleteAsset(projectPath, `figure/${selectedId}/main`, tail);
+      // 若删除的是当前主体，清空主体引用。
+      const current = characters.find((c) => c.id === selectedId);
+      if (current && referenceSpriteIndex(current) >= 0
+        && figureFileTail(current.sprites[referenceSpriteIndex(current)].file) === tail) {
+        await setReferenceFile(selectedId, '');
+      }
+      await refreshMainCandidates();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setMainCandidateDeleting(null);
+    }
+  }, [characters, projectPath, refreshMainCandidates, selectedId, setReferenceFile]);
 
   const generateSprite = useCallback(async (
     emotion: string,
@@ -474,15 +600,37 @@ export function CharacterPanel({
     setSpriteGeneratingKey(key);
     setError(null);
     try {
-      const media = await aiGenerateImage(buildSpritePrompt(persisted, effectiveSprite, target.kind === 'reference', trimmedInstruction), model);
+      // 主体图生成可带用户选定的参考图；表情变体自动以已确认的主体图作为参考，
+      // 保证各变体与主体设计一致。不支持图生图的供应商（如火山引擎）会静默忽略。
+      let referenceImagePath: string | undefined;
+      if (target.kind === 'reference' && selectedReferenceImage) {
+        referenceImagePath = `${projectPath}/game/reference/${persisted.id}/${selectedReferenceImage}`;
+      } else if (target.kind === 'variant') {
+        const refIdx = referenceSpriteIndex(persisted);
+        const mainFile = refIdx >= 0 ? persisted.sprites[refIdx]?.file : undefined;
+        if (mainFile) {
+          referenceImagePath = `${projectPath}/game/figure/${mainFile}`;
+        }
+      }
+      const media = await aiGenerateImage(
+        buildSpritePrompt(persisted, effectiveSprite, target.kind === 'reference', trimmedInstruction),
+        model,
+        referenceImagePath,
+      );
       const extension = media.extension?.replace(/^\./, '') || 'png';
       const characterPart = sanitizeFilenamePart(persisted.name || persisted.id, 'character');
       const emotionPart = sanitizeFilenamePart(effectiveSprite.emotion || 'sprite', 'sprite');
       const filename = `${characterPart}_${emotionPart}_${Date.now()}.${extension}`;
-      const asset = await saveGeneratedAsset(projectPath, 'figure', filename, media.base64Data);
+      // 主体候选存 main/ 子目录（与素材库隔离）；表情变体存子目录顶层。
+      const figureCategory = target.kind === 'reference'
+        ? `figure/${persisted.id}/main`
+        : `figure/${persisted.id}`;
+      const asset = await saveGeneratedAsset(projectPath, figureCategory, filename, media.base64Data);
+      // 仅主体（reference）需要把限定路径写回 sprite.file；变体图只进素材库不绑定。
+      const qualifiedFile = `${persisted.id}/main/${asset.name}`;
       const nextCharacter = target.kind === 'reference'
         ? (() => {
-            const next = withReferenceSprite(persisted, asset.name);
+            const next = withReferenceSprite(persisted, qualifiedFile);
             const index = referenceSpriteIndex(next);
             return {
               ...next,
@@ -494,11 +642,17 @@ export function CharacterPanel({
         : {
             ...persisted,
             sprites: persisted.sprites.map((item, index) =>
-              index === target.index ? { ...item, emotion: effectiveSprite.emotion, file: asset.name, prompt: trimmedInstruction } : item,
+              // 变体生成的图片只进素材库（figure/<角色ID>/），卡片不绑定具体图片，
+              // 脚本从素材库挑图。故 file 置空，仅保留情绪与提示词。
+              index === target.index ? { ...item, emotion: effectiveSprite.emotion, file: '', prompt: trimmedInstruction } : item,
             ),
           };
       const saved = await persistCharacter(nextCharacter, { showSavedBadge: false });
-      await refreshFigureAssets();
+      if (target.kind === 'reference') {
+        await refreshMainCandidates();
+      } else {
+        await refreshFigureAssets();
+      }
       setMode('sprite');
       return saved;
     } catch (e) {
@@ -507,22 +661,16 @@ export function CharacterPanel({
     } finally {
       setSpriteGeneratingKey(null);
     }
-  }, [ensurePersistedCharacter, persistCharacter, projectPath, refreshFigureAssets, selected]);
+  }, [ensurePersistedCharacter, persistCharacter, projectPath, refreshFigureAssets, refreshMainCandidates, selected, selectedReferenceImage]);
 
   const triggerBatchSpriteGeneration = useCallback(() => {
     if (!selected) {
-      setError('请先选择一个角色，再批量生成立绘结果与映射。');
+      setError('请先选择一个角色，再批量生成。');
       return;
     }
     if (variantSprites.length === 0) {
       setMode('sprite');
-      setError('请先添加表情变体，再批量生成立绘。');
-      return;
-    }
-    const missingPrompt = variantSprites.filter(({ sprite }) => !sprite.prompt?.trim());
-    if (missingPrompt.length > 0) {
-      setMode('sprite');
-      setError(`请先为 ${missingPrompt.length} 个表情变体填写提示词，再批量生成。`);
+      setError('请先添加表情变体，再批量生成。');
       return;
     }
     setMode('sprite');
@@ -539,15 +687,29 @@ export function CharacterPanel({
     if (!selected || !pendingSpriteGeneration) return;
     if (pendingSpriteGeneration.batch) {
       let current: Character | null = selected;
+      let generatedCount = 0;
       for (const { sprite, index } of variantSprites) {
+        if (hasGeneratedAsset(sprite.emotion)) continue;  // 已生成跳过
+        if (!sprite.prompt?.trim()) continue;              // 无提示词跳过
         current = await generateSprite(
           sprite.emotion,
           { kind: 'variant', index },
           model,
-          sprite.prompt ?? '',
+          sprite.prompt,
           current ?? undefined,
         );
         if (!current) return;
+        generatedCount += 1;
+      }
+      const skippedNoPrompt = variantSprites.filter(({ sprite }) =>
+        !hasGeneratedAsset(sprite.emotion) && !sprite.prompt?.trim(),
+      ).length;
+      if (generatedCount === 0 && skippedNoPrompt === 0) {
+        setError('所有变体均已生成，如需重做请用单个变体的「重新生成」按钮。');
+      } else if (skippedNoPrompt > 0 && generatedCount === 0) {
+        setError(`${skippedNoPrompt} 个变体缺少提示词已跳过，请填写后重试。`);
+      } else if (skippedNoPrompt > 0) {
+        setError(`已生成 ${generatedCount} 个，${skippedNoPrompt} 个缺少提示词已跳过。`);
       }
       setPendingSpriteGeneration(null);
       return;
@@ -567,9 +729,13 @@ export function CharacterPanel({
       instruction,
     );
     if (saved) setPendingSpriteGeneration(null);
-  }, [generateSprite, pendingSpriteGeneration, referenceSprite, selected, variantSprites]);
+  }, [generateSprite, hasGeneratedAsset, pendingSpriteGeneration, referenceSprite, selected, variantSprites]);
 
   const uploadFigureAsset = useCallback(async () => {
+    if (!selectedId) {
+      setError('请先选择或新建一个角色，再上传立绘素材。');
+      return;
+    }
     const path = await openDialog({
       title: '上传立绘素材',
       filters: [{ name: '图片文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'] }],
@@ -579,27 +745,29 @@ export function CharacterPanel({
     setFigureAssetImporting(true);
     setError(null);
     try {
-      await importAsset(Array.isArray(path) ? path[0] : path, projectPath, 'figure');
+      await importAsset(Array.isArray(path) ? path[0] : path, projectPath, `figure/${selectedId}`);
       await refreshFigureAssets();
     } catch (e) {
       setError(String(e));
     } finally {
       setFigureAssetImporting(false);
     }
-  }, [projectPath, refreshFigureAssets]);
+  }, [projectPath, refreshFigureAssets, selectedId]);
 
   const removeFigureAsset = useCallback(async (asset: AssetInfo) => {
+    if (!selectedId) return;
     setFigureAssetDeleting(asset.name);
     setError(null);
     try {
-      await deleteAsset(projectPath, 'figure', asset.name);
+      // asset.name 为子目录内平铺文件名，类别携带角色子目录。
+      await deleteAsset(projectPath, `figure/${selectedId}`, figureFileTail(asset.name));
       await refreshFigureAssets();
     } catch (e) {
       setError(String(e));
     } finally {
       setFigureAssetDeleting(null);
     }
-  }, [projectPath, refreshFigureAssets]);
+  }, [projectPath, refreshFigureAssets, selectedId]);
 
   useEffect(() => {
     if (!generationRequestToken) return;
@@ -765,138 +933,147 @@ export function CharacterPanel({
             ) : mode === 'info' ? (
               <div className="relative z-10 p-4 space-y-4 max-w-5xl">
                 <section className="story-os-panel p-4">
-                  <div className="mb-3 flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">基本信息</h4>
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        姓名、外观设定、性格气质、剧情定位和关键词会进入立绘生成上下文；关键词同时用于人物搜索。
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary">影响生成</span>
-                      <span className="rounded bg-secondary/50 px-1.5 py-0.5 text-[9px] text-muted-foreground">用于检索</span>
-                    </div>
+                  <div className="mb-4 pb-3 border-b border-border">
+                    <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">基本信息</h4>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      以下字段会构成 AI 角色上下文，影响立绘生成与剧本辅助；关键词同时用于人物搜索。
+                    </p>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                      <label className={labelClass}>姓名 * <span className="text-primary">生成/脚本</span></label>
-                      <input
-                        value={selected.name}
-                        onChange={(e) => patchCharacter(selected.id, { name: e.target.value })}
-                        className={`${inputClass} ${!selected.name.trim() ? 'border-destructive/50' : ''}`}
-                        placeholder="角色姓名"
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass}>别名 <span className="text-muted-foreground">检索</span></label>
-                      <input
-                        value={selected.aliases.join(', ')}
-                        onChange={(e) => patchCharacter(selected.id, {
-                          aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
-                        })}
-                        className={inputClass}
-                        placeholder="用逗号分隔"
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass}>性别 <span className="text-primary">生成</span></label>
-                      <input
-                        value={selected.gender}
-                        onChange={(e) => patchCharacter(selected.id, { gender: e.target.value })}
-                        className={inputClass}
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass}>年龄 <span className="text-primary">生成</span></label>
-                      <input
-                        value={selected.age}
-                        onChange={(e) => patchCharacter(selected.id, { age: e.target.value })}
-                        className={inputClass}
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass}>性格气质 <span className="text-primary">生成/检索</span></label>
-                      <input
-                        value={selected.personality}
-                        onChange={(e) => patchCharacter(selected.id, { personality: e.target.value })}
-                        className={inputClass}
-                        placeholder="例：冷静、克制、对陌生人保持距离"
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass}>剧情定位 <span className="text-primary">生成/检索</span></label>
-                      <input
-                        value={selected.stance}
-                        onChange={(e) => patchCharacter(selected.id, { stance: e.target.value })}
-                        className={inputClass}
-                        placeholder="例：转校生 / 学生会成员 / 反派协力者"
-                      />
-                    </div>
-                    <div className="md:col-span-2">
-                      <label className={labelClass}>外观设定 <span className="text-primary">立绘生成核心</span></label>
-                      <textarea
-                        value={selected.description}
-                        onChange={(e) => patchCharacter(selected.id, { description: e.target.value })}
-                        className={`${inputClass} h-24 resize-none`}
-                        placeholder="只写可画出来的内容：发型、瞳色、服装、体型、配饰、标志物。不要在这里写长篇背景故事。"
-                      />
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        这个字段会作为“外观设定”传给立绘生成。
-                      </p>
-                    </div>
-                    <div>
-                      <label className={labelClass}>关键词 <span className="text-primary">生成补充/搜索标签</span></label>
-                      <input
-                        value={selected.keywords.join(', ')}
-                        onChange={(e) => patchCharacter(selected.id, {
-                          keywords: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
-                        })}
-                        className={inputClass}
-                        placeholder="例：学生, 傲娇, 学生会；用逗号分隔"
-                      />
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        用于左侧搜索，也会作为补充词放进立绘生成 prompt；不影响配音。
-                      </p>
-                    </div>
-                    <div>
-                      <label className={labelClass}>标识颜色 <span className="text-muted-foreground">列表展示</span></label>
-                      <div className="flex items-center gap-2">
+
+                  {/* 身份标识 */}
+                  <div className="mb-5">
+                    <div className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground/60">身份标识</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className={labelClass}>姓名 *</label>
                         <input
-                          type="color"
-                          value={selected.colorTheme || characterColor(characters.indexOf(selected))}
-                          onChange={(e) => patchCharacter(selected.id, { colorTheme: e.target.value })}
-                          className="w-9 h-8 rounded border border-border bg-transparent"
+                          value={selected.name}
+                          onChange={(e) => patchCharacter(selected.id, { name: e.target.value })}
+                          className={`${inputClass} ${!selected.name.trim() ? 'border-destructive/50' : ''}`}
+                          placeholder="角色姓名（用于脚本对话标识）"
                         />
+                      </div>
+                      <div>
+                        <label className={labelClass}>别名</label>
                         <input
-                          value={selected.colorTheme || ''}
-                          onChange={(e) => patchCharacter(selected.id, { colorTheme: e.target.value })}
-                          className={`${inputClass} font-mono-family`}
-                          placeholder="var(--color-character-1)"
+                          value={selected.aliases.join(', ')}
+                          onChange={(e) => patchCharacter(selected.id, {
+                            aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
+                          })}
+                          className={inputClass}
+                          placeholder="昵称、称号，逗号分隔；用于人物搜索"
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>性别</label>
+                        <input
+                          value={selected.gender}
+                          onChange={(e) => patchCharacter(selected.id, { gender: e.target.value })}
+                          className={inputClass}
+                          placeholder="男 / 女 / 其他"
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>年龄</label>
+                        <input
+                          value={selected.age}
+                          onChange={(e) => patchCharacter(selected.id, { age: e.target.value })}
+                          className={inputClass}
+                          placeholder="具体年龄或年龄段"
                         />
                       </div>
                     </div>
-                    <div className="md:col-span-2">
-                      <label className={labelClass}>说话风格 <span className="text-muted-foreground">文本/角色上下文</span></label>
-                      <textarea
-                        value={selected.dialogueStyle}
-                        onChange={(e) => patchCharacter(selected.id, { dialogueStyle: e.target.value })}
-                        className={`${inputClass} h-16 resize-none`}
-                        placeholder="例：句子短，少用感叹号；紧张时会回避称呼对方名字。"
-                      />
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        用于角色上下文和后续文本生成，不决定立绘外观。
-                      </p>
+                  </div>
+
+                  {/* 形象设定 */}
+                  <div className="mb-5">
+                    <div className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground/60">形象设定 · 立绘生成输入</div>
+                    <div className="space-y-3">
+                      <div>
+                        <label className={labelClass}>外观设定</label>
+                        <textarea
+                          value={selected.description}
+                          onChange={(e) => patchCharacter(selected.id, { description: e.target.value })}
+                          className={`${inputClass} h-24 resize-none`}
+                          placeholder="只写可画出来的内容：发型、瞳色、服装、体型、配饰、标志物。不要写背景故事。"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <label className={labelClass}>性格气质</label>
+                          <input
+                            value={selected.personality}
+                            onChange={(e) => patchCharacter(selected.id, { personality: e.target.value })}
+                            className={inputClass}
+                            placeholder="例：冷静、克制、对陌生人保持距离"
+                          />
+                        </div>
+                        <div>
+                          <label className={labelClass}>剧情定位</label>
+                          <input
+                            value={selected.stance}
+                            onChange={(e) => patchCharacter(selected.id, { stance: e.target.value })}
+                            className={inputClass}
+                            placeholder="例：转校生 / 学生会成员 / 反派协力者"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className={labelClass}>关键词</label>
+                        <input
+                          value={selected.keywords.join(', ')}
+                          onChange={(e) => patchCharacter(selected.id, {
+                            keywords: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
+                          })}
+                          className={inputClass}
+                          placeholder="例：学生, 傲娇, 学生会；逗号分隔，兼作搜索标签"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 创作辅助 */}
+                  <div>
+                    <div className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground/60">创作辅助</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="md:col-span-2">
+                        <label className={labelClass}>说话风格</label>
+                        <textarea
+                          value={selected.dialogueStyle}
+                          onChange={(e) => patchCharacter(selected.id, { dialogueStyle: e.target.value })}
+                          className={`${inputClass} h-16 resize-none`}
+                          placeholder="例：句子短，少用感叹号；紧张时回避称呼对方名字。供文本生成参考，不影响立绘外观。"
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>标识颜色</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={selected.colorTheme || characterColor(characters.indexOf(selected))}
+                            onChange={(e) => patchCharacter(selected.id, { colorTheme: e.target.value })}
+                            className="w-9 h-8 rounded border border-border bg-transparent"
+                          />
+                          <input
+                            value={selected.colorTheme || ''}
+                            onChange={(e) => patchCharacter(selected.id, { colorTheme: e.target.value })}
+                            className={`${inputClass} font-mono-family`}
+                            placeholder="var(--color-character-1)"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </section>
 
                 <section className="story-os-panel p-4">
-                  <label className={labelClass}>内部备注 <span className="text-muted-foreground">不参与生成</span></label>
+                  <label className={labelClass}>内部备注</label>
+                  <p className="mb-2 text-[10px] text-muted-foreground">制作备注、待办、设定来源；不参与立绘或配音生成。</p>
                   <textarea
                     value={selected.notes}
                     onChange={(e) => patchCharacter(selected.id, { notes: e.target.value })}
                     className={`${inputClass} h-20 resize-none`}
-                    placeholder="只记录制作备注、待办、设定来源；不会进入立绘或配音生成。"
+                    placeholder="仅用于内部记录"
                   />
                 </section>
               </div>
@@ -941,26 +1118,40 @@ export function CharacterPanel({
                       <div>
                         <div className="mb-2 flex items-center justify-between">
                           <label className={labelClass}>主体参考图（可选）</label>
-                          <span className="text-[10px] text-muted-foreground">最多 5 张</span>
+                          <span className="text-[10px] text-muted-foreground">图生图需 Gemini 模型 · 火山引擎不支持本地参考图 · 最多 5 张</span>
                         </div>
                         <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
-                          {(selected.referenceImages ?? []).map((filename) => (
-                            <div key={filename} className="group relative aspect-square rounded-md border border-border bg-secondary/20 overflow-hidden">
+                          {(selected.referenceImages ?? []).map((filename) => {
+                            const isPicked = selectedReferenceImage === filename;
+                            return (
+                            <div
+                              key={filename}
+                              onClick={() => setSelectedReferenceImage((cur) => cur === filename ? null : filename)}
+                              className={`group relative aspect-square rounded-md border overflow-hidden bg-secondary/20 cursor-pointer transition-all ${
+                                isPicked ? 'border-primary ring-2 ring-primary' : 'border-border hover:border-primary/40'
+                              }`}
+                            >
                               <img
-                                src={convertFileSrc(`${projectPath}/game/config/references/${selected.id}/${filename}`)}
+                                src={convertFileSrc(`${projectPath}/game/reference/${selected.id}/${filename}`)}
                                 alt=""
                                 className="w-full h-full object-cover"
                               />
+                              {isPicked && (
+                                <div className="absolute left-1 top-1 rounded bg-primary px-1 py-0.5 text-[9px] font-semibold text-primary-foreground">
+                                  参考
+                                </div>
+                              )}
                               <button
                                 type="button"
-                                onClick={() => removeReferenceImage(selected.id, filename)}
+                                onClick={(e) => { e.stopPropagation(); removeReferenceImage(selected.id, filename); }}
                                 className="absolute right-1 top-1 p-1 rounded bg-background/80 opacity-0 group-hover:opacity-100 transition-opacity"
                                 aria-label="移除参考图"
                               >
                                 <X className="w-3 h-3" />
                               </button>
                             </div>
-                          ))}
+                            );
+                          })}
                           {(selected.referenceImages?.length ?? 0) < 5 && (
                             <button
                               type="button"
@@ -975,12 +1166,6 @@ export function CharacterPanel({
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <AssetPickerButton
-                          projectPath={projectPath}
-                          category="figure"
-                          currentValue={referenceSprite?.file || ''}
-                          onSelect={(filename) => setReferenceFile(selected.id, filename === 'none' ? '' : filename)}
-                        />
                         <button
                           type="button"
                           onClick={() => triggerSingleSpriteGeneration(referenceSprite?.emotion || '主体参考', { kind: 'reference' })}
@@ -990,96 +1175,62 @@ export function CharacterPanel({
                           {spriteGeneratingKey === 'reference'
                             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             : <Sparkles className="w-3.5 h-3.5" />}
-                          {spriteGeneratingKey === 'reference' ? '生成中' : '生成主体设定图'}
+                          {spriteGeneratingKey === 'reference'
+                            ? '生成中'
+                            : selectedReferenceImage ? '基于参考图生成（图生图）' : '生成主体设定图'}
                         </button>
                       </div>
                     </div>
                   </div>
-                </section>
 
-                {/* 区域2：立绘素材库 — 可折叠 */}
-                <section className="story-os-panel p-4">
-                  <button
-                    type="button"
-                    onClick={() => setFigureLibraryOpen((v) => !v)}
-                    className="w-full flex items-center justify-between text-left"
-                  >
-                    <div>
-                      <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">立绘素材库</h4>
+                  {/* 主体候选 — 历次生成的主体图，点选其一为当前主体 */}
+                  <div className="mt-4 border-t border-border/60 pt-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <label className={labelClass}>主体候选</label>
+                      <span className="text-[10px] text-muted-foreground">{mainCandidates.length} 张 · 点选设为当前主体</span>
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {figureAssets.length} 个
-                      <ChevronDown className={`w-4 h-4 transition-transform ${figureLibraryOpen ? 'rotate-180' : ''}`} />
-                    </div>
-                  </button>
-
-                  {figureLibraryOpen && (
-                    <div className="mt-3">
-                      <div className="mb-3">
-                        <button
-                          type="button"
-                          onClick={uploadFigureAsset}
-                          disabled={figureAssetImporting}
-                          className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-colors text-xs flex items-center gap-2 disabled:opacity-50"
-                        >
-                          {figureAssetImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                          上传立绘素材
-                        </button>
+                    {mainCandidates.length === 0 ? (
+                      <div className="rounded-md border border-dashed border-border p-3 text-[11px] text-muted-foreground">
+                        还没有主体候选。点击上方「生成主体设定图」后，生成的主体图会作为候选出现在这里。
                       </div>
-
-                      {figureAssetsLoading ? (
-                        <div className="h-20 rounded-md border border-dashed border-border flex items-center justify-center text-muted-foreground">
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        </div>
-                      ) : figureAssets.length === 0 ? (
-                        <div className="rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground">
-                          还没有立绘素材，上传后的图片会出现在这里。
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-2">
-                          {figureAssets.map((asset) => {
-                            const isCurrentReference = referenceSprite?.file === asset.name;
-                            return (
-                              <div key={asset.path} className="rounded-md border border-border bg-secondary/20 overflow-hidden">
-                                <div className="aspect-[3/4] bg-background/40 overflow-hidden">
-                                  <img
-                                    src={convertFileSrc(asset.path)}
-                                    alt={asset.name}
-                                    className="w-full h-full object-cover"
-                                  />
+                    ) : (
+                      <div className="grid grid-cols-3 md:grid-cols-5 xl:grid-cols-8 gap-2">
+                        {mainCandidates.map((candidate) => {
+                          const isCurrent = figureFileTail(referenceSprite?.file || '') === figureFileTail(candidate.name);
+                          return (
+                            <div
+                              key={candidate.path}
+                              onClick={() => setMainFromCandidate(candidate)}
+                              className={`group relative aspect-[3/4] rounded-md border overflow-hidden bg-secondary/20 cursor-pointer transition-all ${
+                                isCurrent ? 'border-primary ring-2 ring-primary' : 'border-border hover:border-primary/40'
+                              }`}
+                            >
+                              <img src={convertFileSrc(candidate.path)} alt="" className="w-full h-full object-cover object-top" />
+                              {isCurrent && (
+                                <div className="absolute left-1 top-1 rounded bg-primary px-1 py-0.5 text-[9px] font-semibold text-primary-foreground">
+                                  当前主体
                                 </div>
-                                <div className="p-1.5 space-y-1">
-                                  <div className="truncate text-[10px] font-medium" title={asset.name}>{asset.name}</div>
-                                  <button
-                                    type="button"
-                                    onClick={() => setReferenceFile(selected.id, asset.name)}
-                                    className={`w-full px-1.5 py-1 rounded text-[10px] transition-colors ${
-                                      isCurrentReference
-                                        ? 'bg-primary text-primary-foreground'
-                                        : 'bg-primary/10 text-primary hover:bg-primary/20'
-                                    }`}
-                                  >
-                                    {isCurrentReference ? '当前主体' : '设为主体'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeFigureAsset(asset)}
-                                    disabled={figureAssetDeleting === asset.name}
-                                    className="w-full px-1.5 py-1 rounded bg-destructive/10 text-destructive hover:bg-destructive/20 text-[10px] disabled:opacity-50"
-                                  >
-                                    {figureAssetDeleting === asset.name ? '删除中' : '删除'}
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                              )}
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); removeMainCandidate(candidate); }}
+                                disabled={mainCandidateDeleting === candidate.name}
+                                className="absolute right-1 top-1 p-1 rounded bg-background/80 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+                                aria-label="删除候选"
+                              >
+                                {mainCandidateDeleting === candidate.name
+                                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                                  : <Trash2 className="w-3 h-3" />}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </section>
 
-                {/* 区域3：表情变体 — 醒目情绪标签 + 各自提示词 */}
+                {/* 区域2：表情变体 — 醒目情绪标签 + 各自提示词 */}
                 <section className="story-os-panel p-4">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
@@ -1169,14 +1320,17 @@ export function CharacterPanel({
                   {variantSprites.length === 0 ? (
                     <div className="text-xs text-muted-foreground border border-dashed border-border rounded-md p-3">还没有表情变体。点击「添加变体」选择情绪或建议姿态。</div>
                   ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-2">
                       {variantSprites.map(({ sprite, index }) => {
                         const color = emotionColor(sprite.emotion);
+                        const generated = hasGeneratedAsset(sprite.emotion);
+                        const generating = spriteGeneratingKey === `variant:${index}`;
+                        const expanded = expandedPromptIndex === index;
                         return (
                           <div key={index} className="rounded-md border border-border bg-secondary/15 overflow-hidden hover:border-primary/30 transition-colors">
                             {/* 情绪标签 — 醒目展示 */}
                             <div
-                              className="px-3 py-2 flex items-center gap-1"
+                              className="px-2 py-1 flex items-center gap-1"
                               style={{
                                 backgroundColor: `color-mix(in srgb, ${color} 9%, transparent)`,
                                 borderBottom: `2px solid color-mix(in srgb, ${color} 25%, transparent)`,
@@ -1185,7 +1339,7 @@ export function CharacterPanel({
                               <input
                                 value={sprite.emotion}
                                 onChange={(e) => updateSprite(selected.id, index, 'emotion', e.target.value)}
-                                className="min-w-0 flex-1 bg-transparent text-sm font-semibold focus:outline-none focus:ring-1 focus:ring-primary/40 rounded px-1 py-0.5"
+                                className="min-w-0 flex-1 bg-transparent text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary/40 rounded px-1 py-0.5"
                                 placeholder="情绪标签"
                                 style={{ color }}
                               />
@@ -1198,48 +1352,131 @@ export function CharacterPanel({
                               </button>
                             </div>
 
-                            <div className="aspect-[3/4] bg-background/40 flex items-center justify-center overflow-hidden border-b border-border">
-                              {sprite.file ? (
-                                <img
-                                  src={convertFileSrc(`${projectPath}/game/figure/${sprite.file}`)}
-                                  alt=""
-                                  className="w-full h-full object-cover"
-                                />
+                            {/* 状态占位区 — 变体图只进素材库，此处不绑定具体图片 */}
+                            <div
+                              className="aspect-[3/4] flex flex-col items-center justify-center gap-1 overflow-hidden border-b border-border"
+                              style={{
+                                background: `linear-gradient(135deg, color-mix(in srgb, ${color} 18%, transparent), color-mix(in srgb, ${color} 4%, transparent))`,
+                              }}
+                            >
+                              {generated ? (
+                                <>
+                                  <Check className="w-6 h-6 opacity-70" style={{ color }} />
+                                  <span className="text-[10px] font-medium" style={{ color }}>已入素材库</span>
+                                </>
                               ) : (
-                                <ImageIcon className="w-8 h-8 text-muted-foreground/40" />
+                                <>
+                                  <ImageIcon className="w-6 h-6 opacity-60" style={{ color }} />
+                                  <span className="text-[10px]" style={{ color }}>{sprite.emotion || '待生成'} · 未生成</span>
+                                </>
                               )}
                             </div>
 
-                            <div className="p-2 space-y-2">
-                              <textarea
-                                value={sprite.prompt || ''}
-                                onChange={(e) => updateSprite(selected.id, index, 'prompt', e.target.value)}
-                                className="w-full h-16 resize-none text-[10px] font-mono-family bg-input-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
-                                placeholder="提示词（如：微笑表情，嘴角上扬，眼睛微眯…）"
-                              />
-                              <div className="flex items-center gap-1">
-                                <AssetPickerButton
-                                  projectPath={projectPath}
-                                  category="figure"
-                                  currentValue={sprite.file}
-                                  onSelect={(filename) => updateSprite(selected.id, index, 'file', filename === 'none' ? '' : filename)}
+                            <div className="p-1.5 space-y-1.5">
+                              {/* 提示词折叠：默认一行摘要，点击展开编辑 */}
+                              {expanded ? (
+                                <textarea
+                                  value={sprite.prompt || ''}
+                                  onChange={(e) => updateSprite(selected.id, index, 'prompt', e.target.value)}
+                                  onBlur={() => setExpandedPromptIndex(null)}
+                                  autoFocus
+                                  className="w-full h-14 resize-none text-[10px] font-mono-family bg-input-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                                  placeholder="提示词（如：微笑表情，嘴角上扬，眼睛微眯…）"
                                 />
+                              ) : (
                                 <button
                                   type="button"
-                                  onClick={() => triggerSingleSpriteGeneration(sprite.emotion, { kind: 'variant', index })}
-                                  disabled={spriteGeneratingKey !== null}
-                                  className="flex-1 px-2 py-1.5 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs flex items-center justify-center gap-1 disabled:opacity-50"
+                                  onClick={() => setExpandedPromptIndex(index)}
+                                  className="w-full text-left text-[10px] text-muted-foreground hover:text-foreground bg-input-background/60 border border-border rounded px-2 py-1 line-clamp-1 transition-colors"
+                                  title={sprite.prompt || '点击添加提示词'}
                                 >
-                                  {spriteGeneratingKey === `variant:${index}`
-                                    ? <Loader2 className="w-3 h-3 animate-spin" />
-                                    : <Sparkles className="w-3 h-3" />}
-                                  {spriteGeneratingKey === `variant:${index}` ? '生成中' : '生成'}
+                                  {sprite.prompt?.trim() || <span className="text-muted-foreground/60">点击添加提示词</span>}
                                 </button>
-                              </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => triggerSingleSpriteGeneration(sprite.emotion, { kind: 'variant', index })}
+                                disabled={spriteGeneratingKey !== null}
+                                className="w-full px-2 py-1.5 rounded bg-primary/10 text-primary hover:bg-primary/20 text-xs flex items-center justify-center gap-1 disabled:opacity-50"
+                              >
+                                {generating
+                                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                                  : <Sparkles className="w-3 h-3" />}
+                                {generating ? '生成中' : generated ? '重新生成' : '生成'}
+                              </button>
                             </div>
                           </div>
                         );
                       })}
+                    </div>
+                  )}
+                </section>
+
+                {/* 区域3：立绘素材库 — 可折叠 */}
+                <section className="story-os-panel p-4">
+                  <button
+                    type="button"
+                    onClick={() => setFigureLibraryOpen((v) => !v)}
+                    className="w-full flex items-center justify-between text-left"
+                  >
+                    <div>
+                      <h4 className="text-xs uppercase tracking-wide text-muted-foreground font-mono-family">立绘素材库</h4>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground/70">表情变体与上传的备用图；主体图在上方独立管理。</p>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {figureAssets.length} 个
+                      <ChevronDown className={`w-4 h-4 transition-transform ${figureLibraryOpen ? 'rotate-180' : ''}`} />
+                    </div>
+                  </button>
+
+                  {figureLibraryOpen && (
+                    <div className="mt-3">
+                      <div className="mb-3">
+                        <button
+                          type="button"
+                          onClick={uploadFigureAsset}
+                          disabled={figureAssetImporting}
+                          className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-colors text-xs flex items-center gap-2 disabled:opacity-50"
+                        >
+                          {figureAssetImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                          上传立绘素材
+                        </button>
+                      </div>
+
+                      {figureAssetsLoading ? (
+                        <div className="h-20 rounded-md border border-dashed border-border flex items-center justify-center text-muted-foreground">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        </div>
+                      ) : figureAssets.length === 0 ? (
+                        <div className="rounded-md border border-dashed border-border p-4 text-xs text-muted-foreground">
+                          还没有立绘素材，上传后的图片会出现在这里。
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-2">
+                          {figureAssets.map((asset) => (
+                            <div key={asset.path} className="rounded-md border border-border bg-secondary/20 overflow-hidden">
+                              <div className="aspect-[3/4] bg-background/40 overflow-hidden">
+                                <img
+                                  src={convertFileSrc(asset.path)}
+                                  alt={asset.name}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                              <div className="p-1.5 space-y-1">
+                                <div className="truncate text-[10px] font-medium" title={asset.name}>{asset.name}</div>
+                                <button
+                                  type="button"
+                                  onClick={() => removeFigureAsset(asset)}
+                                  disabled={figureAssetDeleting === asset.name}
+                                  className="w-full px-1.5 py-1 rounded bg-destructive/10 text-destructive hover:bg-destructive/20 text-[10px] disabled:opacity-50"
+                                >
+                                  {figureAssetDeleting === asset.name ? '删除中' : '删除'}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </section>
@@ -1491,12 +1728,12 @@ function SpriteAiGenerateDialog({
 
           {isBatch ? (
             <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
-              将使用 {variantCount} 个表情变体各自填写的提示词批量生成；这里只选择本次使用的图片模型。
+              将使用 {variantCount} 个表情变体各自填写的提示词批量生成；缺少提示词的变体会自动跳过。
             </div>
           ) : (
             <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
               {generation.target.kind === 'reference'
-                ? '将使用主体区域的“设定图提示词（三视图）”生成。'
+                ? '将使用主体区域的"设定图提示词（三视图）"生成。'
                 : '将使用该表情变体卡片中填写的提示词生成。'}
             </div>
           )}
