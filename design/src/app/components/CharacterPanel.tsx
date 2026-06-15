@@ -121,20 +121,21 @@ function spritePrefix(characterPart: string, emotion: string): string {
   return `${characterPart}_${sanitizeFilenamePart(emotion, 'sprite')}_`;
 }
 
-function buildSpritePrompt(character: Character, sprite: CharacterSprite, isReference: boolean, instruction: string): string {
+// 提示词完全以「本次生成提示词 + 参考图」为准，不再注入任何角色上下文字段
+// （性别/年龄/外观设定/性格/剧情定位/说话风格/关键词都不进生图提示词，仅供文本生成参考）：
+// - 本次提示词放在质量前缀之后第一位，扩散模型对靠前 token 更敏感。
+// - 有参考图时外观一致性交给参考图，本次提示词决定姿势/表情/镜头等本次内容。
+function buildSpritePrompt(
+  character: Character,
+  sprite: CharacterSprite,
+  isReference: boolean,
+  instruction: string,
+): string {
   return [
     'visual novel character sprite, full body, transparent background, clean anime game asset, consistent character design',
     isReference ? 'main reference sprite, neutral readable pose, front-facing character design sheet quality' : '',
-    character.name ? `角色名：${character.name}` : '',
-    character.gender ? `性别：${character.gender}` : '',
-    character.age ? `年龄：${character.age}` : '',
-    character.description ? `外观设定：${character.description}` : '',
-    character.personality ? `性格气质：${character.personality}` : '',
-    character.stance ? `剧情定位：${character.stance}` : '',
-    character.dialogueStyle ? `说话风格：${character.dialogueStyle}` : '',
-    character.keywords.length ? `关键词：${character.keywords.join('、')}` : '',
-    sprite.emotion ? `立绘形态/情绪：${sprite.emotion}` : '',
     instruction ? `本次生成提示词：${instruction}` : '',
+    sprite.emotion ? `立绘形态/情绪：${sprite.emotion}` : '',
     'avoid background scene, avoid text, avoid watermark, avoid extra characters',
   ].filter(Boolean).join('\n');
 }
@@ -1553,7 +1554,6 @@ export function CharacterPanel({
       )}
       <SpriteAiGenerateDialog
         open={pendingSpriteGeneration !== null}
-        character={selected}
         generation={pendingSpriteGeneration}
         initialInstruction={
           pendingSpriteGeneration && selected
@@ -1576,7 +1576,6 @@ export function CharacterPanel({
 
 function SpriteAiGenerateDialog({
   open,
-  character,
   generation,
   initialInstruction,
   variantCount,
@@ -1584,7 +1583,6 @@ function SpriteAiGenerateDialog({
   onClose,
 }: {
   open: boolean;
-  character: Character | null;
   generation: PendingSpriteGeneration | null;
   initialInstruction: string;
   variantCount: number;
@@ -1601,15 +1599,6 @@ function SpriteAiGenerateDialog({
   const configuredModels = config ? parseConfiguredModels(config.model) : [];
   const effectiveModel = selectedModel || configuredModels[0] || config?.model.trim() || '';
   const isBatch = generation?.batch === true;
-  const contextLines = character
-    ? [
-        character.name ? `角色：${character.name}` : '',
-        character.gender ? `性别：${character.gender}` : '',
-        character.age ? `年龄：${character.age}` : '',
-        character.description ? `外观：${character.description}` : '',
-        character.personality ? `性格：${character.personality}` : '',
-      ].filter(Boolean)
-    : [];
 
   useEffect(() => {
     if (!open) return;
@@ -1716,15 +1705,6 @@ function SpriteAiGenerateDialog({
               />
             )}
           </div>
-
-          {contextLines.length > 0 && (
-            <div className="rounded-md border border-border bg-secondary/20 p-3">
-              <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">角色上下文</div>
-              <div className="space-y-1 text-xs text-muted-foreground">
-                {contextLines.map((line) => <div key={line}>{line}</div>)}
-              </div>
-            </div>
-          )}
 
           {isBatch ? (
             <div className="rounded-md border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">

@@ -155,6 +155,18 @@ struct DashScopeTtsAudio {
     url: Option<String>,
 }
 
+/// 火山引擎 HTTP 单向流式 TTS 的单个分块。接口以流式返回多行 JSON，
+/// 每行一个该结构；`data` 为该块的 Base64 音频（结束块通常为空）。
+#[derive(Debug, Deserialize)]
+struct VolcengineTtsChunk {
+    #[serde(default)]
+    code: i64,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct GeminiGenerateResponse {
     #[serde(default)]
@@ -297,9 +309,9 @@ pub async fn ai_generate_image(
             generate_openai_compatible_image(&cfg, model, &prompt, reference.as_ref()).await
         }
         "volcengine" => {
-            // 火山引擎 Seedream 图生图需要公网 URL，不支持本地 base64，静默忽略参考图。
-            // 角色一致性依赖提示词中已包含的详细外观描述（buildSpritePrompt）。
-            generate_openai_compatible_image(&cfg, model, &prompt, None).await
+            // 火山引擎 Seedream 4.x 支持 base64 参考图（图生图），按官方文档以
+            // data:image/<格式>;base64,<编码> 形式传入 image 字段，实现角色一致性。
+            generate_openai_compatible_image(&cfg, model, &prompt, reference.as_ref()).await
         }
         "aliyun" => generate_dashscope_image(&app_handle, &cfg, model, &prompt).await,
         "gemini" => generate_gemini_image(&cfg, model, &prompt, reference.as_ref()).await,
@@ -338,14 +350,7 @@ pub async fn ai_generate_tts(
         }
         "elevenlabs" => generate_elevenlabs_tts(&cfg, model, &text, &voice_prompt, response_format).await,
         "aliyun" => generate_dashscope_tts(&cfg, model, &text, &voice_prompt, response_format).await,
-        "gemini" => Err("Gemini TTS 当前返回格式需要解析 generateContent 的 inline audio；此客户端尚未适配，请先使用 OpenAI 兼容音频网关。".to_string()),
-        "azure" => Err("Azure Speech 需要 region endpoint、SSML voice 和 Ocp-Apim-Subscription-Key；当前配置不足以稳定直连。请使用自定义网关或后续补充 Azure 专用字段。".to_string()),
-        "volcengine" => Err("火山引擎语音接口需要 AppID/Cluster/签名等专用参数；当前配置不足以直连。".to_string()),
-        "tencent" => Err("腾讯云 TTS 需要 TC3 签名参数；当前配置不足以直连。".to_string()),
-        "baidu" => Err("百度语音合成需要 Access Token 获取流程；当前配置不足以直连。".to_string()),
-        "minimax" => Err("MiniMax TTS 需要 group_id 和 voice_id 等专用字段；当前 UI 暂未配置这些参数。".to_string()),
-        "xunfei" => Err("讯飞 TTS 需要 WebSocket 鉴权签名参数；当前配置不足以直连。".to_string()),
-        "edge-tts" => Err("Edge TTS 是本地/命令行方案，当前 Tauri 后端尚未集成 edge-tts 执行器。".to_string()),
+        "volcengine" => generate_volcengine_tts(&cfg, model, &text, &voice_prompt, response_format).await,
         other => Err(format!("当前暂未适配 {other} 音频生成接口，请使用 OpenAI 兼容 Base URL 或选择已适配供应商。")),
     }
 }
@@ -726,9 +731,9 @@ async fn generate_openai_compatible_image(
             "sequential_image_generation": "disabled"
         });
         // Seedream 4.x 支持图生图：image 字段传参考图。
-        // 火山引擎要求纯 base64（不带 data: 前缀），而非 data URI。
-        if let Some((_mime, b64)) = reference {
-            body["image"] = serde_json::json!(b64);
+        // 火山引擎官方文档要求 data:image/<格式>;base64,<编码> 形式的 data URI，格式名小写。
+        if let Some((mime, b64)) = reference {
+            body["image"] = serde_json::json!(format!("data:{mime};base64,{b64}"));
         }
         body
     } else {
@@ -1038,16 +1043,21 @@ async fn generate_dashscope_tts(
     voice_prompt: &str,
     response_format: &str,
 ) -> Result<GeneratedMedia, String> {
-    // CosyVoice 非实时 HTTP 接口：POST .../SpeechSynthesizer，参数全部在 input 内，
-    // 非流式响应为 JSON，音频在 output.audio.url（24h 有效），需再下载。
-    let endpoint = dashscope_endpoint(cfg, "services/audio/tts/SpeechSynthesizer");
-    let voice = dashscope_voice_from_prompt(voice_prompt);
+    // Qwen-TTS 非实时 HTTP 接口：POST .../multimodal-generation/generation。
+    // 请求体为 {model, input:{text, voice}}，不接受 format/sample_rate 字段；
+    // 非流式响应音频在 output.audio.url（wav，24h 有效），需再下载。
+    // 流式（X-DashScope-SE）才会返回 output.audio.data 的 Base64 PCM，这里走非流式。
+    let endpoint = dashscope_endpoint(cfg, "services/aigc/multimodal-generation/generation");
+    // Qwen-TTS 音色名（如 Cherry/Ethan）直接透传 voice_prompt，空时给默认音色。
+    let voice = {
+        let trimmed = voice_prompt.trim();
+        if trimmed.is_empty() { "Cherry" } else { trimmed }
+    };
     let body = serde_json::json!({
         "model": model,
         "input": {
             "text": text,
-            "voice": voice,
-            "format": response_format
+            "voice": voice
         }
     });
     let response_text = post_json_text(cfg, &endpoint, body, "阿里云语音合成").await?;
@@ -1057,6 +1067,10 @@ async fn generate_dashscope_tts(
         .output
         .and_then(|o| o.audio)
         .ok_or_else(|| format!("阿里云语音合成响应缺少 audio 字段: {response_text}"))?;
+    if let Some(url) = audio.url.filter(|u| !u.is_empty()) {
+        // Qwen-TTS 非流式返回 wav 文件 url，扩展名以 wav 为准（忽略用户所选格式）。
+        return download_generated_media(cfg, model, &endpoint, &url, "wav", "tts_generate").await;
+    }
     if let Some(data) = audio.data.filter(|d| !d.is_empty()) {
         log_provider_event("tts_generate", cfg, model, &endpoint, true, "audio generated");
         return Ok(GeneratedMedia {
@@ -1064,10 +1078,112 @@ async fn generate_dashscope_tts(
             extension: response_format.to_string(),
         });
     }
-    if let Some(url) = audio.url.filter(|u| !u.is_empty()) {
-        return download_generated_media(cfg, model, &endpoint, &url, response_format, "tts_generate").await;
+    Err(format!("阿里云语音合成响应既无 url 也无 data: {response_text}"))
+}
+
+/// 火山引擎 HTTP 单向流式语音合成（POST .../api/v3/tts/unidirectional）。
+/// 鉴权用 X-Api-Key + X-Api-Resource-Id；响应是按行分隔的多段 JSON，
+/// 每段 data 为一段 Base64 音频，需逐段解码拼接为完整音频后再整体编码。
+async fn generate_volcengine_tts(
+    cfg: &AiProviderConfig,
+    model: &str,
+    text: &str,
+    voice_prompt: &str,
+    response_format: &str,
+) -> Result<GeneratedMedia, String> {
+    let endpoint = if cfg.base_url.trim().is_empty() {
+        "https://openspeech.bytedance.com/api/v3/tts/unidirectional".to_string()
+    } else {
+        cfg.base_url.trim().trim_end_matches('/').to_string()
+    };
+    // X-Api-Resource-Id 用模型字段承载（如 seed-tts-2.0）；speaker 用音色提示原文。
+    let resource_id = if model.is_empty() { "seed-tts-2.0" } else { model };
+    let speaker = {
+        let trimmed = voice_prompt.trim();
+        if trimmed.is_empty() {
+            "zh_female_vv_uranus_bigtts"
+        } else {
+            trimmed
+        }
+    };
+    // 火山采样率取常见值；wav/pcm/mp3 均支持，统一用 24000。
+    let body = serde_json::json!({
+        "req_params": {
+            "text": text,
+            "speaker": speaker,
+            "audio_params": {
+                "format": response_format,
+                "sample_rate": 24000
+            }
+        }
+    });
+    let body = serde_json::to_string(&body).map_err(|e| format!("序列化火山语音合成请求失败: {e}"))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("创建火山语音合成HTTP客户端失败: {e}"))?;
+    let response = client
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .header("X-Api-Key", cfg.api_key.trim())
+        .header("X-Api-Resource-Id", resource_id)
+        .header("Connection", "keep-alive")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| {
+            let message = format!("火山语音合成请求失败: {e}");
+            log_provider_event("tts_generate", cfg, model, &endpoint, false, &message);
+            message
+        })?;
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取火山语音合成响应失败: {e}"))?;
+    if !status.is_success() {
+        log_provider_event("tts_generate", cfg, model, &endpoint, false, &response_text);
+        return Err(format!("火山语音合成失败 ({status}): {response_text}"));
     }
-    Err(format!("阿里云语音合成响应既无 data 也无 url: {response_text}"))
+    // 流式响应：按行分隔的多个 JSON 块，逐行解析并拼接 data 的解码字节。
+    let mut audio_bytes: Vec<u8> = Vec::new();
+    let mut last_error: Option<String> = None;
+    for line in response_text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let chunk: VolcengineTtsChunk = match serde_json::from_str(line) {
+            Ok(chunk) => chunk,
+            Err(_) => continue, // 跳过非 JSON 行（如保活空行）
+        };
+        if chunk.code != 0 {
+            last_error = Some(format!(
+                "火山语音合成返回错误码 {}: {}",
+                chunk.code,
+                chunk.message.unwrap_or_default()
+            ));
+            continue;
+        }
+        if let Some(data) = chunk.data.filter(|d| !d.is_empty()) {
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(strip_data_url_prefix(&data))
+                .map_err(|e| format!("解码火山语音合成音频块失败: {e}"))?;
+            audio_bytes.extend_from_slice(&decoded);
+        }
+    }
+    if audio_bytes.is_empty() {
+        if let Some(err) = last_error {
+            log_provider_event("tts_generate", cfg, model, &endpoint, false, &err);
+            return Err(err);
+        }
+        return Err(format!("火山语音合成响应中没有音频数据: {response_text}"));
+    }
+    log_provider_event("tts_generate", cfg, model, &endpoint, true, "audio generated");
+    Ok(GeneratedMedia {
+        base64_data: base64::engine::general_purpose::STANDARD.encode(&audio_bytes),
+        extension: response_format.to_string(),
+    })
 }
 
 async fn post_json_text(
@@ -1301,30 +1417,6 @@ fn elevenlabs_voice_id(value: &str) -> String {
         }
     }
     "21m00Tcm4TlvDq8ikWAM".to_string()
-}
-
-fn dashscope_voice_from_prompt(value: &str) -> String {
-    let lower = value.to_ascii_lowercase();
-    for voice in [
-        "longxiaochun",
-        "longxiaoxia",
-        "longxiaobai",
-        "longlaotie",
-        "loongstella",
-        "loongbella",
-        "loongnina",
-        "zhichu",
-        "zhiting",
-        "zhixiang",
-        "zhiwei",
-        "zhimiao",
-        "zhiru",
-    ] {
-        if lower.contains(voice) {
-            return voice.to_string();
-        }
-    }
-    "longxiaochun".to_string()
 }
 
 fn log_provider_event(

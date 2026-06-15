@@ -65,16 +65,9 @@ const IMAGE_PROVIDERS: ProviderPreset[] = [
 
 const TTS_PROVIDERS: ProviderPreset[] = [
   { value: 'openai', label: 'OpenAI TTS', defaultModel: 'gpt-4o-mini-tts', models: ['gpt-4o-mini-tts', 'gpt-4o-mini-tts-2025-03-20', 'gpt-4o-mini-tts-2025-12-15', 'tts-1', 'tts-1-1106', 'tts-1-hd', 'tts-1-hd-1106'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'gemini', label: 'Google Gemini TTS', defaultModel: 'gemini-2.5-flash-preview-tts', models: ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts', 'gemini-2.5-flash-native-audio-latest', 'gemini-2.5-flash-native-audio-preview-09-2025', 'gemini-2.5-flash-native-audio-preview-12-2025'], defaultBaseUrl: '', needsBaseUrl: false },
   { value: 'elevenlabs', label: 'ElevenLabs', defaultModel: 'eleven_multilingual_v2', models: ['eleven_v3', 'eleven_multilingual_v2', 'eleven_flash_v2_5', 'eleven_flash_v2', 'eleven_turbo_v2_5', 'eleven_turbo_v2', 'eleven_multilingual_sts_v2', 'eleven_monolingual_v1'], defaultBaseUrl: '', needsBaseUrl: false },
   { value: 'aliyun', label: '阿里云 DashScope / CosyVoice', defaultModel: 'cosyvoice-v2', models: ['cosyvoice-v2', 'cosyvoice-v1', 'cosyvoice-v3', 'cosyvoice-v3-flash', 'cosyvoice-v3-plus', 'cosyvoice-v3.5-flash', 'cosyvoice-v3.5-plus', 'sambert-zhichu-v1', 'sambert-zhiting-v1', 'sambert-zhixiang-v1', 'sambert-zhiwei-v1', 'sambert-zhimiao-v1', 'sambert-zhiru-v1'], defaultBaseUrl: 'https://dashscope.aliyuncs.com/api/v1', needsBaseUrl: false },
   { value: 'volcengine', label: '火山引擎 / 豆包语音', defaultModel: 'seed-tts', models: ['seed-tts', 'seed-tts-2.0', 'mega-tts', 'doubao-tts'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'tencent', label: '腾讯云 TTS', defaultModel: 'flow_02_turbo', models: ['flow_02_turbo', 'flow_02', 'TextToVoice', 'CreateTtsTask', 'CreateTtsTaskSSML'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'baidu', label: '百度智能云语音', defaultModel: 'baidu-tts', models: ['baidu-tts', 'baidu-tts-basic', 'baidu-tts-premium', 'baidu-tts-emotion', 'baidu-tts-onnx'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'azure', label: 'Azure Speech', defaultModel: 'zh-CN-XiaoxiaoNeural', models: ['zh-CN-XiaoxiaoNeural', 'zh-CN-YunxiNeural', 'zh-CN-XiaoyiNeural', 'zh-CN-YunjianNeural', 'zh-CN-XiaochenNeural', 'en-US-JennyNeural', 'en-US-AriaNeural', 'ja-JP-NanamiNeural'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'minimax', label: 'MiniMax 语音', defaultModel: 'speech-02-hd', models: ['speech-2.5-hd-preview', 'speech-2.5-turbo-preview', 'speech-02-hd', 'speech-02-turbo', 'speech-01-hd', 'speech-01-turbo'], defaultBaseUrl: 'https://api.minimax.chat/v1', needsBaseUrl: false },
-  { value: 'xunfei', label: '讯飞开放平台 TTS', defaultModel: 'xunfei-tts', models: ['xunfei-tts', 'xunfei-tts-pro', 'xunfei-ultra', 'xunfei-vcn'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'edge-tts', label: 'Edge TTS (本地免费)', defaultModel: 'zh-CN-XiaoxiaoNeural', models: ['zh-CN-XiaoxiaoNeural', 'zh-CN-YunxiNeural', 'zh-CN-XiaoyiNeural', 'zh-CN-YunjianNeural', 'en-US-AriaNeural', 'en-US-JennyNeural', 'ja-JP-NanamiNeural'], defaultBaseUrl: '', needsBaseUrl: false, keyHint: '本地 Edge TTS 通常不需要 Key' },
   { value: 'custom', label: '自定义', defaultModel: 'tts-model', models: ['tts-model'], defaultBaseUrl: 'https://api.example.com/v1/audio/speech', needsBaseUrl: true },
 ];
 
