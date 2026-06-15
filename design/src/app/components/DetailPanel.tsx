@@ -12,6 +12,7 @@ import {
   type AssetMetadata,
 } from '../lib/asset-metadata';
 import { listScenes, sceneDisplayName, type SceneHeader } from '../lib/webgal-ipc';
+import { listAssets, type AssetInfo } from '../lib/assets-ipc';
 import {
   Dialog,
   DialogContent,
@@ -852,6 +853,64 @@ function CharacterFigurePicker({
   );
 }
 
+// 与 CharacterPanel 的立绘命名规则保持一致：文件名为
+// `${characterPart}_${emotionPart}_${timestamp}.${ext}`，变体立绘只进素材库
+// （figure/<角色ID>/），sprite.file 留空。此处据此把空 file 的卡片解析回实际图片。
+function sanitizeFilenamePart(value: string, fallback: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || fallback;
+}
+
+function spritePrefix(character: Character, emotion: string): string {
+  const characterPart = sanitizeFilenamePart(character.name || character.id, 'character');
+  return `${characterPart}_${sanitizeFilenamePart(emotion, 'sprite')}_`;
+}
+
+function figureFileTail(file: string): string {
+  if (!file) return '';
+  const slash = file.lastIndexOf('/');
+  return slash >= 0 ? file.slice(slash + 1) : file;
+}
+
+// 把一个立绘卡片解析为「可写入脚本的限定文件名」与「可显示的图片源」。
+// - sprite.file 非空：直接使用（主体图 / 旧数据）。
+// - sprite.file 为空（变体）：按情绪前缀在素材库匹配最新生成图，回填限定路径。
+interface ResolvedSprite {
+  file: string;          // 写入脚本的限定文件名，如 "<角色ID>/xxx.png"
+  src: string | null;    // convertFileSrc 后的可显示地址
+}
+
+function resolveSpriteImage(
+  character: Character,
+  sprite: Character['sprites'][number],
+  assets: AssetInfo[],
+  projectPath?: string,
+): ResolvedSprite {
+  if (sprite.file) {
+    const match = assets.find((asset) => figureFileTail(asset.name) === figureFileTail(sprite.file));
+    return {
+      file: sprite.file,
+      src: match
+        ? convertFileSrc(match.path)
+        : projectPath
+          ? convertFileSrc(`${projectPath}/game/figure/${sprite.file}`)
+          : null,
+    };
+  }
+  const prefix = spritePrefix(character, sprite.emotion);
+  const matches = assets
+    .filter((asset) => figureFileTail(asset.name).startsWith(prefix))
+    .sort((a, b) => figureFileTail(b.name).localeCompare(figureFileTail(a.name)));
+  const newest = matches[0];
+  if (!newest) return { file: '', src: null };
+  return { file: `${character.id}/${figureFileTail(newest.name)}`, src: convertFileSrc(newest.path) };
+}
+
 function CharacterEmotionDialog({
   character,
   currentFile,
@@ -865,7 +924,29 @@ function CharacterEmotionDialog({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [assets, setAssets] = useState<AssetInfo[]>([]);
+
+  // 立绘按角色存放在 figure/<角色ID>/（变体）与 figure/<角色ID>/main/（主体候选）。
+  useEffect(() => {
+    if (!open || !projectPath) return;
+    let cancelled = false;
+    (async () => {
+      const [variants, candidates] = await Promise.all([
+        listAssets(projectPath, `figure/${character.id}`).catch(() => [] as AssetInfo[]),
+        listAssets(projectPath, `figure/${character.id}/main`).catch(() => [] as AssetInfo[]),
+      ]);
+      if (!cancelled) setAssets([...variants, ...candidates]);
+    })();
+    return () => { cancelled = true; };
+  }, [open, projectPath, character.id]);
+
+  const hasSelection = Boolean(currentFile) && currentFile !== 'none';
+  // 当前选中文件直接据其限定路径出图：变体的 sprite.file 为空，无法用 find 反查，
+  // 故不依赖 sprites 匹配，直接用 currentFile 渲染缩略图。
   const selectedSprite = character.sprites.find((sprite) => sprite.file === currentFile);
+  const selectedSrc = hasSelection && projectPath
+    ? convertFileSrc(`${projectPath}/game/figure/${currentFile}`)
+    : null;
   const filtered = character.sprites.filter((sprite) =>
     `${sprite.emotion} ${sprite.file}`.toLowerCase().includes(search.toLowerCase()),
   );
@@ -877,14 +958,18 @@ function CharacterEmotionDialog({
         onClick={() => setOpen(true)}
         className="w-full rounded-md border border-border bg-card/60 hover:bg-secondary/50 transition-colors overflow-hidden text-left"
       >
-        {selectedSprite && projectPath ? (
+        {hasSelection ? (
           <div className="flex items-center gap-3 p-2">
-            <div className="w-14 h-20 rounded bg-secondary/30 overflow-hidden flex-shrink-0">
-              <img src={convertFileSrc(`${projectPath}/game/figure/${selectedSprite.file}`)} alt="" className="w-full h-full object-cover object-top" />
+            <div className="w-14 h-20 rounded bg-secondary/30 overflow-hidden flex-shrink-0 flex items-center justify-center">
+              {selectedSrc ? (
+                <img src={selectedSrc} alt="" className="w-full h-full object-cover object-top" />
+              ) : (
+                <Image className="w-6 h-6 text-muted-foreground/40" />
+              )}
             </div>
             <div className="min-w-0">
-              <div className="text-sm truncate">{character.name} · {selectedSprite.emotion || '默认'}</div>
-              <div className="mt-1 text-[11px] text-muted-foreground truncate font-mono-family">{selectedSprite.file}</div>
+              <div className="text-sm truncate">{character.name} · {selectedSprite?.emotion || '已选立绘'}</div>
+              <div className="mt-1 text-[11px] text-muted-foreground truncate font-mono-family">{figureFileTail(currentFile)}</div>
             </div>
           </div>
         ) : (
@@ -918,26 +1003,27 @@ function CharacterEmotionDialog({
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {filtered.map((sprite) => {
-                  const selected = sprite.file === currentFile;
+                  const resolved = resolveSpriteImage(character, sprite, assets, projectPath);
+                  const selected = (resolved.file || sprite.file) === currentFile;
                   return (
                     <button
                       type="button"
                       key={`${character.id}-${sprite.file}-${sprite.emotion}`}
-                      onClick={() => { onSelect(sprite); setOpen(false); }}
+                      onClick={() => { onSelect({ ...sprite, file: resolved.file || sprite.file }); setOpen(false); }}
                       className={`min-h-40 rounded-md border overflow-hidden bg-card/60 hover:bg-secondary/50 transition-colors text-left ${
                         selected ? 'border-primary bg-primary/10 text-primary' : 'border-border'
                       }`}
                     >
                       <div className="h-28 bg-secondary/30 flex items-center justify-center overflow-hidden">
-                        {projectPath ? (
-                          <img src={convertFileSrc(`${projectPath}/game/figure/${sprite.file}`)} alt="" className="w-full h-full object-cover object-top" />
+                        {resolved.src ? (
+                          <img src={resolved.src} alt="" className="w-full h-full object-cover object-top" />
                         ) : (
                           <Image className="w-7 h-7 text-muted-foreground/40" />
                         )}
                       </div>
                       <div className="px-2 py-1 text-center">
                         <div className="truncate text-xs">{character.name} · {sprite.emotion || '默认'}</div>
-                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground font-mono-family">{sprite.file}</div>
+                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground font-mono-family">{resolved.file || sprite.file || '（未绑定图片）'}</div>
                       </div>
                     </button>
                   );
