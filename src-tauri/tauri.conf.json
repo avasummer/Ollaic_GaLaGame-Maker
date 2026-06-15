@@ -34,7 +34,8 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "runtime/WebGAL_Template/**/*"
+      "runtime/WebGAL_Template/**/*",
+      "models/*.onnx"
     ]
   }
 }

@@ -136,6 +136,12 @@ export async function aiGenerateImage(
   });
 }
 
+/// 去除立绘背景：输入（含或不含 data URL 前缀的）base64 图像，返回带 alpha 通道的透明 PNG。
+/// 由本地 ONNX 模型 isnet-anime 推理，不经过网络。
+export async function removeBackground(base64Data: string): Promise<GeneratedMedia> {
+  return invoke<GeneratedMedia>('remove_background', { base64Data });
+}
+
 export async function listenAiMediaGenerationProgress(
   handler: (progress: AiMediaGenerationProgress) => void,
 ): Promise<UnlistenFn> {

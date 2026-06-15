@@ -8,6 +8,16 @@
 - **背景 / CG 生成**(`AssetManager.tsx`):输入描述、选择目标模型(支持多模型批量),为「场景 / CG」标签页生成图像;保存时带分类标签并建议可用文件名。
 - **角色立绘生成**(`CharacterPanel.tsx`):`buildSpritePrompt()` 结合角色性格、表情与可选指令生成立绘;支持「主体参考图」与各表情变体,生成后自动保存并关联到角色记录。详见[角色立绘](../characters/characters-and-sprites.md)。
 
+## 立绘自动抠背景
+
+AI 出图大多是白底/纯色底,不带透明通道。立绘生成后会自动用**本地 ONNX 模型**抠掉背景再入库,无需联网、无额外费用。
+
+- 接口:`removeBackground`(`ai-ipc.ts`)→ Rust 命令 `remove_background`(`matting` 模块),输入 base64 图像,输出带 alpha 通道的透明 PNG。
+- 模型:`isnet-anime`(Apache-2.0,专为动漫角色训练),`isnet-anime.onnx` 随安装包内置于 `src-tauri/models/`,经 `tauri.conf.json` 的 `resources` 打包。推理用 `ort`(ONNX Runtime),会话进程内缓存(模型约 168MB,只加载一次)。
+- 预处理/后处理对齐 rembg 的 isnet-anime 实现:resize 1024×1024 → 逐通道减均值 → NCHW float32;输出单通道 mask 做 min-max 归一化后作为 alpha,缩放回原尺寸。
+- 仅角色立绘走抠图;背景/CG 不抠(它们本就需要完整背景)。
+- **失败兜底**:抠图失败不阻断生成,回退使用原图。抠图成功时,未抠的原图保留到 `figure/<角色ID>/_raw/`(列表不递归子目录,故不污染素材库展示),便于回溯或换用其他抠图方式。
+
 ## 语音 / TTS 生成
 
 - 接口:`aiGenerateTts`(`ai-ipc.ts`),输入文本 + 语音提示(角色 + 情绪 + 自定义)+ 模型 + 格式。
@@ -24,5 +34,6 @@
 - 例如:聊天用 OpenAI、图像用 Gemini、TTS 用 ElevenLabs。详见[供应商与模型配置](./providers.md)。
 
 ## 相关源码
-- `design/src/app/lib/ai-ipc.ts`(`aiGenerateImage` / `aiGenerateTts` / 进度监听 / 各模态配置)
+- `design/src/app/lib/ai-ipc.ts`(`aiGenerateImage` / `aiGenerateTts` / `removeBackground` / 进度监听 / 各模态配置)
 - `design/src/app/components/AssetManager.tsx`、`design/src/app/components/CharacterPanel.tsx`
+- `src-tauri/src/matting/`(`remove_background` 命令与本地 ONNX 抠图实现)

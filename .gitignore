@@ -5,6 +5,8 @@
 /design/dist
 /src-tauri/target
 /src-tauri/runtime
+# 抠图模型由 build.rs 在编译时从云端下载，不纳入版本库（体积约 168MB）。
+/src-tauri/models/*.onnx
 /.codex
 /docs
 /skills

@@ -48,6 +48,7 @@ import {
 } from '../lib/assets-ipc';
 import {
   aiGenerateImage,
+  removeBackground,
   getAiImageConfig,
   listenAiMediaGenerationProgress,
   type AiMediaGenerationProgress,
@@ -629,15 +630,37 @@ export function CharacterPanel({
         model,
         referenceImagePath,
       );
-      const extension = media.extension?.replace(/^\./, '') || 'png';
+      // 抠背景：AI 出图多为白底/纯色底，用本地 ONNX 模型扣成透明 PNG 再入库。
+      // 失败不阻断流程，回退使用原图；成功则把原图保留到 _raw/ 子目录（不污染素材库）。
+      let finalMedia = media;
+      let matted = false;
+      try {
+        finalMedia = await removeBackground(media.base64Data);
+        matted = true;
+      } catch (e) {
+        console.warn('立绘抠背景失败，使用原图：', e);
+      }
+      const ts = Date.now();
+      const extension = finalMedia.extension?.replace(/^\./, '') || 'png';
       const characterPart = sanitizeFilenamePart(persisted.name || persisted.id, 'character');
       const emotionPart = sanitizeFilenamePart(effectiveSprite.emotion || 'sprite', 'sprite');
-      const filename = `${characterPart}_${emotionPart}_${Date.now()}.${extension}`;
+      const filename = `${characterPart}_${emotionPart}_${ts}.${extension}`;
       // 主体候选存 main/ 子目录（与素材库隔离）；表情变体存子目录顶层。
       const figureCategory = target.kind === 'reference'
         ? `figure/${persisted.id}/main`
         : `figure/${persisted.id}`;
-      const asset = await saveGeneratedAsset(projectPath, figureCategory, filename, media.base64Data);
+      const asset = await saveGeneratedAsset(projectPath, figureCategory, filename, finalMedia.base64Data);
+      // 抠图成功时，把未抠的原图保留到 _raw/ 子目录（list 不递归，故不进素材库展示），
+      // 便于需要时回溯或换用其他抠图方式。失败为尽力而为，不影响主流程。
+      if (matted) {
+        const rawExtension = media.extension?.replace(/^\./, '') || 'png';
+        const rawFilename = `${characterPart}_${emotionPart}_${ts}_raw.${rawExtension}`;
+        try {
+          await saveGeneratedAsset(projectPath, `${figureCategory}/_raw`, rawFilename, media.base64Data);
+        } catch (e) {
+          console.warn('保存立绘原图失败：', e);
+        }
+      }
       // 仅主体（reference）需要把限定路径写回 sprite.file；变体图只进素材库不绑定。
       const qualifiedFile = `${persisted.id}/main/${asset.name}`;
       const nextCharacter = target.kind === 'reference'

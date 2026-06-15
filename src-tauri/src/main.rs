@@ -3,6 +3,7 @@
 mod ai;
 mod assets;
 mod characters;
+mod matting;
 mod webgal;
 
 use std::path::PathBuf;
@@ -199,6 +200,8 @@ fn main() {
             ai::commands::clear_ai_logs,
             ai::commands::get_ai_log_path,
             ai::commands::generate_batch_tts,
+            // Matting (background removal)
+            matting::commands::remove_background,
             // Assets
             assets::commands::list_assets,
             assets::commands::list_all_assets,
