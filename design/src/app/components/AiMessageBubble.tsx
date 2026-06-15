@@ -71,14 +71,19 @@ function Markdown({ children }: { children: string }) {
           a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer" className="text-primary underline">{children}</a>,
           blockquote: ({ children }) => <blockquote className="my-1 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>,
           hr: () => <hr className="my-2 border-border" />,
+          // Override `pre` itself (react-markdown wraps fenced code in pre>code):
+          // without this the default <pre> has no overflow handling and long
+          // lines paint outside the bubble. overflow-x-auto + max-w-full keeps a
+          // long code block scrolling inside the bubble instead of overflowing.
+          pre: ({ children }) => (
+            <pre className="my-1.5 max-w-full overflow-x-auto rounded-md border border-border/50 bg-background/50 p-2 text-[11px] leading-relaxed">
+              {children}
+            </pre>
+          ),
           code: ({ className, children }) => {
             const inline = !className;
-            if (inline) return <code className="rounded bg-background/70 px-1 py-0.5 text-[0.92em]">{children}</code>;
-            return (
-              <pre className="my-1.5 overflow-x-auto rounded-md border border-border/50 bg-background/50 p-2 text-[11px] leading-relaxed">
-                <code className={className}>{children}</code>
-              </pre>
-            );
+            if (inline) return <code className="rounded bg-background/70 px-1 py-0.5 text-[0.92em] break-words">{children}</code>;
+            return <code className={className}>{children}</code>;
           },
           table: ({ children }) => (
             <div className="my-1.5 overflow-x-auto">
@@ -127,7 +132,7 @@ function StepsView({ steps }: { steps: AssistantStep[] }) {
 export function AiMessageBubble({ role, content, steps, isStreaming = false, stopped = false, diff }: AiMessageBubbleProps) {
   return (
     <div
-      className={`max-w-[85%] rounded-lg px-3 py-2 text-sm break-words ${
+      className={`min-w-0 max-w-[85%] rounded-lg px-3 py-2 text-sm break-words ${
         role === 'user'
           ? 'bg-primary text-primary-foreground'
           : 'bg-secondary border border-border'

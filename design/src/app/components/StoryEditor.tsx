@@ -793,6 +793,50 @@ function ScriptCommandStream({
     }
     return nodes.length - 1;
   }, [nodes.length]);
+
+  // WebGAL continuation: a dialogue line with no character keeps the previous
+  // speaker. Carry the last explicit speaker forward so continuation lines (and
+  // the extra lines a multi-line dialogue splits into on save) show who is
+  // talking instead of "未指定角色". Display-only — the node's own character
+  // stays empty so the script round-trips unchanged.
+  const effectiveSpeakers = useMemo(() => {
+    const map = new Map<string, string>();
+    let current = '';
+    for (const node of nodes) {
+      if (node.type !== 'dialogue') continue;
+      const own = node.character?.trim();
+      if (own) current = own;
+      if (current) map.set(node.id, current);
+    }
+    return map;
+  }, [nodes]);
+
+  // Display-layer grouping: merge a dialogue head with the continuation lines
+  // that follow it (contiguous dialogue nodes with no own character) into one
+  // card. The nodes stay separate (runtime still advances per line); we only
+  // skip the absorbed lines in the top-level list and render them inside the
+  // head card. Disabled while searching so every match stays visible.
+  const { continuationsByHead, absorbedIds } = useMemo(() => {
+    const byHead = new Map<string, WebGalNode[]>();
+    const absorbed = new Set<string>();
+    if (query) return { continuationsByHead: byHead, absorbedIds: absorbed };
+    let headId = '';
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.type !== 'dialogue') { headId = ''; continue; }
+      const own = n.character?.trim();
+      const prevIsDialogue = i > 0 && nodes[i - 1].type === 'dialogue';
+      if (!own && headId && prevIsDialogue) {
+        absorbed.add(n.id);
+        const arr = byHead.get(headId) ?? [];
+        arr.push(n);
+        byHead.set(headId, arr);
+      } else {
+        headId = n.id;
+      }
+    }
+    return { continuationsByHead: byHead, absorbedIds: absorbed };
+  }, [nodes, query]);
   const visibleNodes = query
     ? nodes
         .map((node, index) => ({ node, index }))
@@ -890,6 +934,15 @@ function ScriptCommandStream({
     isBackground: boolean;
     isBranch: boolean;
     charColor?: string;
+    /** Speaker to show — the node's own character, or the inherited one for a
+     *  continuation line (empty character). */
+    displayCharacter?: string;
+    /** True when displayCharacter was inherited rather than set on this node. */
+    characterInherited?: boolean;
+    /** Continuation dialogue lines (no own character) merged into this card. */
+    continuationLines?: WebGalNode[];
+    /** Currently selected node id (to highlight the right line in a merged card). */
+    selectedNodeId?: string;
     onSelectNode: (node: WebGalNode) => void;
     onInsertNode: (type: WebGalCommandType, atIndex: number) => void;
     onDeleteNode?: (nodeId: string) => void;
@@ -912,6 +965,10 @@ function ScriptCommandStream({
     isBackground,
     isBranch,
     charColor,
+    displayCharacter,
+    characterInherited,
+    continuationLines,
+    selectedNodeId,
     onSelectNode,
     onInsertNode,
     onDeleteNode,
@@ -1029,20 +1086,47 @@ function ScriptCommandStream({
                 <div className="min-w-0 flex-1">
                   <div className="mb-2 flex items-center gap-2">
                     <span
-                      className="font-bold"
+                      className={`font-bold ${characterInherited ? 'opacity-60' : ''}`}
                       style={charColor ? { color: charColor } : { color: 'var(--color-primary)' }}
+                      title={characterInherited ? '继承自上一句角色' : undefined}
                     >
-                      {node.character || '未指定角色'}
+                      {displayCharacter || '未指定角色'}
                     </span>
-                  </div>
-                  <div className="border-l-4 border-primary/30 bg-surface-container-low/50 p-3 text-base leading-relaxed text-on-surface">
-                    "{node.content || '……'}"
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {node.voice && <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">语音: {node.voice}</span>}
-                    {node.figureEmotion && (
-                      <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">表情: {node.figureEmotion}</span>
+                    {characterInherited && (
+                      <span className="rounded border border-outline-variant/30 px-1.5 py-0.5 text-[9px] font-normal text-on-surface-variant/50">
+                        承上
+                      </span>
                     )}
+                  </div>
+                  <div className="space-y-1.5">
+                    {[node, ...(continuationLines ?? [])].map((lineNode) => {
+                      const merged = (continuationLines?.length ?? 0) > 0;
+                      const lineSelected = merged && selectedNodeId === lineNode.id;
+                      return (
+                        <div key={lineNode.id}>
+                          <div
+                            role={merged ? 'button' : undefined}
+                            tabIndex={merged ? 0 : undefined}
+                            onClick={merged ? (e) => { e.stopPropagation(); onSelectNode(lineNode); } : undefined}
+                            className={`border-l-4 p-3 text-base leading-relaxed text-on-surface whitespace-pre-wrap transition-colors ${
+                              merged
+                                ? `cursor-pointer ${lineSelected ? 'border-primary bg-primary/5' : 'border-primary/30 bg-surface-container-low/50 hover:bg-surface-container-low'}`
+                                : 'border-primary/30 bg-surface-container-low/50'
+                            }`}
+                          >
+                            "{lineNode.content || '……'}"
+                          </div>
+                          {(lineNode.voice || lineNode.figureEmotion) && (
+                            <div className="mt-1 flex flex-wrap gap-2 pl-3">
+                              {lineNode.voice && <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">语音: {lineNode.voice}</span>}
+                              {lineNode.figureEmotion && (
+                                <span className="rounded border border-outline-variant/30 px-2 py-0.5 text-[10px] text-on-surface-variant/60">表情: {lineNode.figureEmotion}</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -1244,15 +1328,21 @@ function ScriptCommandStream({
             <div className="text-sm">没有匹配 "{query}" 的指令</div>
           </div>
         ) : visibleNodes.map(({ node, index }) => {
+          if (absorbedIds.has(node.id)) return null; // merged into its head card
           const Icon = commandIconFor(node.type);
-          const selected = selectedNode?.id === node.id;
+          const continuationLines = continuationsByHead.get(node.id);
+          const selected = selectedNode?.id === node.id
+            || (continuationLines?.some((c) => c.id === selectedNode?.id) ?? false);
           const isDialogue = node.type === 'dialogue';
           const isBackground = node.type === 'changeBg';
           const isBranch = node.type === 'choose';
           const tag = isBackground ? 'BG_LOAD' : isDialogue ? 'TEXT_CMD' : isBranch ? 'BRANCH_LOGIC' : node.type.toUpperCase();
           const tagClass = categoryTagClass[getCommandCategory(node.type)];
-          const charColor = isDialogue && node.character && characterColors?.[node.character]
-            ? characterColors[node.character]
+          const ownChar = node.character?.trim();
+          const displayCharacter = isDialogue ? (ownChar || effectiveSpeakers.get(node.id) || '') : '';
+          const characterInherited = isDialogue && !ownChar && !!displayCharacter;
+          const charColor = isDialogue && displayCharacter && characterColors?.[displayCharacter]
+            ? characterColors[displayCharacter]
             : undefined;
 
           return (
@@ -1272,6 +1362,10 @@ function ScriptCommandStream({
                 isBackground={isBackground}
                 isBranch={isBranch}
                 charColor={charColor}
+                displayCharacter={displayCharacter}
+                characterInherited={characterInherited}
+                continuationLines={continuationLines}
+                selectedNodeId={selectedNode?.id}
                 onSelectNode={onSelectNode}
                 onInsertNode={onInsertNode}
                 onDeleteNode={onDeleteNode}
