@@ -112,6 +112,14 @@ export async function setAiTtsConfig(config: AiProviderConfig): Promise<void> {
   return invoke<void>('set_ai_tts_config', { config });
 }
 
+export async function getAiMusicConfig(): Promise<AiProviderConfig> {
+  return invoke<AiProviderConfig>('get_ai_music_config');
+}
+
+export async function setAiMusicConfig(config: AiProviderConfig): Promise<void> {
+  return invoke<void>('set_ai_music_config', { config });
+}
+
 export async function validateAiConfig(config: AiConfig): Promise<AiValidationResult> {
   return invoke<AiValidationResult>('validate_ai_config', { config });
 }
@@ -143,6 +151,14 @@ export async function aiGenerateTts(
   format: string,
 ): Promise<GeneratedMedia> {
   return invoke<GeneratedMedia>('ai_generate_tts', { text, voicePrompt, model, format });
+}
+
+export async function generateMusic(
+  prompt: string,
+  model: string,
+  format: string,
+): Promise<GeneratedMedia> {
+  return invoke<GeneratedMedia>('generate_music', { prompt, model, format });
 }
 
 export async function listAiLogs(limit?: number): Promise<AiLogEntry[]> {

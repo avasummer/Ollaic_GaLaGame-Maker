@@ -1,5 +1,5 @@
 use super::config::{self, AiConfig, AiProviderConfig};
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use genai::adapter::AdapterKind;
 use genai::chat::{
     ChatMessage, ChatRequest, ChatStreamEvent, StreamChunk, Tool, ToolCall, ToolResponse,
@@ -167,6 +167,21 @@ struct VolcengineTtsChunk {
     data: Option<String>,
 }
 
+/// 阿里云 CosyVoice WebSocket 服务端文本事件。音频不在 JSON 内，单独走 binary 帧；
+/// 这里只解析 header 用于判定任务状态（task-started/result-generated/task-finished/task-failed）。
+#[derive(Debug, Deserialize)]
+struct CosyVoiceEvent {
+    header: CosyVoiceEventHeader,
+}
+
+#[derive(Debug, Deserialize)]
+struct CosyVoiceEventHeader {
+    #[serde(default)]
+    event: String,
+    #[serde(default)]
+    error_message: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct GeminiGenerateResponse {
     #[serde(default)]
@@ -265,6 +280,16 @@ pub fn set_ai_tts_config(config: AiProviderConfig) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn get_ai_music_config() -> AiProviderConfig {
+    config::load_music_config()
+}
+
+#[tauri::command]
+pub fn set_ai_music_config(config: AiProviderConfig) -> Result<(), String> {
+    config::save_music_config(&config)
+}
+
+#[tauri::command]
 pub fn list_ai_logs(limit: Option<usize>) -> Result<Vec<AiLogOutput>, String> {
     let limit = normalize_log_limit(limit);
     let lines = config::read_log_lines(limit)?;
@@ -353,6 +378,197 @@ pub async fn ai_generate_tts(
         "volcengine" => generate_volcengine_tts(&cfg, model, &text, &voice_prompt, response_format).await,
         other => Err(format!("当前暂未适配 {other} 音频生成接口，请使用 OpenAI 兼容 Base URL 或选择已适配供应商。")),
     }
+}
+
+/// Generate background music (BGM) from a text prompt via an OpenAI-compatible /
+/// custom audio endpoint. The custom gateway is expected to accept
+/// `{model, input, response_format}` and return raw audio bytes.
+#[tauri::command]
+pub async fn generate_music(
+    prompt: String,
+    model: String,
+    format: String,
+) -> Result<GeneratedMedia, String> {
+    let cfg = config::load_music_config();
+    validate_provider_config_basics(&cfg, "音乐")?;
+    let model = model.trim();
+    if model.is_empty() {
+        return Err("尚未选择音乐生成模型".to_string());
+    }
+    if prompt.trim().is_empty() {
+        return Err("音乐生成描述为空".to_string());
+    }
+
+    if cfg.provider.trim() == "custom" && cfg.base_url.trim().is_empty() {
+        return Err("自定义音乐端点未填写 Base URL，请在 AI 设置的音乐 Tab 填写返回音频的接口地址".to_string());
+    }
+
+    let response_format = normalize_audio_format(&format);
+    match cfg.provider.trim() {
+        "openai" | "custom" | "siliconflow" => {
+            generate_openai_compatible_music(&cfg, model, &prompt, response_format).await
+        }
+        other => Err(format!(
+            "当前暂未适配 {other} 音乐生成接口，请在 AI 设置的音乐 Tab 选择「自定义」并将 Base URL 指向返回音频字节的音乐端点。"
+        )),
+    }
+}
+
+async fn generate_openai_compatible_music(
+    cfg: &AiProviderConfig,
+    model: &str,
+    prompt: &str,
+    response_format: &str,
+) -> Result<GeneratedMedia, String> {
+    let endpoint = media_endpoint(cfg, "audio/music");
+    // Send both `input` and `prompt` so the same body works across gateways that
+    // name the field differently.
+    let body = serde_json::json!({
+        "model": model,
+        "input": prompt,
+        "prompt": prompt,
+        "response_format": response_format
+    });
+    let body = serde_json::to_string(&body).map_err(|e| format!("序列化音乐生成请求失败: {e}"))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("创建音乐生成客户端失败: {e}"))?;
+    let mut request = client
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .body(body);
+    if !cfg.api_key.trim().is_empty() {
+        request = request.bearer_auth(cfg.api_key.trim());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("音乐生成请求失败: {e}"))?;
+
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        log_provider_event("music_generate", cfg, model, &endpoint, false, &text);
+        return Err(format!("音乐生成失败 ({status}): {text}"));
+    }
+
+    // Raw audio bytes (the recommended custom-gateway contract): use directly.
+    let mime = content_type.split(';').next().unwrap_or("").trim();
+    if mime.starts_with("audio/")
+        || mime == "application/octet-stream"
+        || mime.starts_with("binary/")
+    {
+        let ext = extension_from_mime(mime, response_format);
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("读取音乐生成响应失败: {e}"))?;
+        log_provider_event("music_generate", cfg, model, &endpoint, true, "music generated");
+        return Ok(GeneratedMedia {
+            base64_data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            extension: ext,
+        });
+    }
+
+    // Otherwise treat as JSON/text and extract base64 or a downloadable URL so
+    // gateways that return JSON still produce a valid, playable file (instead of
+    // silently saving the JSON body as a broken audio file).
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取音乐生成响应失败: {e}"))?;
+    parse_music_json_response(cfg, model, &endpoint, &text, response_format).await
+}
+
+async fn parse_music_json_response(
+    cfg: &AiProviderConfig,
+    model: &str,
+    endpoint: &str,
+    text: &str,
+    fallback_ext: &str,
+) -> Result<GeneratedMedia, String> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
+        format!("解析音乐生成响应失败: {e}; 响应: {}", truncate_log_field(text))
+    })?;
+    if let Some(b64) = find_audio_base64(&value) {
+        log_provider_event("music_generate", cfg, model, endpoint, true, "music generated (base64)");
+        return Ok(GeneratedMedia {
+            base64_data: strip_data_url_prefix(&b64).to_string(),
+            extension: fallback_ext.to_string(),
+        });
+    }
+    if let Some(url) = find_audio_url(&value) {
+        return download_generated_media(cfg, model, endpoint, &url, fallback_ext, "music_generate").await;
+    }
+    log_provider_event("music_generate", cfg, model, endpoint, false, text);
+    Err(format!(
+        "音乐生成响应中未找到音频数据。请让自定义端点直接返回音频字节（Content-Type: audio/*），或返回含 data/audio/b64_json/url 字段的 JSON。响应: {}",
+        truncate_log_field(text)
+    ))
+}
+
+/// Locate base64-encoded audio in common custom-gateway JSON shapes.
+fn find_audio_base64(v: &serde_json::Value) -> Option<String> {
+    for key in ["b64_json", "audio_base64", "audioContent", "audio", "data"] {
+        if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
+            if !s.starts_with("http") && s.len() > 64 {
+                return Some(s.to_string());
+            }
+        }
+    }
+    if let Some(first) = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .and_then(|a| a.first())
+    {
+        for key in ["b64_json", "audio_base64", "audio"] {
+            if let Some(s) = first.get(key).and_then(|x| x.as_str()) {
+                if !s.starts_with("http") {
+                    return Some(s.to_string());
+                }
+            }
+        }
+    }
+    // DashScope-like multimodal shape.
+    v.pointer("/output/audio/data")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Locate a downloadable audio URL in common custom-gateway JSON shapes.
+fn find_audio_url(v: &serde_json::Value) -> Option<String> {
+    for key in ["url", "audio_url", "output_url"] {
+        if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
+            if s.starts_with("http") {
+                return Some(s.to_string());
+            }
+        }
+    }
+    if let Some(first) = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .and_then(|a| a.first())
+    {
+        for key in ["url", "audio_url"] {
+            if let Some(s) = first.get(key).and_then(|x| x.as_str()) {
+                if s.starts_with("http") {
+                    return Some(s.to_string());
+                }
+            }
+        }
+    }
+    v.pointer("/output/audio/url")
+        .and_then(|x| x.as_str())
+        .filter(|s| s.starts_with("http"))
+        .map(|s| s.to_string())
 }
 
 #[tauri::command]
@@ -1047,6 +1263,17 @@ async fn generate_dashscope_tts(
     // 请求体为 {model, input:{text, voice}}，不接受 format/sample_rate 字段；
     // 非流式响应音频在 output.audio.url（wav，24h 有效），需再下载。
     // 流式（X-DashScope-SE）才会返回 output.audio.data 的 Base64 PCM，这里走非流式。
+    // CosyVoice 走 WebSocket 协议（与本 HTTP 端点不同），单独走流式合成实现。
+    // Sambert 系列同样不走本 HTTP 端点，且协议更老，暂不支持。
+    let lower_model = model.to_ascii_lowercase();
+    if lower_model.starts_with("cosyvoice") {
+        return generate_dashscope_cosyvoice_ws(cfg, model, text, voice_prompt, response_format).await;
+    }
+    if lower_model.starts_with("sambert") {
+        return Err(format!(
+            "暂不支持 {model}（Sambert 系列需独立协议）。请改用 CosyVoice（如 cosyvoice-v2）或 Qwen-TTS（如 qwen3-tts-flash）。"
+        ));
+    }
     let endpoint = dashscope_endpoint(cfg, "services/aigc/multimodal-generation/generation");
     // Qwen-TTS 音色名（如 Cherry/Ethan）直接透传 voice_prompt，空时给默认音色。
     let voice = {
@@ -1079,6 +1306,219 @@ async fn generate_dashscope_tts(
         });
     }
     Err(format!("阿里云语音合成响应既无 url 也无 data: {response_text}"))
+}
+
+/// 生成 32 位 hex 的简易唯一 task_id（避免引入 uuid 依赖）。
+/// 仅需在单次合成的 run/continue/finish 三个事件间保持一致且全局唯一即可。
+fn simple_task_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    // 拼成 32 个 hex 字符：nanos(16) + seq(16)。
+    format!("{nanos:016x}{seq:016x}")
+}
+
+/// 阿里云 CosyVoice WebSocket 流式语音合成。
+/// 流程：连接 → run-task → 等 task-started → continue-task(文本) → finish-task →
+/// 持续接收（文本事件标识 + 二进制音频帧）→ task-finished 结束 → 拼接音频帧。
+/// 音频通过 WebSocket binary 通道返回（非 base64），按事件顺序拼接即为完整音频。
+async fn generate_dashscope_cosyvoice_ws(
+    cfg: &AiProviderConfig,
+    model: &str,
+    text: &str,
+    voice_prompt: &str,
+    response_format: &str,
+) -> Result<GeneratedMedia, String> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let api_key = cfg.api_key.trim();
+    if api_key.is_empty() {
+        return Err("阿里云 CosyVoice 需要填写 API Key".to_string());
+    }
+    let lower_model = model.to_ascii_lowercase();
+    // CosyVoice 仅支持 WebSocket，地址固定；base_url 非 wss 时不复用，避免误用 HTTP 端点。
+    let ws_url = {
+        let configured = cfg.base_url.trim();
+        if configured.starts_with("wss://") || configured.starts_with("ws://") {
+            configured.trim_end_matches('/').to_string()
+        } else {
+            "wss://dashscope.aliyuncs.com/api-ws/v1/inference".to_string()
+        }
+    };
+    // 音色名与模型版本强相关：cosyvoice-v1 用无后缀音色（如 longxiaochun），
+    // cosyvoice-v2 及以上用带 _v2 后缀的音色（如 longxiaochun_v2），混用会被引擎拒绝（418）。
+    // 用户填了音色就原样透传；未填时按模型版本给匹配的默认音色。
+    let voice = {
+        let trimmed = voice_prompt.trim();
+        if !trimmed.is_empty() {
+            trimmed.to_string()
+        } else if lower_model.starts_with("cosyvoice-v1") {
+            "longxiaochun".to_string()
+        } else {
+            "longxiaochun_v2".to_string()
+        }
+    };
+    // CosyVoice 支持 pcm/wav/mp3；wav 便于直接播放，作为默认。
+    let format = match response_format {
+        "mp3" => "mp3",
+        "wav" => "wav",
+        "pcm" => "pcm",
+        _ => "wav",
+    };
+    let task_id = simple_task_id();
+
+    let log_url = ws_url.clone();
+    let mut request = ws_url
+        .into_client_request()
+        .map_err(|e| format!("构造 CosyVoice WebSocket 请求失败: {e}"))?;
+    request.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {api_key}")
+            .parse()
+            .map_err(|e| format!("设置 CosyVoice 鉴权头失败: {e}"))?,
+    );
+
+    let connect = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio_tungstenite::connect_async(request),
+    )
+    .await
+    .map_err(|_| "连接 CosyVoice WebSocket 超时".to_string())?;
+    let (ws_stream, _resp) = connect.map_err(|e| {
+        let message = format!("连接 CosyVoice WebSocket 失败: {e}");
+        log_provider_event("tts_generate", cfg, model, &log_url, false, &message);
+        message
+    })?;
+    let (mut write, mut read) = ws_stream.split();
+
+    // 1) run-task：开启合成任务。
+    let run_task = serde_json::json!({
+        "header": {
+            "action": "run-task",
+            "task_id": task_id,
+            "streaming": "duplex"
+        },
+        "payload": {
+            "task_group": "audio",
+            "task": "tts",
+            "function": "SpeechSynthesizer",
+            "model": model,
+            "parameters": {
+                "text_type": "PlainText",
+                "voice": voice,
+                "format": format,
+                "sample_rate": 24000
+            },
+            "input": {}
+        }
+    });
+    write
+        .send(Message::Text(run_task.to_string()))
+        .await
+        .map_err(|e| format!("发送 CosyVoice run-task 失败: {e}"))?;
+
+    // 等待 task-started。
+    let mut started = false;
+    let mut audio_bytes: Vec<u8> = Vec::new();
+    while !started {
+        let item = tokio::time::timeout(Duration::from_secs(30), read.next())
+            .await
+            .map_err(|_| "等待 CosyVoice task-started 超时".to_string())?;
+        match item {
+            Some(Ok(Message::Text(text))) => {
+                let event: CosyVoiceEvent = serde_json::from_str(&text)
+                    .map_err(|e| format!("解析 CosyVoice 事件失败: {e}; 事件: {text}"))?;
+                match event.header.event.as_str() {
+                    "task-started" => started = true,
+                    "task-failed" => {
+                        let msg = event.header.error_message.unwrap_or_default();
+                        let full = format!("CosyVoice 任务失败: {msg}");
+                        log_provider_event("tts_generate", cfg, model, &log_url, false, &full);
+                        return Err(full);
+                    }
+                    _ => {} // 忽略其他事件，继续等 task-started
+                }
+            }
+            Some(Ok(Message::Binary(bytes))) => audio_bytes.extend_from_slice(&bytes),
+            Some(Ok(_)) => {}
+            Some(Err(e)) => return Err(format!("CosyVoice WebSocket 接收错误: {e}")),
+            None => return Err("CosyVoice WebSocket 在 task-started 前已关闭".to_string()),
+        }
+    }
+
+    // 2) continue-task：发送待合成文本。
+    let continue_task = serde_json::json!({
+        "header": {
+            "action": "continue-task",
+            "task_id": task_id,
+            "streaming": "duplex"
+        },
+        "payload": { "input": { "text": text } }
+    });
+    write
+        .send(Message::Text(continue_task.to_string()))
+        .await
+        .map_err(|e| format!("发送 CosyVoice continue-task 失败: {e}"))?;
+
+    // 3) finish-task：通知文本已发送完毕，触发剩余合成。
+    let finish_task = serde_json::json!({
+        "header": {
+            "action": "finish-task",
+            "task_id": task_id,
+            "streaming": "duplex"
+        },
+        "payload": { "input": {} }
+    });
+    write
+        .send(Message::Text(finish_task.to_string()))
+        .await
+        .map_err(|e| format!("发送 CosyVoice finish-task 失败: {e}"))?;
+
+    // 4) 持续接收音频二进制帧，直到 task-finished / task-failed / 连接关闭。
+    loop {
+        let item = tokio::time::timeout(Duration::from_secs(60), read.next())
+            .await
+            .map_err(|_| "接收 CosyVoice 音频超时".to_string())?;
+        match item {
+            Some(Ok(Message::Binary(bytes))) => audio_bytes.extend_from_slice(&bytes),
+            Some(Ok(Message::Text(text))) => {
+                let event: CosyVoiceEvent = serde_json::from_str(&text)
+                    .map_err(|e| format!("解析 CosyVoice 事件失败: {e}; 事件: {text}"))?;
+                match event.header.event.as_str() {
+                    "task-finished" => break,
+                    "task-failed" => {
+                        let msg = event.header.error_message.unwrap_or_default();
+                        let full = format!("CosyVoice 任务失败: {msg}");
+                        log_provider_event("tts_generate", cfg, model, &log_url, false, &full);
+                        return Err(full);
+                    }
+                    _ => {} // result-generated 等仅作标识，音频走 binary 通道
+                }
+            }
+            Some(Ok(Message::Close(_))) => break,
+            Some(Ok(_)) => {}
+            Some(Err(e)) => return Err(format!("CosyVoice WebSocket 接收错误: {e}")),
+            None => break,
+        }
+    }
+
+    let _ = write.send(Message::Close(None)).await;
+
+    if audio_bytes.is_empty() {
+        let message = "CosyVoice 合成完成但未收到任何音频数据".to_string();
+        log_provider_event("tts_generate", cfg, model, &log_url, false, &message);
+        return Err(message);
+    }
+    log_provider_event("tts_generate", cfg, model, &log_url, true, "audio generated");
+    Ok(GeneratedMedia {
+        base64_data: base64::engine::general_purpose::STANDARD.encode(&audio_bytes),
+        extension: format.to_string(),
+    })
 }
 
 /// 火山引擎 HTTP 单向流式语音合成（POST .../api/v3/tts/unidirectional）。
@@ -1593,6 +2033,20 @@ pub async fn generate_batch_tts(
     let mut results: Vec<BatchTtsProgress> = Vec::with_capacity(total);
     let response_format = normalize_audio_format(&format);
 
+    // Resolve a friendly filename stem for each card from its `target_stem`
+    // (e.g. "vo_角色_场景_3"), so generated audio is easy for users to locate
+    // instead of the opaque "vo_batch_<id>" naming.
+    let stem_map: std::collections::HashMap<String, String> =
+        crate::assets::commands::read_asset_metadata(&project_path)
+            .map(|meta| {
+                meta.voice_cards
+                    .into_iter()
+                    .filter(|(_, c)| !c.target_stem.trim().is_empty())
+                    .map(|(id, c)| (id, c.target_stem))
+                    .collect()
+            })
+            .unwrap_or_default();
+
     for (index, item) in items.iter().enumerate() {
         let progress_start = BatchTtsProgress {
             voice_card_id: item.voice_card_id.clone(),
@@ -1625,8 +2079,12 @@ pub async fn generate_batch_tts(
 
         match gen_result {
             Ok(media) => {
-                // Save the audio file to disk
-                let stem = format!("vo_batch_{}", item.voice_card_id);
+                // Save the audio file to disk, preferring the card's friendly
+                // target stem and falling back to the id-based name.
+                let stem = stem_map
+                    .get(&item.voice_card_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("vo_batch_{}", item.voice_card_id));
                 let filename = format!("{}.{}", stem, response_format);
                 let save = crate::assets::commands::save_generated_asset(
                     project_path.clone(),

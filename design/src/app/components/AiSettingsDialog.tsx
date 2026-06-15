@@ -11,6 +11,7 @@ import {
   MessageSquareText,
   Image,
   Volume2,
+  Music,
 } from 'lucide-react';
 import {
   type AiLogEntry,
@@ -23,6 +24,8 @@ import {
   setAiImageConfig,
   getAiTtsConfig,
   setAiTtsConfig,
+  getAiMusicConfig,
+  setAiMusicConfig,
   validateAiConfig,
   listAiLogs,
   clearAiLogs,
@@ -39,7 +42,7 @@ interface ProviderPreset {
   keyHint?: string;
 }
 
-type AiSettingsTab = 'chat' | 'image' | 'tts';
+type AiSettingsTab = 'chat' | 'image' | 'tts' | 'music';
 
 const CHAT_PROVIDERS: ProviderPreset[] = [
   { value: 'openai', label: 'OpenAI', defaultModel: 'gpt-5.5', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-codex', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'gpt-4.1', 'gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini'], defaultBaseUrl: '', needsBaseUrl: false },
@@ -66,9 +69,15 @@ const IMAGE_PROVIDERS: ProviderPreset[] = [
 const TTS_PROVIDERS: ProviderPreset[] = [
   { value: 'openai', label: 'OpenAI TTS', defaultModel: 'gpt-4o-mini-tts', models: ['gpt-4o-mini-tts', 'gpt-4o-mini-tts-2025-03-20', 'gpt-4o-mini-tts-2025-12-15', 'tts-1', 'tts-1-1106', 'tts-1-hd', 'tts-1-hd-1106'], defaultBaseUrl: '', needsBaseUrl: false },
   { value: 'elevenlabs', label: 'ElevenLabs', defaultModel: 'eleven_multilingual_v2', models: ['eleven_v3', 'eleven_multilingual_v2', 'eleven_flash_v2_5', 'eleven_flash_v2', 'eleven_turbo_v2_5', 'eleven_turbo_v2', 'eleven_multilingual_sts_v2', 'eleven_monolingual_v1'], defaultBaseUrl: '', needsBaseUrl: false },
-  { value: 'aliyun', label: '阿里云 DashScope / CosyVoice', defaultModel: 'cosyvoice-v2', models: ['cosyvoice-v2', 'cosyvoice-v1', 'cosyvoice-v3', 'cosyvoice-v3-flash', 'cosyvoice-v3-plus', 'cosyvoice-v3.5-flash', 'cosyvoice-v3.5-plus', 'sambert-zhichu-v1', 'sambert-zhiting-v1', 'sambert-zhixiang-v1', 'sambert-zhiwei-v1', 'sambert-zhimiao-v1', 'sambert-zhiru-v1'], defaultBaseUrl: 'https://dashscope.aliyuncs.com/api/v1', needsBaseUrl: false },
+  { value: 'aliyun', label: '阿里云 DashScope / CosyVoice', defaultModel: 'cosyvoice-v2', models: ['cosyvoice-v2', 'cosyvoice-v1', 'cosyvoice-v3-flash', 'cosyvoice-v3-plus', 'qwen3-tts-flash', 'qwen-tts', 'qwen-tts-latest'], defaultBaseUrl: '', needsBaseUrl: false, keyHint: 'Base URL 留空即可' },
   { value: 'volcengine', label: '火山引擎 / 豆包语音', defaultModel: 'seed-tts', models: ['seed-tts', 'seed-tts-2.0', 'mega-tts', 'doubao-tts'], defaultBaseUrl: '', needsBaseUrl: false },
   { value: 'custom', label: '自定义', defaultModel: 'tts-model', models: ['tts-model'], defaultBaseUrl: 'https://api.example.com/v1/audio/speech', needsBaseUrl: true },
+];
+
+const MUSIC_PROVIDERS: ProviderPreset[] = [
+  { value: 'custom', label: '自定义 (OpenAI 兼容音乐端点)', defaultModel: 'music-1', models: ['music-1'], defaultBaseUrl: 'https://api.example.com/v1/audio/music', needsBaseUrl: true, keyHint: 'Base URL 指向返回音频字节的音乐生成端点' },
+  { value: 'openai', label: 'OpenAI 兼容', defaultModel: 'music-1', models: ['music-1'], defaultBaseUrl: '', needsBaseUrl: false },
+  { value: 'siliconflow', label: 'SiliconFlow', defaultModel: 'music-1', models: ['music-1'], defaultBaseUrl: 'https://api.siliconflow.cn/v1', needsBaseUrl: false },
 ];
 
 function configFromPreset(preset: ProviderPreset): AiProviderConfig {
@@ -87,6 +96,13 @@ function normalizeImageConfig(config: AiProviderConfig): AiProviderConfig {
   return configFromPreset(IMAGE_PROVIDERS[0]);
 }
 
+function normalizeMusicConfig(config: AiProviderConfig): AiProviderConfig {
+  if (MUSIC_PROVIDERS.some((provider) => provider.value === config.provider)) {
+    return config;
+  }
+  return configFromPreset(MUSIC_PROVIDERS[0]);
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -98,6 +114,7 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
   const [config, setConfig] = useState<AiConfig | null>(null);
   const [imageConfig, setImageConfig] = useState<AiProviderConfig | null>(null);
   const [ttsConfig, setTtsConfig] = useState<AiProviderConfig | null>(null);
+  const [musicConfig, setMusicConfig] = useState<AiProviderConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
@@ -113,11 +130,12 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
     setValidation(null);
     setLogs([]);
     setLogPath('');
-    Promise.all([getAiConfig(), getAiImageConfig(), getAiTtsConfig()])
-      .then(([chat, image, tts]) => {
+    Promise.all([getAiConfig(), getAiImageConfig(), getAiTtsConfig(), getAiMusicConfig()])
+      .then(([chat, image, tts, music]) => {
         setConfig(chat);
         setImageConfig(normalizeImageConfig(image));
         setTtsConfig(tts);
+        setMusicConfig(normalizeMusicConfig(music));
       })
       .catch((e) => setError(String(e)));
   }, [open]);
@@ -132,6 +150,9 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
 
   const updateTts = (patch: Partial<AiProviderConfig>) =>
     setTtsConfig((c) => (c ? { ...c, ...patch } : c));
+
+  const updateMusic = (patch: Partial<AiProviderConfig>) =>
+    setMusicConfig((c) => (c ? { ...c, ...patch } : c));
 
   const handleProviderChange = (
     value: string,
@@ -200,7 +221,7 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
   };
 
   const handleSave = async () => {
-    if (!config || !imageConfig || !ttsConfig) return;
+    if (!config || !imageConfig || !ttsConfig || !musicConfig) return;
     setSaving(true);
     setError(null);
     try {
@@ -208,6 +229,7 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
         setAiConfig(config),
         setAiImageConfig(imageConfig),
         setAiTtsConfig(ttsConfig),
+        setAiMusicConfig(musicConfig),
       ]);
       onSaved?.();
       onClose();
@@ -218,7 +240,7 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
     }
   };
 
-  const loaded = config && imageConfig && ttsConfig;
+  const loaded = config && imageConfig && ttsConfig && musicConfig;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -241,6 +263,7 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
             <TabButton active={activeTab === 'chat'} icon={<MessageSquareText className="h-4 w-4" />} label="聊天" onClick={() => setActiveTab('chat')} />
             <TabButton active={activeTab === 'image'} icon={<Image className="h-4 w-4" />} label="图片" onClick={() => setActiveTab('image')} />
             <TabButton active={activeTab === 'tts'} icon={<Volume2 className="h-4 w-4" />} label="音频" onClick={() => setActiveTab('tts')} />
+            <TabButton active={activeTab === 'music'} icon={<Music className="h-4 w-4" />} label="音乐" onClick={() => setActiveTab('music')} />
           </div>
         </div>
 
@@ -304,6 +327,16 @@ export function AiSettingsDialog({ open, onClose, onSaved }: Props) {
                   providers={TTS_PROVIDERS}
                   onUpdate={updateTts}
                   onProviderChange={(value) => handleProviderChange(value, ttsConfig, TTS_PROVIDERS, updateTts)}
+                />
+              )}
+
+              {activeTab === 'music' && (
+                <ProviderConfigPanel
+                  title="背景音乐 (BGM) 生成配置"
+                  config={musicConfig}
+                  providers={MUSIC_PROVIDERS}
+                  onUpdate={updateMusic}
+                  onProviderChange={(value) => handleProviderChange(value, musicConfig, MUSIC_PROVIDERS, updateMusic)}
                 />
               )}
 

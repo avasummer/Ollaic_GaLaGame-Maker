@@ -4,16 +4,19 @@ import {
   CheckSquare, Square, FolderOpen, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import type { VoiceAssetCard } from '../lib/assets-ipc';
+import type { VoiceAssetCard, AssetUsage } from '../lib/assets-ipc';
 import {
   fillVoiceCard, deleteVoiceCard, importAsset,
 } from '../lib/assets-ipc';
+import { getScenePath, loadScene, saveScene } from '../lib/webgal-ipc';
 import {
   generateBatchTts, listenBatchTtsProgress,
   getAiTtsConfig,
   type AiProviderConfig,
   type BatchTtsItem, type BatchTtsProgress,
 } from '../lib/ai-ipc';
+import { listCharacters } from '../lib/character-ipc';
+import type { Character } from '../lib/character-types';
 
 interface Props {
   projectPath: string;
@@ -42,6 +45,55 @@ function sceneKeysForCard(card: VoiceAssetCard): string[] {
   return [legacySceneKeyFromId(card.id) ?? '未关联场景'];
 }
 
+/**
+ * Write the bound audio filename back into the matching dialogue lines of the
+ * scene scripts as a `-voice` flag, so the command editor's "语音文件" field is
+ * populated automatically after generation/import. Uses each usage's sceneFile
+ * + lineNumber (node index + 1) to locate the line, with a text-equality guard
+ * to avoid touching the wrong node. Failures are swallowed so they never block
+ * the generation flow.
+ */
+async function writeVoiceFlagToScenes(
+  projectPath: string,
+  card: VoiceAssetCard,
+  voiceFile: string,
+): Promise<boolean> {
+  const byScene = new Map<string, AssetUsage[]>();
+  for (const usage of card.usages ?? []) {
+    const scene = usage.sceneFile?.trim();
+    if (!scene) continue;
+    const list = byScene.get(scene) ?? [];
+    list.push(usage);
+    byScene.set(scene, list);
+  }
+  if (byScene.size === 0) return false;
+
+  let wroteAny = false;
+  for (const [sceneFile, usages] of byScene) {
+    try {
+      const scenePath = await getScenePath(projectPath, sceneFile);
+      const nodes = await loadScene(scenePath);
+      let changed = false;
+      for (const usage of usages) {
+        const idx = (usage.lineNumber ?? 0) - 1;
+        const node = nodes[idx];
+        if (!node || node.type !== 'dialogue') continue;
+        if ((node.content ?? '').trim() !== (card.text ?? '').trim()) continue;
+        if (node.voice === voiceFile) continue;
+        nodes[idx] = { ...node, voice: voiceFile };
+        changed = true;
+      }
+      if (changed) {
+        await saveScene(scenePath, nodes);
+        wroteAny = true;
+      }
+    } catch (e) {
+      console.error(`写入语音标记失败 (${sceneFile}):`, e);
+    }
+  }
+  return wroteAny;
+}
+
 function parseConfiguredModels(value: string): string[] {
   return Array.from(new Set(
     value
@@ -59,6 +111,7 @@ export function VoiceDubbingPanel({
   onSelectVoiceCard,
   onVoiceCardsChanged,
 }: Props) {
+  const [characters, setCharacters] = useState<Character[]>([]);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [groupMode, setGroupMode] = useState<GroupMode>('scene');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -82,6 +135,28 @@ export function VoiceDubbingPanel({
   useEffect(() => {
     onVoiceCardsChanged();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 加载角色，用于按角色名查音色（CosyVoice 等需要固定音色 ID）。
+  useEffect(() => {
+    let cancelled = false;
+    listCharacters(projectPath)
+      .then((list) => { if (!cancelled) setCharacters(list); })
+      .catch(() => { if (!cancelled) setCharacters([]); });
+    return () => { cancelled = true; };
+  }, [projectPath]);
+
+  // 角色名 → 音色 ID 映射。别名也一并映射，便于按别名命中。
+  const voiceByCharacter = new Map<string, string>();
+  for (const ch of characters) {
+    const timbre = ch.voiceTimbre?.trim();
+    if (!timbre) continue;
+    if (ch.name?.trim()) voiceByCharacter.set(ch.name.trim(), timbre);
+    for (const alias of ch.aliases ?? []) {
+      if (alias?.trim()) voiceByCharacter.set(alias.trim(), timbre);
+    }
+  }
+  const timbreForCard = (card: VoiceAssetCard): string =>
+    voiceByCharacter.get((card.character ?? '').trim()) ?? '';
 
   // Filter cards
   const filteredCards = voiceCards.filter((card) => {
@@ -175,7 +250,8 @@ export function VoiceDubbingPanel({
     const items: BatchTtsItem[] = targets.map((card) => ({
       voiceCardId: card.id,
       text: card.text,
-      voicePrompt: [card.character, card.emotion].filter(Boolean).join(' '),
+      // 传角色绑定的音色 ID（CosyVoice 等需要固定音色）；未设置则留空，由后端用默认音色。
+      voicePrompt: timbreForCard(card),
     }));
 
     const unlisten = await listenBatchTtsProgress((progress) => {
@@ -193,6 +269,13 @@ export function VoiceDubbingPanel({
         for (const result of results) next.set(result.voiceCardId, result);
         return next;
       });
+      // Write the generated audio back into each scene script's -voice flag.
+      const cardById = new Map(targets.map((c) => [c.id, c]));
+      for (const result of results) {
+        if (result.status !== 'done' || !result.assetName) continue;
+        const card = cardById.get(result.voiceCardId);
+        if (card) await writeVoiceFlagToScenes(projectPath, card, result.assetName);
+      }
       onVoiceCardsChanged();
     } catch (e) {
       console.error('Batch TTS failed:', e);
@@ -222,8 +305,10 @@ export function VoiceDubbingPanel({
       const unlisten = await listenBatchTtsProgress((p) => {
         setBatchProgress((prev) => { const n = new Map(prev); n.set(p.voiceCardId, p); return n; });
       });
-      await generateBatchTts(projectPath, items, ttsConfig.model, 'mp3');
+      const results = await generateBatchTts(projectPath, items, ttsConfig.model, 'mp3');
       unlisten();
+      const done = results.find((r) => r.voiceCardId === card.id && r.status === 'done');
+      if (done?.assetName) await writeVoiceFlagToScenes(projectPath, card, done.assetName);
       onVoiceCardsChanged();
     } catch (e) {
       console.error('Single TTS failed:', e);
@@ -249,6 +334,7 @@ export function VoiceDubbingPanel({
       const assetInfo = await importAsset(selected as string, projectPath, 'vocal');
       // Fill the voice card
       await fillVoiceCard(projectPath, card.id, assetInfo.name);
+      await writeVoiceFlagToScenes(projectPath, card, assetInfo.name);
       onVoiceCardsChanged();
     } catch (e) {
       console.error('Import fill failed:', e);

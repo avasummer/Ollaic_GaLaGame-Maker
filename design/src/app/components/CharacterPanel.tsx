@@ -66,6 +66,7 @@ interface Props {
 type DetailMode = 'info' | 'sprite';
 type PersistOptions = {
   showSavedBadge?: boolean;
+  keepSelection?: boolean;
 };
 
 const inputClass = 'w-full px-2.5 py-1.5 bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50 text-xs';
@@ -77,6 +78,22 @@ const spriteSuggestions = [
   { pose: '剧情低落', emotion: '悲伤', prompt: 'sad expression, lowered eyes' },
 ];
 const commonEmotions = ['默认', '微笑', '悲伤', '惊讶', '愤怒', '害羞', '思考', '严肃'];
+
+// CosyVoice 常用音色（音色 ID 必须与所选模型版本匹配：v2 模型用带 _v2 后缀的音色）。
+// 仅作下拉建议，用户也可手填其他音色 ID。
+const voiceTimbrePresets: { value: string; label: string }[] = [
+  { value: '', label: '未设置（用默认音色）' },
+  { value: 'longxiaochun_v2', label: '龙小淳 v2 · 知性女声' },
+  { value: 'longxiaoxia_v2', label: '龙小夏 v2 · 温柔女声' },
+  { value: 'longwanjun', label: '龙婉君 · 标准女声' },
+  { value: 'longanrou', label: '龙安柔 · 柔和女声' },
+  { value: 'longyumi_v2', label: '龙裕米 v2 · 甜美女声' },
+  { value: 'longxiaobai_v2', label: '龙小白 v2 · 清亮男声' },
+  { value: 'longlaotie_v2', label: '龙老铁 v2 · 东北男声' },
+  { value: 'longshu_v2', label: '龙书 v2 · 沉稳男声' },
+  { value: 'longjielidou_v2', label: '龙杰力豆 v2 · 活泼童声' },
+  { value: 'libai_v2', label: '李白 v2 · 古风男声' },
+];
 
 interface SpriteUsage extends AssetUsage {
   assetName: string;
@@ -171,6 +188,8 @@ export function CharacterPanel({
   const [error, setError] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [recentlySavedId, setRecentlySavedId] = useState<string | null>(null);
+  // 待确认删除的角色 id（弹应用内确认框，避免依赖在 Tauri 里可能不弹的原生 confirm）。
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [showEmotionPicker, setShowEmotionPicker] = useState(false);
   const [customEmotion, setCustomEmotion] = useState('');
   const [referenceUploading, setReferenceUploading] = useState(false);
@@ -281,7 +300,7 @@ export function CharacterPanel({
 
   const persistCharacter = useCallback(async (ch: Character, options: PersistOptions = {}) => {
     if (!ch.name.trim() || savingRef.current) return null;
-    const { showSavedBadge = true } = options;
+    const { showSavedBadge = true, keepSelection = false } = options;
     savingRef.current = true;
     setSavingId(ch.id);
     setError(null);
@@ -290,7 +309,8 @@ export function CharacterPanel({
         ? await createCharacter(projectPath, ch)
         : await updateCharacter(projectPath, ch);
       setCharacters((prev) => prev.map((c) => (c.id === ch.id ? saved : c)));
-      setSelectedId(saved.id);
+      // 切换角色场景下不要把选中拉回当前角色，否则会和切换目标打架导致卡住。
+      if (!keepSelection) setSelectedId(saved.id);
       if (showSavedBadge) {
         setRecentlySavedId(saved.id);
         setTimeout(() => setRecentlySavedId(null), 1400);
@@ -333,10 +353,14 @@ export function CharacterPanel({
     return persistCharacter(current, { showSavedBadge: false });
   }, [characters, persistCharacter]);
 
-  const handleDelete = useCallback(async (id: string) => {
-    const target = characters.find((c) => c.id === id);
-    const name = target?.name?.trim() || '未命名角色';
-    if (!confirm(`确定删除角色「${name}」？\n\n此操作不可撤销，角色数据将永久丢失。`)) return;
+  // 点击删除：先弹应用内确认框，不直接删。
+  const handleDelete = useCallback((id: string) => {
+    setPendingDeleteId(id);
+  }, []);
+
+  // 确认后真正删除。
+  const confirmDelete = useCallback(async (id: string) => {
+    setPendingDeleteId(null);
     setError(null);
     try {
       if (!id.startsWith('tmp_')) {
@@ -350,7 +374,7 @@ export function CharacterPanel({
     } catch (e) {
       setError(String(e));
     }
-  }, [characters, projectPath, selectedId]);
+  }, [projectPath, selectedId]);
 
   const updateSprite = useCallback((charId: string, index: number, field: keyof CharacterSprite, value: string) => {
     setCharacters((prev) => updateCharacterSprite(prev, charId, index, field, value));
@@ -393,19 +417,6 @@ export function CharacterPanel({
       };
     }));
   }, []);
-
-  // 提示词修改后自动保存（防抖）
-  const debouncedPersistRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (!selected || selected.id.startsWith('tmp_')) return;
-    if (debouncedPersistRef.current) clearTimeout(debouncedPersistRef.current);
-    debouncedPersistRef.current = setTimeout(() => {
-      persistCharacter(selected, { showSavedBadge: false });
-    }, 800);
-    return () => {
-      if (debouncedPersistRef.current) clearTimeout(debouncedPersistRef.current);
-    };
-  }, [selected?.sprites, persistCharacter]);
 
   const removeSprite = useCallback((charId: string, index: number) => {
     setCharacters((prev) => removeCharacterSprite(prev, charId, index));
@@ -847,6 +858,10 @@ export function CharacterPanel({
                   >
                     <button
                       onClick={() => {
+                        // 切换到其他角色前，先静默保存当前角色，避免未保存改动丢失。
+                        if (selected && selected.id !== ch.id && selected.name.trim() && !selected.id.startsWith('tmp_')) {
+                          persistCharacter(selected, { showSavedBadge: false, keepSelection: true });
+                        }
                         setSelectedId(ch.id);
                         if (!active) setMode('info');
                       }}
@@ -904,7 +919,7 @@ export function CharacterPanel({
 
           <main className="relative flex-1 min-w-0 overflow-y-auto">
             {selected && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden opacity-40">
+              <div className="pointer-events-none absolute inset-0 -z-10 flex items-center justify-center overflow-hidden opacity-40">
                 <div className="relative h-[78%] w-full max-w-2xl rounded-t-[220px] border border-dashed border-primary/30 bg-primary/5">
                   <svg className="mx-auto h-full max-h-[620px] fill-none stroke-primary/45" strokeWidth="0.5" viewBox="0 0 400 600" aria-hidden="true">
                     <path d="M200,50 C150,50 120,100 120,150 C120,200 150,250 200,250 C250,250 280,200 280,150 C280,100 250,50 200,50 Z" />
@@ -982,6 +997,31 @@ export function CharacterPanel({
                           className={inputClass}
                           placeholder="具体年龄或年龄段"
                         />
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className={labelClass}>配音音色</label>
+                        <select
+                          value={voiceTimbrePresets.some((p) => p.value === (selected.voiceTimbre || '')) ? (selected.voiceTimbre || '') : '__custom__'}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            // 选「自定义」时清空走输入框；否则写入预设音色（含空＝未设置）。
+                            patchCharacter(selected.id, { voiceTimbre: v === '__custom__' ? '' : v });
+                          }}
+                          className={inputClass}
+                        >
+                          {voiceTimbrePresets.map((p) => (
+                            <option key={p.value || 'none'} value={p.value}>{p.label}</option>
+                          ))}
+                          <option value="__custom__">自定义音色 ID…</option>
+                        </select>
+                        {!voiceTimbrePresets.some((p) => p.value === (selected.voiceTimbre || '')) && (
+                          <input
+                            value={selected.voiceTimbre || ''}
+                            onChange={(e) => patchCharacter(selected.id, { voiceTimbre: e.target.value })}
+                            className={`${inputClass} mt-2`}
+                            placeholder="手填音色 ID，如 longxiaochun_v2"
+                          />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1520,7 +1560,7 @@ export function CharacterPanel({
             )}
 
             {selected && (
-              <div className="sticky bottom-0 px-4 py-3 border-t border-border bg-card/95 backdrop-blur flex items-center justify-between">
+              <div className="sticky bottom-0 z-10 px-4 py-3 border-t border-border bg-card flex items-center justify-between">
                 <button
                   onClick={() => handleDelete(selected.id)}
                   disabled={savingId === selected.id}
@@ -1552,6 +1592,39 @@ export function CharacterPanel({
           </main>
         </div>
       )}
+      {pendingDeleteId && (() => {
+        const target = characters.find((c) => c.id === pendingDeleteId);
+        const name = target?.name?.trim() || '未命名角色';
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-[400px] max-w-full rounded-lg border border-border bg-card shadow-2xl">
+              <div className="border-b border-border px-4 py-3">
+                <h3 className="text-sm font-semibold text-destructive">删除角色</h3>
+              </div>
+              <div className="px-4 py-4 text-sm">
+                确定删除角色「{name}」？
+                <p className="mt-2 text-xs text-muted-foreground">此操作不可撤销，角色数据将永久丢失。</p>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-border p-4">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeleteId(null)}
+                  className="rounded-md bg-secondary px-4 py-2 text-sm hover:bg-secondary/70"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => confirmDelete(pendingDeleteId)}
+                  className="rounded-md bg-destructive px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       <SpriteAiGenerateDialog
         open={pendingSpriteGeneration !== null}
         generation={pendingSpriteGeneration}

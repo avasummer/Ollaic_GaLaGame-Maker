@@ -80,6 +80,20 @@ export function extractSceneBackgroundAssets(nodes: WebGalNode[]): string[] {
   return result;
 }
 
+/** Collect all distinct BGM filenames referenced by bgm nodes. */
+export function extractSceneBgmAssets(nodes: WebGalNode[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    if (node.type !== 'bgm') continue;
+    const asset = (node.asset || node.content || '').trim();
+    if (!asset || asset === 'none' || seen.has(asset)) continue;
+    seen.add(asset);
+    result.push(asset);
+  }
+  return result;
+}
+
 /** Stable scene-card id derived from a background image filename. */
 export function backgroundCardId(backgroundFilename: string): string {
   return `bg:${backgroundFilename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
