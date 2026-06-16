@@ -1,15 +1,10 @@
 import type { Character, CharacterRelation, CharacterSprite } from './character-types';
 
-const CHARACTER_COLORS = [
-  '#D4A574',
-  '#C9946A',
-  '#7C9885',
-  '#60A5FA',
-  '#C084FC',
-  '#FACC15',
-  '#F472B6',
-  '#34D399',
-];
+const CHARACTER_COLOR_COUNT = 8;
+const CHARACTER_COLORS = Array.from(
+  { length: CHARACTER_COLOR_COUNT },
+  (_, i) => `var(--color-character-${i + 1})`,
+);
 
 export function characterColor(index: number): string {
   return CHARACTER_COLORS[index % CHARACTER_COLORS.length];
@@ -22,7 +17,6 @@ export function createDraftCharacter(index: number, id = `tmp_${Date.now()}`): C
     aliases: [],
     description: '',
     personality: '',
-    consistencyPrompt: '',
     stance: '',
     keywords: [],
     dialogueStyle: '',
@@ -77,10 +71,11 @@ export function appendCharacterSprite(
   characters: Character[],
   characterId: string,
   emotion = '',
+  prompt = '',
 ): Character[] {
   return characters.map((character) =>
     character.id === characterId
-      ? { ...character, sprites: [...character.sprites, { emotion, file: '' }] }
+      ? { ...character, sprites: [...character.sprites, { emotion, file: '', prompt: prompt || undefined }] }
       : character,
   );
 }
@@ -89,13 +84,14 @@ export function appendEmotionPreset(
   characters: Character[],
   characterId: string,
   emotion: string,
+  prompt = '',
 ): Character[] {
   const trimmed = emotion.trim();
   if (!trimmed) return characters;
   return characters.map((character) => {
     if (character.id !== characterId) return character;
     if (character.sprites.some((sprite) => sprite.emotion === trimmed)) return character;
-    return { ...character, sprites: [...character.sprites, { emotion: trimmed, file: '' }] };
+    return { ...character, sprites: [...character.sprites, { emotion: trimmed, file: '', prompt: prompt || undefined }] };
   });
 }
 

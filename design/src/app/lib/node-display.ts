@@ -1,6 +1,6 @@
 /**
  * Shared node-display helpers: icon, type color, and one-line summary for a
- * WebGalNode. Single source of truth for FlowCanvas, NodePanel, and the AI
+ * WebGalNode. Single source of truth for editor node lists and the AI
  * change-preview MiniNodeCard.
  */
 
@@ -9,6 +9,8 @@ import {
   ArrowRight, Type, Monitor, Variable, Keyboard, Wand2, Move, Award,
 } from 'lucide-react';
 import type { WebGalNode, WebGalCommandType } from './webgal-types';
+import { typeBorderClass } from './webgal-types';
+import type { Character } from './character-types';
 
 export const commandIcons: Partial<Record<WebGalCommandType, typeof MessageCircle>> = {
   dialogue: MessageCircle,
@@ -36,32 +38,36 @@ export const commandIcons: Partial<Record<WebGalCommandType, typeof MessageCircl
   comment: Type,
 };
 
-/** Border + faint background classes per command type (full node card style). */
-export const typeColors: Partial<Record<WebGalCommandType, string>> = {
-  dialogue: 'border-accent bg-accent/5',
-  narrator: 'border-accent bg-accent/5',
-  intro: 'border-accent bg-accent/5',
-  choose: 'border-primary bg-primary/5',
-  changeBg: 'border-chart-5 bg-chart-5/5',
-  changeFigure: 'border-chart-5 bg-chart-5/5',
-  miniAvatar: 'border-chart-5 bg-chart-5/5',
-  changeScene: 'border-blue-400 bg-blue-400/5',
-  callScene: 'border-blue-400 bg-blue-400/5',
-  end: 'border-blue-400 bg-blue-400/5',
-  bgm: 'border-purple-400 bg-purple-400/5',
-  playEffect: 'border-purple-400 bg-purple-400/5',
-  playVideo: 'border-purple-400 bg-purple-400/5',
-  label: 'border-yellow-400 bg-yellow-400/5',
-  jumpLabel: 'border-yellow-400 bg-yellow-400/5',
-  setVar: 'border-yellow-400 bg-yellow-400/5',
-  setTextbox: 'border-yellow-400 bg-yellow-400/5',
-  getUserInput: 'border-yellow-400 bg-yellow-400/5',
-  setAnimation: 'border-primary bg-primary/5',
-  setTransform: 'border-primary bg-primary/5',
-  unlockCg: 'border-primary bg-primary/5',
-  unlockBgm: 'border-primary bg-primary/5',
-  comment: 'border-muted bg-muted/5',
-};
+/** Border + faint background classes per command type. Re-exported as
+ *  typeColors for backwards-compat with consumers like MiniNodeCard. */
+export const typeColors: Partial<Record<WebGalCommandType, string>> = typeBorderClass;
+
+/**
+ * Display label for a changeFigure node: "角色：立绘名称" instead of the raw
+ * image filename. Prefers the fields written by the figure picker
+ * (figureCharacter / figureEmotion); otherwise infers the owning character and
+ * sprite form by matching the filename against each character's sprites.
+ * Falls back to the filename when no character owns the figure.
+ */
+export function figureLabel(node: WebGalNode, characters: Character[] = []): string {
+  const filename = node.asset || node.content || '';
+  let charName = node.figureCharacter;
+  let emotion = node.figureEmotion;
+
+  if (!charName && !emotion && filename && filename !== 'none') {
+    for (const character of characters) {
+      const sprite = character.sprites.find((s) => s.file === filename);
+      if (sprite) {
+        charName = character.name;
+        emotion = sprite.emotion;
+        break;
+      }
+    }
+  }
+
+  if (charName) return emotion ? `${charName}：${emotion}` : charName;
+  return filename || '未选择立绘';
+}
 
 /** One-line human summary of a node's payload. */
 export function getNodeSummary(node: WebGalNode): string {

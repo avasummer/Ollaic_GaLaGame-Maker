@@ -15,10 +15,37 @@ export interface AssetUsage {
   command: string;
 }
 
+export interface SceneAssetCard {
+  id: string;
+  title: string;
+  sceneFile?: string | null;
+  imageAsset?: string | null;
+  targetStem: string;
+  prompt: string;
+  style: string;
+  negativePrompt: string;
+}
+
+export interface VoiceAssetCard {
+  id: string;
+  character: string;
+  text: string;
+  emotion: string;
+  voiceAsset?: string | null;
+  targetStem: string;
+  prompt: string;
+  usages?: AssetUsage[];
+}
+
 export interface AssetMetadata {
   aliases: Record<string, string>;
+  descriptions: Record<string, string>;
   tags: Record<string, string[]>;
   references: Record<string, string[]>;
+  sceneCards: Record<string, SceneAssetCard>;
+  voiceCards: Record<string, VoiceAssetCard>;
+  deletedSceneCards: string[];
+  deletedVoiceCards: string[];
 }
 
 /** List media files in a project's asset subdirectory. */
@@ -38,6 +65,16 @@ export async function importAsset(
   category: string,
 ): Promise<AssetInfo> {
   return invoke<AssetInfo>('import_asset', { sourcePath, projectPath, category });
+}
+
+/** Save generated media bytes to a project's asset directory with a fixed filename. */
+export async function saveGeneratedAsset(
+  projectPath: string,
+  category: string,
+  filename: string,
+  base64Data: string,
+): Promise<AssetInfo> {
+  return invoke<AssetInfo>('save_generated_asset', { projectPath, category, filename, base64Data });
 }
 
 /** Delete an asset file from the project. */
@@ -79,4 +116,29 @@ export async function saveProjectAssetMetadata(
   metadata: AssetMetadata,
 ): Promise<void> {
   return invoke<void>('save_asset_metadata', { projectPath, metadata });
+}
+
+/** Scan a scene file and create VoiceAssetCard entries for dialogue lines. */
+export async function syncSceneVoiceCards(
+  projectPath: string,
+  sceneFile: string,
+): Promise<VoiceAssetCard[]> {
+  return invoke<VoiceAssetCard[]>('sync_scene_voice_cards', { projectPath, sceneFile });
+}
+
+/** Link an imported audio file to a voice card slot. */
+export async function fillVoiceCard(
+  projectPath: string,
+  voiceCardId: string,
+  assetFilename: string,
+): Promise<VoiceAssetCard> {
+  return invoke<VoiceAssetCard>('fill_voice_card', { projectPath, voiceCardId, assetFilename });
+}
+
+/** Mark a voice card as deleted (won't be re-created on future syncs). */
+export async function deleteVoiceCard(
+  projectPath: string,
+  voiceCardId: string,
+): Promise<void> {
+  return invoke<void>('delete_voice_card', { projectPath, voiceCardId });
 }

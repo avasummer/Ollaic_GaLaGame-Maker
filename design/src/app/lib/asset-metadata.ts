@@ -2,9 +2,304 @@ import {
   loadProjectAssetMetadata,
   saveProjectAssetMetadata,
   type AssetMetadata,
+  type SceneAssetCard,
 } from './assets-ipc';
+import type { WebGalNode } from './webgal-types';
 
 export type { AssetMetadata } from './assets-ipc';
+
+/** Stable scene-card id derived from a scene .txt filename. */
+export function sceneCardId(sceneFile: string): string {
+  return sceneFile.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+/** Human-friendly default title from a scene filename ("start.txt" -> "start"). */
+export function sceneTitleFromFile(sceneFile: string): string {
+  return sceneFile.replace(/\.txt$/i, '') || sceneFile;
+}
+
+/** Default generated-background filename stem for a new scene card. */
+export function defaultSceneTargetStem(index: number): string {
+  return `${String(index).padStart(3, '0')}_scene_dusk`;
+}
+
+/**
+ * Ensure a background scene card exists for the given scene file. Returns the
+ * (possibly unchanged) metadata. No-op if a card already exists or the card was
+ * explicitly deleted by the user.
+ */
+export function ensureSceneCard(
+  metadata: AssetMetadata,
+  sceneFile: string,
+  index: number,
+): AssetMetadata {
+  const id = sceneCardId(sceneFile);
+  if (metadata.sceneCards?.[id]) return metadata;
+  if ((metadata.deletedSceneCards ?? []).includes(id)) return metadata;
+  const card: SceneAssetCard = {
+    id,
+    title: sceneTitleFromFile(sceneFile),
+    sceneFile,
+    imageAsset: null,
+    targetStem: defaultSceneTargetStem(index),
+    prompt: '',
+    style: '',
+    negativePrompt: '',
+  };
+  return {
+    ...metadata,
+    sceneCards: { ...(metadata.sceneCards ?? {}), [id]: card },
+  };
+}
+
+export function extractSceneBackgroundAsset(
+  nodes: WebGalNode[],
+  availableBackgrounds?: Set<string>,
+): string | null {
+  for (const node of nodes) {
+    if (node.type !== 'changeBg') continue;
+    const asset = (node.asset || node.content || '').trim();
+    if (!asset) continue;
+    if (availableBackgrounds && !availableBackgrounds.has(asset)) continue;
+    return asset;
+  }
+  return null;
+}
+
+/** Collect all distinct background filenames referenced by changeBg nodes. */
+export function extractSceneBackgroundAssets(nodes: WebGalNode[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    if (node.type !== 'changeBg') continue;
+    const asset = (node.asset || node.content || '').trim();
+    if (!asset || asset === 'none' || seen.has(asset)) continue;
+    seen.add(asset);
+    result.push(asset);
+  }
+  return result;
+}
+
+/** Collect all distinct BGM filenames referenced by bgm nodes. */
+export function extractSceneBgmAssets(nodes: WebGalNode[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    if (node.type !== 'bgm') continue;
+    const asset = (node.asset || node.content || '').trim();
+    if (!asset || asset === 'none' || seen.has(asset)) continue;
+    seen.add(asset);
+    result.push(asset);
+  }
+  return result;
+}
+
+/** Stable scene-card id derived from a background image filename. */
+export function backgroundCardId(backgroundFilename: string): string {
+  return `bg:${backgroundFilename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+}
+
+/** Title from a background filename ("11.png" -> "11"). */
+function backgroundCardTitle(backgroundFilename: string): string {
+  return backgroundFilename.replace(/\.(png|jpe?g|webp|gif)$/i, '') || backgroundFilename;
+}
+
+/**
+ * Sync scene cards from the background images a scene references. For each
+ * distinct background filename in changeBg nodes, ensure a scene card keyed by
+ * the filename exists (created lazily so an existing image still shows up, and a
+ * non-existent filename becomes a "to-generate" card). User-deleted cards stay
+ * deleted. Returns the (possibly unchanged) metadata.
+ */
+export function syncSceneCardsFromBackgrounds(
+  metadata: AssetMetadata,
+  sceneFile: string,
+  backgroundFilenames: string[],
+  availableBackgrounds: Set<string>,
+): AssetMetadata {
+  let changed = false;
+  const sceneCards = { ...(metadata.sceneCards ?? {}) };
+  const deleted = metadata.deletedSceneCards ?? [];
+
+  for (const filename of backgroundFilenames) {
+    const id = backgroundCardId(filename);
+    if (deleted.includes(id)) continue;
+
+    const exists = availableBackgrounds.has(filename);
+    const targetStem = filename.replace(/\.(png|jpe?g|webp|gif)$/i, '');
+    const imageAsset = exists ? filename : null;
+    const existing = sceneCards[id];
+
+    if (!existing) {
+      sceneCards[id] = {
+        id,
+        title: backgroundCardTitle(filename),
+        sceneFile,
+        imageAsset,
+        targetStem,
+        prompt: '',
+        style: '',
+        negativePrompt: '',
+      };
+      changed = true;
+    } else if (existing.imageAsset !== imageAsset) {
+      // Keep user-edited fields (title/prompt/...), only refresh the link state.
+      sceneCards[id] = { ...existing, imageAsset };
+      changed = true;
+    }
+  }
+
+  if (!changed) return metadata;
+  return { ...metadata, sceneCards };
+}
+
+export function linkSceneCardImageAsset(
+  metadata: AssetMetadata,
+  sceneFile: string,
+  index: number,
+  imageAsset: string,
+): AssetMetadata {
+  const ensured = ensureSceneCard(metadata, sceneFile, index);
+  const id = sceneCardId(sceneFile);
+  const card = ensured.sceneCards?.[id];
+  if (!card) return ensured;
+  if (card.imageAsset === imageAsset) return ensured;
+  return {
+    ...ensured,
+    sceneCards: {
+      ...(ensured.sceneCards ?? {}),
+      [id]: {
+        ...card,
+        imageAsset,
+        targetStem: card.targetStem || imageAsset.replace(/\.[^.]+$/, ''),
+      },
+    },
+  };
+}
+
+export function setSceneCardBackgroundTarget(
+  metadata: AssetMetadata,
+  sceneFile: string,
+  index: number,
+  backgroundTarget: string,
+  targetExists: boolean,
+): AssetMetadata {
+  const id = sceneCardId(sceneFile);
+  const fallbackCard: SceneAssetCard = {
+    id,
+    title: sceneTitleFromFile(sceneFile),
+    sceneFile,
+    imageAsset: null,
+    targetStem: defaultSceneTargetStem(index),
+    prompt: '',
+    style: '',
+    negativePrompt: '',
+  };
+  const ensured: AssetMetadata = {
+    ...metadata,
+    deletedSceneCards: (metadata.deletedSceneCards ?? []).filter((deletedId) => deletedId !== id),
+    sceneCards: {
+      ...(metadata.sceneCards ?? {}),
+      [id]: metadata.sceneCards?.[id] ?? fallbackCard,
+    },
+  };
+  const card = ensured.sceneCards?.[id];
+  if (!card) return ensured;
+  const targetStem = backgroundTarget.replace(/\.(png|jpe?g|webp)$/i, '');
+  const imageAsset = targetExists ? backgroundTarget : null;
+  if (
+    card.imageAsset === imageAsset
+    && card.targetStem === targetStem
+    && !(metadata.deletedSceneCards ?? []).includes(id)
+  ) return ensured;
+  return {
+    ...ensured,
+    sceneCards: {
+      ...(ensured.sceneCards ?? {}),
+      [id]: {
+        ...card,
+        imageAsset,
+        targetStem,
+      },
+    },
+  };
+}
+
+function renameAssetMetadataRecord<T>(
+  entries: Record<string, T>,
+  category: string,
+  oldName: string,
+  newName: string,
+): Record<string, T> {
+  const next = { ...entries };
+  const oldScoped = assetMetadataKey(category, oldName);
+  const newScoped = assetMetadataKey(category, newName);
+  if (Object.prototype.hasOwnProperty.call(next, oldScoped)) {
+    next[newScoped] = next[oldScoped];
+    delete next[oldScoped];
+  }
+  if (Object.prototype.hasOwnProperty.call(next, oldName)) {
+    next[newScoped] = next[oldName];
+    delete next[oldName];
+  }
+  return next;
+}
+
+function renameReferenceEntries(
+  entries: Record<string, string[]>,
+  category: string,
+  oldName: string,
+  newName: string,
+): Record<string, string[]> {
+  const renamed = renameAssetMetadataRecord(entries, category, oldName, newName);
+  const oldReferenceCategory = referenceCategoryForAsset(category, oldName);
+  const newReferenceCategory = referenceCategoryForAsset(category, newName);
+  if (!oldReferenceCategory || !newReferenceCategory) return renamed;
+  const oldReferencePrefix = `${oldReferenceCategory}/`;
+  const newReferencePrefix = `${newReferenceCategory}/`;
+  const next = { ...renamed };
+  for (const [key, value] of Object.entries(renamed)) {
+    if (!key.startsWith(oldReferencePrefix)) continue;
+    next[`${newReferencePrefix}${key.slice(oldReferencePrefix.length)}`] = value;
+    delete next[key];
+  }
+  return next;
+}
+
+export function renameAssetMetadataFilename(
+  metadata: AssetMetadata,
+  category: string,
+  oldName: string,
+  newName: string,
+): AssetMetadata {
+  const oldStem = oldName.replace(/\.[^.]+$/, '');
+  const newStem = newName.replace(/\.[^.]+$/, '');
+  const sceneCards = { ...(metadata.sceneCards ?? {}) };
+  if (category === 'background') {
+    for (const [id, card] of Object.entries(sceneCards)) {
+      const nextCard = { ...card };
+      let changed = false;
+      if (nextCard.imageAsset === oldName) {
+        nextCard.imageAsset = newName;
+        changed = true;
+      }
+      if (nextCard.targetStem === oldStem) {
+        nextCard.targetStem = newStem;
+        changed = true;
+      }
+      if (changed) sceneCards[id] = nextCard;
+    }
+  }
+
+  return {
+    ...metadata,
+    aliases: renameAssetMetadataRecord(metadata.aliases, category, oldName, newName),
+    descriptions: renameAssetMetadataRecord(metadata.descriptions, category, oldName, newName),
+    tags: renameAssetMetadataRecord(metadata.tags, category, oldName, newName),
+    references: renameReferenceEntries(metadata.references, category, oldName, newName),
+    sceneCards,
+  };
+}
 
 const legacyUnifiedKey = (projectId: string) => `asset-metadata-${projectId}`;
 const legacyAliasKey = (projectId: string) => `asset-alias-${projectId}`;
@@ -13,7 +308,7 @@ const legacyReferencesKey = (projectId: string) => `asset-references-${projectId
 const pendingSaves = new Map<string, Promise<void>>();
 
 export function emptyAssetMetadata(): AssetMetadata {
-  return { aliases: {}, tags: {}, references: {} };
+  return { aliases: {}, descriptions: {}, tags: {}, references: {}, sceneCards: {}, voiceCards: {}, deletedSceneCards: [], deletedVoiceCards: [] };
 }
 
 export function assetMetadataKey(category: string, filename: string): string {
@@ -50,6 +345,7 @@ function parseRecord<T>(key: string): Record<string, T> {
 
 function hasEntries(metadata: AssetMetadata): boolean {
   return Object.keys(metadata.aliases).length > 0
+    || Object.keys(metadata.descriptions).length > 0
     || Object.keys(metadata.tags).length > 0
     || Object.keys(metadata.references).length > 0;
 }
@@ -61,8 +357,13 @@ function loadLegacyMetadata(projectId: string): AssetMetadata {
       const parsed = JSON.parse(unified) as Partial<AssetMetadata>;
       return {
         aliases: parsed.aliases ?? {},
+        descriptions: parsed.descriptions ?? {},
         tags: parsed.tags ?? {},
         references: parsed.references ?? {},
+        sceneCards: parsed.sceneCards ?? {},
+        voiceCards: parsed.voiceCards ?? {},
+        deletedSceneCards: parsed.deletedSceneCards ?? [],
+        deletedVoiceCards: parsed.deletedVoiceCards ?? [],
       };
     }
   } catch {
@@ -70,8 +371,13 @@ function loadLegacyMetadata(projectId: string): AssetMetadata {
   }
   return {
     aliases: parseRecord<string>(legacyAliasKey(projectId)),
+    descriptions: {},
     tags: parseRecord<string[]>(legacyTagsKey(projectId)),
     references: parseRecord<string[]>(legacyReferencesKey(projectId)),
+    sceneCards: {},
+    voiceCards: {},
+    deletedSceneCards: [],
+    deletedVoiceCards: [],
   };
 }
 
@@ -140,6 +446,16 @@ export function setAssetAlias(
   return { ...metadata, aliases: setEntry(metadata.aliases, category, filename, value) };
 }
 
+export function setAssetDescription(
+  metadata: AssetMetadata,
+  category: string,
+  filename: string,
+  description: string,
+): AssetMetadata {
+  const value = description.trim() || undefined;
+  return { ...metadata, descriptions: setEntry(metadata.descriptions, category, filename, value) };
+}
+
 export function setAssetTags(
   metadata: AssetMetadata,
   category: string,
@@ -185,5 +501,5 @@ export function referenceFilePath(
 ): string | null {
   const referenceCategory = referenceCategoryForAsset(category, assetFilename);
   if (!referenceCategory) return null;
-  return `${projectPath}/game/config/references/${referenceCategory.slice('reference/'.length)}/${referenceFilename}`;
+  return `${projectPath}/game/${referenceCategory}/${referenceFilename}`;
 }

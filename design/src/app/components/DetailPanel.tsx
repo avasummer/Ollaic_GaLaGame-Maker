@@ -11,7 +11,8 @@ import {
   loadAssetMetadata,
   type AssetMetadata,
 } from '../lib/asset-metadata';
-import { listScenes } from '../lib/webgal-ipc';
+import { listScenes, sceneDisplayName, type SceneHeader } from '../lib/webgal-ipc';
+import { listAssets, type AssetInfo } from '../lib/assets-ipc';
 import {
   Dialog,
   DialogContent,
@@ -30,6 +31,10 @@ interface DetailPanelProps {
   characters?: Character[];
   projectId?: string;
   suggestedFigureCharacter?: string;
+  /** All scene filenames in the project (for scene-jump / choice target pickers). */
+  scenes?: string[];
+  /** Per-scene headers, for showing chapter names in the scene picker. */
+  sceneHeaders?: Record<string, SceneHeader>;
 }
 
 const typeOptions: { value: WebGalCommandType; label: string }[] = [
@@ -71,6 +76,8 @@ export function DetailPanel({
   characters = [],
   projectId,
   suggestedFigureCharacter,
+  scenes = [],
+  sceneHeaders = {},
 }: DetailPanelProps) {
   const [metadata, setMetadata] = useState<AssetMetadata>(() => emptyAssetMetadata());
 
@@ -125,7 +132,7 @@ export function DetailPanel({
         </div>
 
         {/* Type-specific fields */}
-        {renderTypeFields(node, onUpdateNode, characterNames, projectPath, characters, metadata, suggestedFigureCharacter)}
+        {renderTypeFields(node, onUpdateNode, characterNames, projectPath, characters, metadata, suggestedFigureCharacter, scenes, sceneHeaders)}
 
         {/* Common flags */}
         <div className="pt-3 border-t border-border space-y-3">
@@ -188,11 +195,14 @@ function renderTypeFields(
   characters: Character[] = [],
   metadata: AssetMetadata = emptyAssetMetadata(),
   suggestedFigureCharacter?: string,
+  scenes: string[] = [],
+  sceneHeaders: Record<string, SceneHeader> = {},
 ) {
   const backgroundAliases = aliasesForCategory(metadata, 'background');
   const figureAliases = aliasesForCategory(metadata, 'figure');
   const bgmAliases = aliasesForCategory(metadata, 'bgm');
   const sfxAliases = aliasesForCategory(metadata, 'sfx');
+  const vocalAliases = aliasesForCategory(metadata, 'vocal');
   const videoAliases = aliasesForCategory(metadata, 'video');
 
   switch (node.type) {
@@ -235,30 +245,67 @@ function renderTypeFields(
           </div>
           <div>
             <label className={`${labelClass} font-mono-family`}>语音文件</label>
-            <input
-              type="text"
-              value={node.voice || ''}
-              onChange={(e) => onUpdate({ voice: e.target.value || undefined })}
-              className={`${inputClass} font-mono-family`}
-              placeholder="例: v1.wav"
-              aria-label="语音文件"
-            />
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={node.voice || ''}
+                onChange={(e) => onUpdate({ voice: e.target.value || undefined })}
+                className={`${inputClass} flex-1 font-mono-family`}
+                placeholder="例: v1.wav"
+                aria-label="语音文件"
+              />
+              {projectPath && (
+                <AssetPickerButton
+                  projectPath={projectPath}
+                  category="vocal"
+                  currentValue={node.voice || ''}
+                  aliases={vocalAliases}
+                  onSelect={(name) => onUpdate({ voice: name === 'none' ? undefined : name })}
+                />
+              )}
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">作为当前对白的 -voice 标记保存，不会新建独立音频指令</p>
           </div>
         </>
       );
 
     case 'narrator':
       return (
-        <div>
-          <label className={`${labelClass} font-mono-family`}>旁白内容</label>
-          <textarea
-            value={node.content}
-            onChange={(e) => onUpdate({ content: e.target.value })}
-            className={`${inputClass} h-24 resize-none font-body-family`}
-            placeholder="输入旁白文本..."
-            aria-label="旁白内容"
-          />
-        </div>
+        <>
+          <div>
+            <label className={`${labelClass} font-mono-family`}>旁白内容</label>
+            <textarea
+              value={node.content}
+              onChange={(e) => onUpdate({ content: e.target.value })}
+              className={`${inputClass} h-24 resize-none font-body-family`}
+              placeholder="输入旁白文本..."
+              aria-label="旁白内容"
+            />
+          </div>
+          <div>
+            <label className={`${labelClass} font-mono-family`}>语音文件</label>
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={node.voice || ''}
+                onChange={(e) => onUpdate({ voice: e.target.value || undefined })}
+                className={`${inputClass} flex-1 font-mono-family`}
+                placeholder="例: narrator_01.wav"
+                aria-label="旁白语音文件"
+              />
+              {projectPath && (
+                <AssetPickerButton
+                  projectPath={projectPath}
+                  category="vocal"
+                  currentValue={node.voice || ''}
+                  aliases={vocalAliases}
+                  onSelect={(name) => onUpdate({ voice: name === 'none' ? undefined : name })}
+                />
+              )}
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">作为当前旁白的 -voice 标记保存，不会新建独立音频指令</p>
+          </div>
+        </>
       );
 
     case 'intro':
@@ -278,7 +325,7 @@ function renderTypeFields(
       );
 
     case 'choose':
-      return <ChoiceEditor node={node} onUpdate={onUpdate} />;
+      return <ChoiceEditor node={node} onUpdate={onUpdate} scenes={scenes} sceneHeaders={sceneHeaders} />;
 
     case 'changeBg':
       return (
@@ -400,26 +447,14 @@ function renderTypeFields(
       return (
         <div>
           <label className={`${labelClass} font-mono-family`}>
-            目标场景文件
+            目标场景
           </label>
-          <div className="flex gap-1">
-            <input
-              type="text"
-              value={node.targetScene || node.content}
-              onChange={(e) => onUpdate({ targetScene: e.target.value, content: e.target.value })}
-              className={`${inputClass} flex-1 font-mono-family`}
-              placeholder="例: Chapter-2.txt"
-              aria-label="目标场景文件"
-            />
-            {projectPath && (
-              <ScenePickerButton
-                projectPath={projectPath}
-                currentValue={node.targetScene || node.content}
-                aliases={{}}
-                onSelect={(name) => onUpdate({ targetScene: name, content: name })}
-              />
-            )}
-          </div>
+          <SceneSelect
+            value={node.targetScene || node.content || ''}
+            scenes={scenes}
+            sceneHeaders={sceneHeaders}
+            onChange={(name) => onUpdate({ targetScene: name, content: name })}
+          />
           <p className="text-[10px] text-muted-foreground mt-1">
             {node.type === 'callScene' ? 'callScene 执行完后会返回当前场景' : 'changeScene 会永久切换'}
           </p>
@@ -693,6 +728,17 @@ function findSpriteSelection(characters: Character[], filename: string) {
   return null;
 }
 
+function figureAliasesFromCharacters(characters: Character[]): Record<string, string> {
+  const aliases: Record<string, string> = {};
+  for (const character of characters) {
+    for (const sprite of character.sprites) {
+      if (!sprite.file) continue;
+      aliases[sprite.file] = `${character.name}_${sprite.emotion || '默认'}`;
+    }
+  }
+  return aliases;
+}
+
 function CharacterFigurePicker({
   node,
   onUpdate,
@@ -710,6 +756,7 @@ function CharacterFigurePicker({
   const inferred = useMemo(() => findSpriteSelection(characters, filename), [characters, filename]);
   const selectedCharacterName = node.figureCharacter || inferred?.character.name || suggestedFigureCharacter || '';
   const selectedCharacter = characters.find((character) => character.name === selectedCharacterName);
+  const figureAliases = useMemo(() => figureAliasesFromCharacters(characters), [characters]);
 
   useEffect(() => {
     if (!node.figureCharacter && !node.figureEmotion && inferred) {
@@ -789,6 +836,7 @@ function CharacterFigurePicker({
                 projectPath={projectPath}
                 category="figure"
                 currentValue={filename}
+                aliases={figureAliases}
                 onSelect={(name) => onUpdate({
                   asset: name,
                   content: name,
@@ -805,6 +853,64 @@ function CharacterFigurePicker({
   );
 }
 
+// 与 CharacterPanel 的立绘命名规则保持一致：文件名为
+// `${characterPart}_${emotionPart}_${timestamp}.${ext}`，变体立绘只进素材库
+// （figure/<角色ID>/），sprite.file 留空。此处据此把空 file 的卡片解析回实际图片。
+function sanitizeFilenamePart(value: string, fallback: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || fallback;
+}
+
+function spritePrefix(character: Character, emotion: string): string {
+  const characterPart = sanitizeFilenamePart(character.name || character.id, 'character');
+  return `${characterPart}_${sanitizeFilenamePart(emotion, 'sprite')}_`;
+}
+
+function figureFileTail(file: string): string {
+  if (!file) return '';
+  const slash = file.lastIndexOf('/');
+  return slash >= 0 ? file.slice(slash + 1) : file;
+}
+
+// 把一个立绘卡片解析为「可写入脚本的限定文件名」与「可显示的图片源」。
+// - sprite.file 非空：直接使用（主体图 / 旧数据）。
+// - sprite.file 为空（变体）：按情绪前缀在素材库匹配最新生成图，回填限定路径。
+interface ResolvedSprite {
+  file: string;          // 写入脚本的限定文件名，如 "<角色ID>/xxx.png"
+  src: string | null;    // convertFileSrc 后的可显示地址
+}
+
+function resolveSpriteImage(
+  character: Character,
+  sprite: Character['sprites'][number],
+  assets: AssetInfo[],
+  projectPath?: string,
+): ResolvedSprite {
+  if (sprite.file) {
+    const match = assets.find((asset) => figureFileTail(asset.name) === figureFileTail(sprite.file));
+    return {
+      file: sprite.file,
+      src: match
+        ? convertFileSrc(match.path)
+        : projectPath
+          ? convertFileSrc(`${projectPath}/game/figure/${sprite.file}`)
+          : null,
+    };
+  }
+  const prefix = spritePrefix(character, sprite.emotion);
+  const matches = assets
+    .filter((asset) => figureFileTail(asset.name).startsWith(prefix))
+    .sort((a, b) => figureFileTail(b.name).localeCompare(figureFileTail(a.name)));
+  const newest = matches[0];
+  if (!newest) return { file: '', src: null };
+  return { file: `${character.id}/${figureFileTail(newest.name)}`, src: convertFileSrc(newest.path) };
+}
+
 function CharacterEmotionDialog({
   character,
   currentFile,
@@ -818,7 +924,29 @@ function CharacterEmotionDialog({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [assets, setAssets] = useState<AssetInfo[]>([]);
+
+  // 立绘按角色存放在 figure/<角色ID>/（变体）与 figure/<角色ID>/main/（主体候选）。
+  useEffect(() => {
+    if (!open || !projectPath) return;
+    let cancelled = false;
+    (async () => {
+      const [variants, candidates] = await Promise.all([
+        listAssets(projectPath, `figure/${character.id}`).catch(() => [] as AssetInfo[]),
+        listAssets(projectPath, `figure/${character.id}/main`).catch(() => [] as AssetInfo[]),
+      ]);
+      if (!cancelled) setAssets([...variants, ...candidates]);
+    })();
+    return () => { cancelled = true; };
+  }, [open, projectPath, character.id]);
+
+  const hasSelection = Boolean(currentFile) && currentFile !== 'none';
+  // 当前选中文件直接据其限定路径出图：变体的 sprite.file 为空，无法用 find 反查，
+  // 故不依赖 sprites 匹配，直接用 currentFile 渲染缩略图。
   const selectedSprite = character.sprites.find((sprite) => sprite.file === currentFile);
+  const selectedSrc = hasSelection && projectPath
+    ? convertFileSrc(`${projectPath}/game/figure/${currentFile}`)
+    : null;
   const filtered = character.sprites.filter((sprite) =>
     `${sprite.emotion} ${sprite.file}`.toLowerCase().includes(search.toLowerCase()),
   );
@@ -830,18 +958,22 @@ function CharacterEmotionDialog({
         onClick={() => setOpen(true)}
         className="w-full rounded-md border border-border bg-card/60 hover:bg-secondary/50 transition-colors overflow-hidden text-left"
       >
-        {selectedSprite && projectPath ? (
+        {hasSelection ? (
           <div className="flex items-center gap-3 p-2">
-            <div className="w-14 h-20 rounded bg-secondary/30 overflow-hidden flex-shrink-0">
-              <img src={convertFileSrc(`${projectPath}/game/figure/${selectedSprite.file}`)} alt="" className="w-full h-full object-cover object-top" />
+            <div className="w-14 h-20 rounded bg-secondary/30 overflow-hidden flex-shrink-0 flex items-center justify-center">
+              {selectedSrc ? (
+                <img src={selectedSrc} alt="" className="w-full h-full object-cover object-top" />
+              ) : (
+                <Image className="w-6 h-6 text-muted-foreground/40" />
+              )}
             </div>
             <div className="min-w-0">
-              <div className="text-sm truncate">{selectedSprite.emotion}</div>
-              <div className="mt-1 text-[11px] text-muted-foreground truncate font-mono-family">{selectedSprite.file}</div>
+              <div className="text-sm truncate">{character.name} · {selectedSprite?.emotion || '已选立绘'}</div>
+              <div className="mt-1 text-[11px] text-muted-foreground truncate font-mono-family">{figureFileTail(currentFile)}</div>
             </div>
           </div>
         ) : (
-          <div className="p-3 text-sm text-muted-foreground">选择表情形态</div>
+          <div className="p-3 text-sm text-muted-foreground">选择 {character.name} 的表情/姿态</div>
         )}
       </button>
 
@@ -858,7 +990,7 @@ function CharacterEmotionDialog({
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜索表情..."
+                placeholder="搜索表情、姿态或文件名..."
                 className="w-full pl-10 pr-3 py-2 text-sm bg-input-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary/50"
                 aria-label="搜索表情"
                 autoFocus
@@ -869,26 +1001,30 @@ function CharacterEmotionDialog({
             {character.sprites.length === 0 ? (
               <div className="py-12 text-center text-sm text-muted-foreground">该角色暂无立绘，请先在素材库中添加。</div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {filtered.map((sprite) => {
-                  const selected = sprite.file === currentFile;
+                  const resolved = resolveSpriteImage(character, sprite, assets, projectPath);
+                  const selected = (resolved.file || sprite.file) === currentFile;
                   return (
                     <button
                       type="button"
                       key={`${character.id}-${sprite.file}-${sprite.emotion}`}
-                      onClick={() => { onSelect(sprite); setOpen(false); }}
-                      className={`w-24 h-32 rounded-md border overflow-hidden bg-card/60 hover:bg-secondary/50 transition-colors text-left ${
+                      onClick={() => { onSelect({ ...sprite, file: resolved.file || sprite.file }); setOpen(false); }}
+                      className={`min-h-40 rounded-md border overflow-hidden bg-card/60 hover:bg-secondary/50 transition-colors text-left ${
                         selected ? 'border-primary bg-primary/10 text-primary' : 'border-border'
                       }`}
                     >
-                      <div className="h-24 bg-secondary/30 flex items-center justify-center overflow-hidden">
-                        {projectPath ? (
-                          <img src={convertFileSrc(`${projectPath}/game/figure/${sprite.file}`)} alt="" className="w-full h-full object-cover object-top" />
+                      <div className="h-28 bg-secondary/30 flex items-center justify-center overflow-hidden">
+                        {resolved.src ? (
+                          <img src={resolved.src} alt="" className="w-full h-full object-cover object-top" />
                         ) : (
                           <Image className="w-7 h-7 text-muted-foreground/40" />
                         )}
                       </div>
-                      <div className="px-2 py-1 text-xs truncate text-center">{sprite.emotion}</div>
+                      <div className="px-2 py-1 text-center">
+                        <div className="truncate text-xs">{character.name} · {sprite.emotion || '默认'}</div>
+                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground font-mono-family">{resolved.file || sprite.file || '（未绑定图片）'}</div>
+                      </div>
                     </button>
                   );
                 })}
@@ -983,7 +1119,57 @@ function ScenePickerButton({
   );
 }
 
-function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Partial<WebGalNode>) => void }) {
+/** Dropdown for picking a target scene by chapter name; stores the exact filename. */
+function SceneSelect({
+  value,
+  scenes,
+  sceneHeaders = {},
+  onChange,
+  placeholder = '选择目标场景…',
+  allowEmpty = false,
+  compact = false,
+  showOutline = false,
+  'aria-label': ariaLabel,
+}: {
+  value: string;
+  scenes: string[];
+  sceneHeaders?: Record<string, SceneHeader>;
+  onChange: (scene: string) => void;
+  placeholder?: string;
+  allowEmpty?: boolean;
+  compact?: boolean;
+  /** Show "章节 — 大纲" instead of just the chapter name in the option list. */
+  showOutline?: boolean;
+  'aria-label'?: string;
+}) {
+  const known = !value || scenes.includes(value);
+  const cls = compact
+    ? 'w-full px-2 py-1 bg-background border border-border/50 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary/50'
+    : inputClass;
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={cls}
+      aria-label={ariaLabel ?? '目标场景'}
+    >
+      <option value="">{allowEmpty ? '（不跳转）' : placeholder}</option>
+      {!known && value && <option value={value}>{value}（未找到）</option>}
+      {scenes.map((s) => (
+        <option key={s} value={s}>
+          {showOutline ? sceneDisplayName(s, sceneHeaders[s]) : (sceneHeaders[s]?.chapter?.trim() || s)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function ChoiceEditor({ node, onUpdate, scenes = [], sceneHeaders = {} }: {
+  node: WebGalNode;
+  onUpdate: (u: Partial<WebGalNode>) => void;
+  scenes?: string[];
+  sceneHeaders?: Record<string, SceneHeader>;
+}) {
   const choices = node.choices || [];
 
   const add = () => {
@@ -1038,12 +1224,15 @@ function ChoiceEditor({ node, onUpdate }: { node: WebGalNode; onUpdate: (u: Part
               placeholder="选项文本"
               aria-label={`Option ${idx + 1} text`}
             />
-            <input
-              type="text"
+            <SceneSelect
               value={choice.target}
-              onChange={(e) => update(idx, 'target', e.target.value)}
-              className="w-full px-2 py-1 bg-background border border-border/50 rounded text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 font-mono-family"
-              placeholder="目标场景文件 (例: scene2.txt)"
+              scenes={scenes}
+              sceneHeaders={sceneHeaders}
+              onChange={(name) => update(idx, 'target', name)}
+              placeholder="跳转到场景…（留空则不跳转）"
+              allowEmpty
+              compact
+              showOutline
               aria-label={`Option ${idx + 1} target scene`}
             />
           </div>

@@ -149,7 +149,6 @@ mod tests {
             aliases: Vec::new(),
             description: String::new(),
             personality: String::new(),
-            consistency_prompt: None,
             reference_images: Vec::new(),
             stance: String::new(),
             keywords: Vec::new(),

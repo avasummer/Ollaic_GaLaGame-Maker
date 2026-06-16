@@ -11,10 +11,10 @@
 
 @keyframes pulse-glow {
   0%, 100% {
-    filter: drop-shadow(0 0 8px rgba(212, 165, 116, 0.3));
+    filter: drop-shadow(0 0 8px color-mix(in srgb, var(--color-warm-glow) 50%, transparent));
   }
   50% {
-    filter: drop-shadow(0 0 16px rgba(212, 165, 116, 0.5));
+    filter: drop-shadow(0 0 16px color-mix(in srgb, var(--color-warm-glow) 80%, transparent));
   }
 }
 
@@ -39,33 +39,16 @@
   animation: float 6s ease-in-out infinite;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: rgba(26, 22, 18, 0.5);
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(212, 165, 116, 0.3);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 165, 116, 0.5);
-}
+/* Scrollbar styling lives in theme.css (::-webkit-scrollbar*, var(--scrollbar-track)). */
 
 /* Selection */
 ::selection {
-  background: rgba(212, 165, 116, 0.3);
-  color: #f4ede4;
+  background: color-mix(in srgb, var(--color-warm-glow) 40%, transparent);
+  color: var(--card);
 }
 
 /* Focus styles */
 :focus-visible {
-  outline: 2px solid rgba(212, 165, 116, 0.5);
+  outline: 2px solid color-mix(in srgb, var(--color-warm-glow) 70%, transparent);
   outline-offset: 2px;
 }

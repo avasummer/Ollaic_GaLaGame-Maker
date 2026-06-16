@@ -8,6 +8,9 @@ pub struct CharacterSprite {
     pub emotion: String,
     /// Filename relative to game/figure/, e.g. "girl_happy.webp".
     pub file: String,
+    /// Custom generation prompt for this sprite variant.
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 /// A directional relation to another character.
@@ -39,9 +42,6 @@ pub struct Character {
     /// Personality traits.
     #[serde(default)]
     pub personality: String,
-    /// Stable image-generation prompt prefix for visual consistency.
-    #[serde(default)]
-    pub consistency_prompt: Option<String>,
     /// Uploaded subject reference images stored in game/config/references/{characterId}/.
     #[serde(default)]
     pub reference_images: Vec<String>,

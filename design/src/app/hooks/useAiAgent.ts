@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { aiChatTurn, getAiConfig, type AiChatMessage } from '../lib/ai-ipc';
 import { listAllAssets, type AssetInfo } from '../lib/assets-ipc';
+import {
+  extractSceneBackgroundAssets,
+  loadAssetMetadata,
+  saveAssetMetadata,
+  syncSceneCardsFromBackgrounds,
+} from '../lib/asset-metadata';
 import { updateCharacter } from '../lib/character-ipc';
 import type { Character } from '../lib/character-types';
 import {
@@ -515,6 +521,26 @@ export function useAiAgent(params: UseAiAgentParams) {
     void sendPrompt(lastPrompt);
   }, [busy, cooldown, error?.kind, lastPrompt, retryCount, sendPrompt]);
 
+  const syncSceneBackgroundCard = useCallback(async (sceneFile: string, sceneNodes: WebGalNode[]) => {
+    if (!projectPath) return;
+    try {
+      const backgroundAssets = (await listAllAssets(projectPath)).filter((asset) => asset.category === 'background');
+      const availableBackgrounds = new Set(backgroundAssets.map((asset) => asset.name));
+      const backgroundFilenames = extractSceneBackgroundAssets(sceneNodes);
+      if (backgroundFilenames.length === 0) return;
+      const metadata = await loadAssetMetadata(projectPath, projectId);
+      const next = syncSceneCardsFromBackgrounds(
+        metadata,
+        sceneFile,
+        backgroundFilenames,
+        availableBackgrounds,
+      );
+      if (next !== metadata) await saveAssetMetadata(projectPath, next);
+    } catch (e) {
+      console.warn('[asset] sync scene background card failed:', e);
+    }
+  }, [projectId, projectPath]);
+
   // Persist all edits atomically (all-or-rollback). No conflict guard — callers
   // decide whether the current scene's live buffer is allowed to differ.
   const persistChangeSet = useCallback(async (set: PendingChangeSet) => {
@@ -530,6 +556,7 @@ export function useAiAgent(params: UseAiAgentParams) {
         if (edit.kind === 'scene') {
           const path = await getScenePath(projectPath, edit.file);
           await saveScene(path, edit.afterNodes);
+          await syncSceneBackgroundCard(edit.file, edit.afterNodes);
         } else if (edit.kind === 'character') {
           await updateCharacter(projectPath, edit.after);
         } else if (edit.kind === 'memory') {
@@ -579,7 +606,17 @@ export function useAiAgent(params: UseAiAgentParams) {
     });
     setPendingChangeSet({ ...set, status: 'accepted' });
     setStatus('accepted');
-  }, [currentSceneName, sceneHeaders, onScenesChanged, projectPath, pushHistory, replaceAssistantMessage, setDirty, setSaveStatus]);
+  }, [
+    currentSceneName,
+    sceneHeaders,
+    onScenesChanged,
+    projectPath,
+    pushHistory,
+    replaceAssistantMessage,
+    setDirty,
+    setSaveStatus,
+    syncSceneBackgroundCard,
+  ]);
 
   const acceptChange = useCallback(async () => {
     if (!pendingChangeSet || pendingChangeSet.status !== 'pending' || !projectPath) return;

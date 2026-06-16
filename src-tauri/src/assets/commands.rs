@@ -1,4 +1,7 @@
+use crate::webgal::parser as webgal_parser;
 use crate::webgal::references;
+use crate::webgal::types::CommandType;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -28,22 +31,85 @@ pub struct AssetMetadata {
     #[serde(default)]
     pub aliases: HashMap<String, String>,
     #[serde(default)]
+    pub descriptions: HashMap<String, String>,
+    #[serde(default)]
     pub tags: HashMap<String, Vec<String>>,
     #[serde(default)]
     pub references: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub scene_cards: HashMap<String, SceneAssetCard>,
+    #[serde(default)]
+    pub voice_cards: HashMap<String, VoiceAssetCard>,
+    #[serde(default)]
+    pub deleted_scene_cards: Vec<String>,
+    #[serde(default)]
+    pub deleted_voice_cards: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAssetCard {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub scene_file: Option<String>,
+    #[serde(default)]
+    pub image_asset: Option<String>,
+    #[serde(default)]
+    pub target_stem: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub style: String,
+    #[serde(default)]
+    pub negative_prompt: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceAssetCard {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub character: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub emotion: String,
+    #[serde(default)]
+    pub voice_asset: Option<String>,
+    #[serde(default)]
+    pub target_stem: String,
+    #[serde(default)]
+    pub prompt: String,
 }
 
 fn category_to_dir(category: &str) -> Option<String> {
     match category {
         "scene" | "background" => Some("background".to_string()),
         "character" | "figure" => Some("figure".to_string()),
+        // Per-character figure subdirectory: figure/<characterId>. Validate each
+        // path segment to reject traversal, mirroring the reference/ branch below.
+        _ if category.starts_with("figure/") => {
+            let tail = category.trim_start_matches("figure/");
+            if tail
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == ".." || part.contains('\\'))
+            {
+                None
+            } else {
+                Some(format!("figure/{tail}"))
+            }
+        }
         "music" | "bgm" => Some("bgm".to_string()),
         "sfx" => Some("sfx".to_string()),
         "vocal" => Some("vocal".to_string()),
         "video" => Some("video".to_string()),
         "animation" => Some("animation".to_string()),
         "tex" => Some("tex".to_string()),
-        "reference" => Some("config/references".to_string()),
+        "reference" => Some("reference".to_string()),
         _ if category.starts_with("reference/") => {
             let tail = category.trim_start_matches("reference/");
             if tail
@@ -52,7 +118,7 @@ fn category_to_dir(category: &str) -> Option<String> {
             {
                 None
             } else {
-                Some(format!("config/references/{tail}"))
+                Some(format!("reference/{tail}"))
             }
         }
         _ => None,
@@ -181,7 +247,7 @@ fn asset_metadata_path(project_path: &str) -> PathBuf {
         .join("asset-metadata.json")
 }
 
-fn read_asset_metadata(project_path: &str) -> Result<AssetMetadata, String> {
+pub(crate) fn read_asset_metadata(project_path: &str) -> Result<AssetMetadata, String> {
     let path = asset_metadata_path(project_path);
     if !path.exists() {
         return Ok(AssetMetadata::default());
@@ -191,7 +257,7 @@ fn read_asset_metadata(project_path: &str) -> Result<AssetMetadata, String> {
     serde_json::from_str(&source).map_err(|e| format!("解析素材元数据失败 {}: {e}", path.display()))
 }
 
-fn write_asset_metadata(project_path: &str, metadata: &AssetMetadata) -> Result<(), String> {
+pub(crate) fn write_asset_metadata(project_path: &str, metadata: &AssetMetadata) -> Result<(), String> {
     let path = asset_metadata_path(project_path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
@@ -236,6 +302,7 @@ fn rename_asset_metadata(
     let new_key = asset_metadata_key(category, new_name);
     let legacy_key = owns_asset_metadata(category).then_some(old_name);
     rename_metadata_entry(&mut metadata.aliases, &old_key, legacy_key, new_key.clone());
+    rename_metadata_entry(&mut metadata.descriptions, &old_key, legacy_key, new_key.clone());
     rename_metadata_entry(&mut metadata.tags, &old_key, legacy_key, new_key.clone());
     rename_metadata_entry(&mut metadata.references, &old_key, legacy_key, new_key);
     write_asset_metadata(project_path, &metadata)
@@ -245,10 +312,12 @@ fn delete_asset_metadata(project_path: &str, category: &str, filename: &str) -> 
     let mut metadata = read_asset_metadata(project_path)?;
     let key = asset_metadata_key(category, filename);
     metadata.aliases.remove(&key);
+    metadata.descriptions.remove(&key);
     metadata.tags.remove(&key);
     metadata.references.remove(&key);
     if owns_asset_metadata(category) {
         metadata.aliases.remove(filename);
+        metadata.descriptions.remove(filename);
         metadata.tags.remove(filename);
         metadata.references.remove(filename);
     }
@@ -313,6 +382,29 @@ pub fn list_assets(project_path: String, category: String) -> Result<Vec<AssetIn
     for a in &mut assets {
         a.category = subdir.to_string();
     }
+
+    // The bare "figure" category also surfaces per-character subdirectory sprites
+    // (one level deep) with subdirectory-qualified names, so the global figure
+    // picker can still browse/select any character's立绘. Per-character listing
+    // (category "figure/<id>") returns only that subdir with flat names above.
+    if subdir == "figure" {
+        let entries =
+            fs::read_dir(&dir).map_err(|e| format!("无法读取目录 {}: {e}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let sub_path = entry.path();
+            if !sub_path.is_dir() {
+                continue;
+            }
+            let sub_name = entry.file_name().to_string_lossy().to_string();
+            for mut asset in list_dir_files(&sub_path)? {
+                asset.name = format!("{sub_name}/{}", asset.name);
+                asset.category = subdir.to_string();
+                assets.push(asset);
+            }
+        }
+    }
+
     Ok(assets)
 }
 
@@ -385,6 +477,45 @@ pub fn import_asset(
             .to_string(),
         path: target.to_string_lossy().to_string(),
         category: subdir.to_string(),
+        size: metadata.len(),
+        extension: ext,
+    })
+}
+
+#[tauri::command]
+pub fn save_generated_asset(
+    project_path: String,
+    category: String,
+    filename: String,
+    base64_data: String,
+) -> Result<AssetInfo, String> {
+    validate_asset_filename(&filename)?;
+    let subdir = category_to_dir(&category).ok_or_else(|| format!("未知素材类型: {category}"))?;
+    let target_dir = PathBuf::from(&project_path).join("game").join(&subdir);
+    fs::create_dir_all(&target_dir).map_err(|e| format!("创建目录失败: {e}"))?;
+
+    let encoded = base64_data
+        .split_once(',')
+        .map(|(_, payload)| payload)
+        .unwrap_or(base64_data.as_str());
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .map_err(|e| format!("解析生成素材失败: {e}"))?;
+
+    let target = target_dir.join(&filename);
+    fs::write(&target, bytes).map_err(|e| format!("写入生成素材失败 {}: {e}", target.display()))?;
+
+    let metadata = target.metadata().map_err(|e| e.to_string())?;
+    let ext = target
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    Ok(AssetInfo {
+        name: filename,
+        path: target.to_string_lossy().to_string(),
+        category: subdir,
         size: metadata.len(),
         extension: ext,
     })
@@ -549,6 +680,195 @@ pub async fn find_asset_usages(
     Ok(usages)
 }
 
+/// Common emotional keywords in Chinese dialogue.
+fn detect_emotion(text: &str, flags: &[serde_json::Value]) -> String {
+    // Check explicit emotion flag first
+    for f in flags {
+        if let Some(obj) = f.as_object() {
+            if obj.get("key").and_then(|v| v.as_str()) == Some("emotion") {
+                if let Some(val) = obj.get("value").and_then(|v| v.as_str()) {
+                    return val.to_string();
+                }
+            }
+        }
+    }
+    let lower = text.to_lowercase();
+    let emotion_keywords: &[(&str, &[&str])] = &[
+        ("happy", &["开心", "高兴", "太好", "哈哈", "喜欢", "微笑", "笑", "棒", "赞"]),
+        ("sad", &["伤心", "难过", "哭", "痛", "悲伤", "遗憾", "对不起", "抱歉"]),
+        ("angry", &["生气", "怒", "可恶", "过分", "混蛋", "滚", "闭嘴"]),
+        ("surprised", &["惊讶", "什么", "不会吧", "竟然", "天啊", "不可能", "真的假的"]),
+        ("fearful", &["害怕", "恐怖", "不要", "救命", "危险", "吓"]),
+        ("gentle", &["温柔", "乖", "可爱", "安静", "轻声"]),
+    ];
+    for (emotion, keywords) in emotion_keywords {
+        for kw in *keywords {
+            if lower.contains(kw) {
+                return emotion.to_string();
+            }
+        }
+    }
+    "neutral".to_string()
+}
+
+/// Generate stable ID for a voice card from scene and dialogue index.
+fn voice_card_id(scene_stem: &str, dialogue_index: u32) -> String {
+    format!("voice_{}_{}", scene_stem, dialogue_index)
+}
+
+/// Scan a scene file's dialogue lines and create VoiceAssetCard entries for any
+/// that don't already have one. Called after scene save.
+#[tauri::command]
+pub fn sync_scene_voice_cards(
+    project_path: String,
+    scene_file: String,
+) -> Result<Vec<VoiceAssetCard>, String> {
+    let scene_path = PathBuf::from(&project_path)
+        .join("game")
+        .join("scene")
+        .join(&scene_file);
+    if !scene_path.exists() {
+        return Err(format!("场景文件不存在: {}", scene_path.display()));
+    }
+    let source = fs::read_to_string(&scene_path)
+        .map_err(|e| format!("读取场景文件失败 {}: {e}", scene_path.display()))?;
+    let nodes = webgal_parser::parse_script(&source);
+    let mut metadata = read_asset_metadata(&project_path)?;
+    let scene_stem = scene_file.trim_end_matches(".txt");
+    let mut dialogue_index: u32 = 0;
+    let mut updated: Vec<VoiceAssetCard> = Vec::new();
+
+    for node in &nodes {
+        let is_dialogue = matches!(node.cmd_type, CommandType::Dialogue | CommandType::Narrator);
+        if !is_dialogue || node.content.trim().is_empty() {
+            continue;
+        }
+        let character = node.character.as_deref().unwrap_or("旁白");
+        let id = voice_card_id(scene_stem, dialogue_index);
+        dialogue_index += 1;
+
+        if metadata.voice_cards.contains_key(&id) {
+            continue;
+        }
+        if metadata.deleted_voice_cards.contains(&id) {
+            continue;
+        }
+
+        // Convert flags to serde_json::Value for emotion detection
+        let flag_values: Vec<serde_json::Value> = node
+            .flags
+            .iter()
+            .map(|f| {
+                let val = match &f.value {
+                    crate::webgal::types::FlagValue::Bool(b) => serde_json::Value::Bool(*b),
+                    crate::webgal::types::FlagValue::Str(s) => serde_json::Value::String(s.clone()),
+                };
+                serde_json::json!({"key": f.key, "value": val})
+            })
+            .collect();
+        let emotion = detect_emotion(&node.content, &flag_values);
+        let target_stem = format!("vo_{}_{}_{}", character, scene_stem, dialogue_index);
+
+        let card = VoiceAssetCard {
+            id: id.clone(),
+            character: character.to_string(),
+            text: node.content.clone(),
+            emotion: emotion.clone(),
+            voice_asset: node.voice.clone(),
+            target_stem: target_stem.clone(),
+            prompt: String::new(),
+        };
+
+        metadata.voice_cards.insert(id.clone(), card.clone());
+
+        // Set tags on the target stem
+        let tag_key = asset_metadata_key("vocal", &target_stem);
+        let mut tags: Vec<String> = metadata.tags.get(&tag_key).cloned().unwrap_or_default();
+        // scene tag
+        tags.retain(|t| !t.starts_with("scene:"));
+        tags.push(format!("scene:{}", scene_stem));
+        // character tag
+        tags.retain(|t| !t.starts_with("char:"));
+        if character != "旁白" {
+            tags.push(format!("char:{}", character));
+        }
+        // emotion tag
+        tags.retain(|t| !t.starts_with("emotion:"));
+        tags.push(format!("emotion:{}", emotion));
+        // status tag
+        tags.retain(|t| !t.starts_with("status:"));
+        tags.push("status:pending".to_string());
+        // source tag (only set if not already set)
+        if node.voice.is_some() && !tags.iter().any(|t| t.starts_with("source:")) {
+            tags.push("source:import".to_string());
+        }
+        metadata.tags.insert(tag_key, tags);
+
+        updated.push(card);
+    }
+
+    if !updated.is_empty() {
+        write_asset_metadata(&project_path, &metadata)?;
+    }
+
+    Ok(updated)
+}
+
+/// Fill a voice card slot with an imported audio file.
+#[tauri::command]
+pub fn fill_voice_card(
+    project_path: String,
+    voice_card_id: String,
+    asset_filename: String,
+) -> Result<VoiceAssetCard, String> {
+    let mut metadata = read_asset_metadata(&project_path)?;
+    // Snapshot the fields we need before taking a mutable reference.
+    let card = metadata
+        .voice_cards
+        .get(&voice_card_id)
+        .cloned()
+        .ok_or_else(|| format!("配音卡片不存在: {voice_card_id}"))?;
+    let stem = card.target_stem.clone();
+
+    // Update the card in-place
+    if let Some(c) = metadata.voice_cards.get_mut(&voice_card_id) {
+        c.voice_asset = Some(asset_filename.clone());
+    }
+
+    // Update status tag
+    let tag_key = asset_metadata_key("vocal", &stem);
+    let mut tags: Vec<String> = metadata.tags.get(&tag_key).cloned().unwrap_or_default();
+    tags.retain(|t| !t.starts_with("status:"));
+    tags.push("status:done".to_string());
+    tags.retain(|t| !t.starts_with("source:"));
+    tags.push("source:import".to_string());
+    metadata.tags.insert(tag_key, tags);
+
+    write_asset_metadata(&project_path, &metadata)?;
+    // Return updated card
+    let updated = metadata
+        .voice_cards
+        .get(&voice_card_id)
+        .cloned()
+        .unwrap_or(card);
+    Ok(updated)
+}
+
+/// Delete a voice card (mark as deleted so it won't be re-created on sync).
+#[tauri::command]
+pub fn delete_voice_card(
+    project_path: String,
+    voice_card_id: String,
+) -> Result<(), String> {
+    let mut metadata = read_asset_metadata(&project_path)?;
+    let already_deleted = metadata.deleted_voice_cards.contains(&voice_card_id);
+    metadata.voice_cards.remove(&voice_card_id);
+    if !already_deleted {
+        metadata.deleted_voice_cards.push(voice_card_id);
+    }
+    write_asset_metadata(&project_path, &metadata)
+}
+
 fn unique_path(path: PathBuf) -> PathBuf {
     if !path.exists() {
         return path;
@@ -579,6 +899,36 @@ fn unique_path(path: PathBuf) -> PathBuf {
 mod tests {
     use super::*;
     use futures::executor::block_on;
+
+    #[test]
+    fn figure_assets_are_isolated_per_character_subdirectory() {
+        let tmp = std::env::temp_dir().join("webgal_test_figure_subdirs");
+        let _ = fs::remove_dir_all(&tmp);
+        let project = tmp.to_string_lossy().to_string();
+        let figure_dir = tmp.join("game").join("figure");
+        fs::create_dir_all(figure_dir.join("char_a")).unwrap();
+        fs::create_dir_all(figure_dir.join("char_b")).unwrap();
+        fs::write(figure_dir.join("legacy.webp"), "x").unwrap();
+        fs::write(figure_dir.join("char_a").join("stand.webp"), "x").unwrap();
+        fs::write(figure_dir.join("char_b").join("smile.webp"), "x").unwrap();
+
+        // Per-character listing only returns that character's sprites (flat names).
+        let a = list_assets(project.clone(), "figure/char_a".to_string()).unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].name, "stand.webp");
+
+        // Bare "figure" surfaces top-level files plus subdir-qualified sprites.
+        let all = list_assets(project.clone(), "figure".to_string()).unwrap();
+        let names: std::collections::HashSet<String> =
+            all.into_iter().map(|asset| asset.name).collect();
+        assert!(names.contains("legacy.webp"));
+        assert!(names.contains("char_a/stand.webp"));
+        assert!(names.contains("char_b/smile.webp"));
+
+        // Path traversal in the subdirectory segment is rejected.
+        assert!(list_assets(project, "figure/../scene".to_string()).is_err());
+        let _ = fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn asset_usage_requires_an_exact_semantic_reference() {

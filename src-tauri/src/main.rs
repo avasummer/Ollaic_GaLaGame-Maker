@@ -3,6 +3,7 @@
 mod ai;
 mod assets;
 mod characters;
+mod matting;
 mod webgal;
 
 use std::path::PathBuf;
@@ -154,6 +155,8 @@ fn main() {
             webgal::commands::list_scenes,
             webgal::commands::read_file_text,
             webgal::commands::write_file_text,
+            webgal::commands::delete_scene,
+            webgal::commands::rename_scene,
             // Project management
             webgal::project::init_project,
             webgal::project::open_project,
@@ -181,21 +184,37 @@ fn main() {
             // AI
             ai::commands::get_ai_config,
             ai::commands::set_ai_config,
+            ai::commands::get_ai_image_config,
+            ai::commands::set_ai_image_config,
+            ai::commands::get_ai_tts_config,
+            ai::commands::set_ai_tts_config,
+            ai::commands::get_ai_music_config,
+            ai::commands::set_ai_music_config,
             ai::commands::validate_ai_config,
+            ai::commands::ai_generate_image,
+            ai::commands::ai_generate_tts,
+            ai::commands::generate_music,
             ai::commands::ai_chat_stream,
             ai::commands::ai_chat_turn,
             ai::commands::list_ai_logs,
             ai::commands::clear_ai_logs,
             ai::commands::get_ai_log_path,
+            ai::commands::generate_batch_tts,
+            // Matting (background removal)
+            matting::commands::remove_background,
             // Assets
             assets::commands::list_assets,
             assets::commands::list_all_assets,
             assets::commands::import_asset,
+            assets::commands::save_generated_asset,
             assets::commands::delete_asset,
             assets::commands::rename_asset,
             assets::commands::find_asset_usages,
             assets::commands::load_asset_metadata,
             assets::commands::save_asset_metadata,
+            assets::commands::sync_scene_voice_cards,
+            assets::commands::fill_voice_card,
+            assets::commands::delete_voice_card,
             // Characters
             characters::commands::list_characters,
             characters::commands::get_character,

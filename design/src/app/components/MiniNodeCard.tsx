@@ -32,9 +32,22 @@ export function MiniNodeCard({ entry }: { entry: NodeDiffEntry }) {
       {badge && <badge.Icon className={`h-3 w-3 shrink-0 ${badge.cls}`} />}
       {Icon && <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />}
       <span className="shrink-0 text-muted-foreground">{commandLabels[node.type] ?? node.type}</span>
-      <span className={`min-w-0 flex-1 truncate text-foreground ${entry.kind === 'removed' ? 'line-through' : ''}`}>
-        {summary}
-      </span>
+      {entry.kind === 'modified' && oldSummary !== undefined ? (
+        <span className="min-w-0 flex-1 space-y-0.5">
+          <span className="flex min-w-0 items-center gap-1 text-muted-foreground line-through decoration-red-400/50">
+            <span className="shrink-0 text-red-400/70">-</span>
+            <span className="min-w-0 flex-1 truncate">{oldSummary || '(空)'}</span>
+          </span>
+          <span className="flex min-w-0 items-center gap-1 text-foreground">
+            <span className="shrink-0 text-green-400/80">+</span>
+            <span className="min-w-0 flex-1 truncate">{summary || '(空)'}</span>
+          </span>
+        </span>
+      ) : (
+        <span className={`min-w-0 flex-1 truncate text-foreground ${entry.kind === 'removed' ? 'line-through' : ''}`}>
+          {summary}
+        </span>
+      )}
     </div>
   );
 }

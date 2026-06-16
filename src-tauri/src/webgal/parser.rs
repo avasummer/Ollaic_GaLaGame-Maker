@@ -129,6 +129,23 @@ fn is_voice_file_flag(key: &str) -> bool {
         .any(|extension| lower.ends_with(extension))
 }
 
+fn voice_from_flags(flags: &[Flag]) -> Option<String> {
+    for f in flags {
+        let k = &f.key;
+        if ((k.starts_with('v') || k.starts_with('V'))
+            && k.len() > 1
+            && k.as_bytes()[1].is_ascii_digit())
+            || is_voice_file_flag(k)
+        {
+            return Some(match &f.value {
+                FlagValue::Str(s) => s.clone(),
+                FlagValue::Bool(_) => k.clone(),
+            });
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Single-line parser
 // ---------------------------------------------------------------------------
@@ -164,11 +181,15 @@ fn parse_line(line: &str, index: usize) -> Option<WebGalNode> {
     // No colon → continuation dialogue
     if colon_idx.is_none() {
         let parsed = parse_flags(body);
-        return Some(WebGalNode::new(
+        let mut node = WebGalNode::new(
             (index + 1).to_string(),
             CommandType::Dialogue,
             parsed.content,
-        ));
+        );
+        node.flags = parsed.flags.clone();
+        node.voice = voice_from_flags(&parsed.flags);
+        apply_common_flags(&mut node);
+        return Some(node);
     }
 
     let colon_idx = colon_idx.unwrap();
@@ -184,6 +205,7 @@ fn parse_line(line: &str, index: usize) -> Option<WebGalNode> {
             parsed.content,
         );
         node.flags = parsed.flags.clone();
+        node.voice = voice_from_flags(&parsed.flags);
         apply_common_flags(&mut node);
         return Some(node);
     }
@@ -208,21 +230,7 @@ fn parse_line(line: &str, index: usize) -> Option<WebGalNode> {
     node.character = Some(prefix.to_string());
     node.flags = parsed.flags.clone();
 
-    // Check for voice flag (e.g. -v1.wav)
-    for f in &parsed.flags {
-        let k = &f.key;
-        if ((k.starts_with('v') || k.starts_with('V'))
-            && k.len() > 1
-            && k.as_bytes()[1].is_ascii_digit())
-            || is_voice_file_flag(k)
-        {
-            node.voice = Some(match &f.value {
-                FlagValue::Str(s) => s.clone(),
-                FlagValue::Bool(_) => k.clone(),
-            });
-            break;
-        }
-    }
+    node.voice = voice_from_flags(&parsed.flags);
 
     apply_common_flags(&mut node);
     Some(node)

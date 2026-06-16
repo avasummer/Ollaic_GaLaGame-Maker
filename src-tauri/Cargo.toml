@@ -6,6 +6,7 @@ edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+ureq = "3.3"
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
@@ -21,5 +22,10 @@ axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.5", features = ["fs"] }
 mime_guess = "2"
 percent-encoding = "2"
+base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tokio-tungstenite = { version = "0.21", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+ort = "2.0.0-rc.12"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+ndarray = "0.17"
