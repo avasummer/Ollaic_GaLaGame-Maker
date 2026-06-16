@@ -802,6 +802,7 @@ interface ScriptCommandStreamProps {
   onPasteNode?: (atIndex: number) => void;
   onReorderNodes?: (fromIndex: number, toIndex: number) => void;
   onJumpToIndex?: (index: number) => void;
+  onCreateUnlockNode?: (sourceNode: WebGalNode, atIndex: number) => void;
   clipboardNode?: WebGalNode | null;
   characterColors?: Record<string, string>;
   characters?: Character[];
@@ -913,6 +914,7 @@ interface ScriptCommandCardProps {
   onPasteNode?: (atIndex: number) => void;
   onReorderNodes?: (fromIndex: number, toIndex: number) => void;
   onJumpToIndex?: (index: number) => void;
+  onCreateUnlockNode?: (sourceNode: WebGalNode, atIndex: number) => void;
   clipboardNode?: WebGalNode | null;
   /** Active search query — disables drag-reorder while filtering. */
   query?: string;
@@ -945,6 +947,7 @@ function ScriptCommandCard({
   onPasteNode,
   onReorderNodes,
   onJumpToIndex,
+  onCreateUnlockNode,
   clipboardNode,
   query,
   characters,
@@ -979,6 +982,10 @@ function ScriptCommandCard({
   });
 
   drag(drop(ref));
+  const canCreateUnlock = onCreateUnlockNode
+    && ((node.type === 'changeBg' && (node.asset || node.content || '').trim() && (node.asset || node.content || '').trim() !== 'none')
+      || (node.type === 'bgm' && (node.asset || node.content || '').trim() && (node.asset || node.content || '').trim() !== 'none'));
+  const unlockLabel = node.type === 'changeBg' ? '加入CG鉴赏' : '加入BGM鉴赏';
 
   return (
     <div ref={preview} key={node.id} data-cmd-card data-cmd-index={index} className="group flex gap-3" style={{ opacity: isDragging ? 0.4 : 1 }}>
@@ -1204,6 +1211,14 @@ function ScriptCommandCard({
                   <ArrowRight className="h-4 w-4" /> 跳到运行时
                 </DropdownMenuItem>
               )}
+              {canCreateUnlock && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => onCreateUnlockNode?.(node, index + 1)}>
+                    <BookOpen className="h-4 w-4" /> {unlockLabel}
+                  </DropdownMenuItem>
+                </>
+              )}
               <DropdownMenuSeparator />
               {onDeleteNode && (
                 <DropdownMenuItem
@@ -1234,6 +1249,14 @@ function ScriptCommandCard({
               <Clipboard className="h-3.5 w-3.5" /> 粘贴到此处
             </ContextMenuItem>
           )}
+          {canCreateUnlock && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem onClick={() => onCreateUnlockNode?.(node, index + 1)} className="gap-2 text-xs">
+                <BookOpen className="h-3.5 w-3.5" /> {unlockLabel}
+              </ContextMenuItem>
+            </>
+          )}
           {onDeleteNode && (
             <>
               <ContextMenuSeparator />
@@ -1260,6 +1283,7 @@ function ScriptCommandStream({
   onPasteNode,
   onReorderNodes,
   onJumpToIndex,
+  onCreateUnlockNode,
   clipboardNode,
   characterColors,
   characters,
@@ -1477,6 +1501,7 @@ function ScriptCommandStream({
                 onPasteNode={onPasteNode}
                 onReorderNodes={onReorderNodes}
                 onJumpToIndex={onJumpToIndex}
+                onCreateUnlockNode={onCreateUnlockNode}
                 clipboardNode={clipboardNode}
                 query={query}
                 characters={characters}
@@ -1916,6 +1941,40 @@ export function StoryEditor() {
     const { nodes: updated, inserted } = insertSceneNode(current, type, atIndex, Date.now().toString());
     commitEditedNodes(updated);
     setSelectedNode(inserted);
+  }, [commitEditedNodes, flushPendingHistory, pushHistory]);
+
+  const createUnlockNode = useCallback((sourceNode: WebGalNode, atIndex: number) => {
+    const asset = (sourceNode.asset || sourceNode.content || '').trim();
+    if (!asset || asset === 'none') return;
+    const unlockType: WebGalCommandType | null = sourceNode.type === 'changeBg'
+      ? 'unlockCg'
+      : sourceNode.type === 'bgm'
+        ? 'unlockBgm'
+        : null;
+    if (!unlockType) return;
+
+    const current = nodesRef.current;
+    const existing = current[atIndex];
+    if (existing?.type === unlockType && (existing.asset || existing.content || '').trim() === asset) {
+      setSelectedNode(existing);
+      return;
+    }
+
+    const displayName = asset.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+    flushPendingHistory();
+    pushHistory(current);
+    const { nodes: insertedNodes, inserted } = insertSceneNode(current, unlockType, atIndex, Date.now().toString());
+    const updated = insertedNodes.map((node) => node.id === inserted.id
+      ? {
+          ...node,
+          content: asset,
+          asset,
+          displayName,
+        }
+      : node);
+    const selected = updated.find((node) => node.id === inserted.id) ?? inserted;
+    commitEditedNodes(updated);
+    setSelectedNode(selected);
   }, [commitEditedNodes, flushPendingHistory, pushHistory]);
 
   const updateSelectedNode = useCallback((updates: Partial<WebGalNode>) => {
@@ -2851,6 +2910,7 @@ export function StoryEditor() {
               onPasteNode={pasteNode}
               onReorderNodes={reorderNodes}
               onJumpToIndex={jumpToNode}
+              onCreateUnlockNode={createUnlockNode}
               clipboardNode={clipboardNode}
               characterColors={characterColors}
               characters={charactersForAi}

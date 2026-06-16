@@ -45,6 +45,8 @@
 | `unlockCg` | 解锁CG | 解锁 CG 入画廊,可设显示名 |
 | `unlockBgm` | 解锁BGM | 解锁音乐入鉴赏,可设显示名 |
 
+新建项目会默认在 `game/config.txt` 写入 `Enable_Appreciation:true;`,用于让 WebGAL 标题页显示鉴赏入口。实际可鉴赏内容仍需要剧情执行对应解锁指令,例如 `unlockCg:event_cg.webp -name=雨夜;`。CG 图片按 WebGAL 约定从 `game/background/` 读取。
+
 > 分类同时用于「插入节点」下拉的分组与卡片标签着色。具体字段编辑见 [脚本与节点编辑](./node-editing.md)。
 
 ## 相关源码

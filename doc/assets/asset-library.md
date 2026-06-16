@@ -14,11 +14,13 @@
 
 `AssetPicker` 用于在详情面板等处快速挑选:显示别名(回退文件名)、图像缩略图、音频时长,悬停试听(音量 0.45),并提供「清除引用」选项。
 
+CG 标签页复用 WebGAL 的背景图片目录。编辑 `unlockCg` 节点时可从 `game/background/` 的图片中选择文件,并通过 `-name` 设置鉴赏中显示的名称。
+
 ## 分类与 game/ 目录映射
 
 | 分类 | 目录 |
 |------|------|
-| background | `game/backgrounds/` |
+| background / CG | `game/background/` |
 | figure(立绘) | `game/figure/` |
 | bgm | `game/bgm/` |
 | sfx(音效) | `game/sfx/` |

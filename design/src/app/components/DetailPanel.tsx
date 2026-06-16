@@ -661,20 +661,39 @@ function renderTypeFields(
       );
 
     case 'unlockCg':
-    case 'unlockBgm':
+    case 'unlockBgm': {
+      const unlockCategory = node.type === 'unlockCg' ? 'background' : 'bgm';
+      const unlockAliases = node.type === 'unlockCg' ? backgroundAliases : bgmAliases;
       return (
         <>
           <div>
             <label className={`${labelClass} font-mono-family`}>
               {node.type === 'unlockCg' ? 'CG 文件' : 'BGM 文件'}
             </label>
-            <input
-              type="text"
-              value={node.asset || node.content}
-              onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
-              className={`${inputClass} font-mono-family`}
-              aria-label={node.type === 'unlockCg' ? 'CG 文件' : 'BGM 文件'}
-            />
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={node.asset || node.content}
+                onChange={(e) => onUpdate({ asset: e.target.value, content: e.target.value })}
+                className={`${inputClass} flex-1 font-mono-family`}
+                placeholder={node.type === 'unlockCg' ? '例: event_cg.webp' : '例: theme.mp3'}
+                aria-label={node.type === 'unlockCg' ? 'CG 文件' : 'BGM 文件'}
+              />
+              {projectPath && (
+                <AssetPickerButton
+                  projectPath={projectPath}
+                  category={unlockCategory}
+                  currentValue={node.asset || node.content}
+                  aliases={unlockAliases}
+                  onSelect={(name) => onUpdate({ asset: name, content: name })}
+                />
+              )}
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {node.type === 'unlockCg'
+                ? 'WebGAL 会从 game/background/ 读取 CG 图片'
+                : 'WebGAL 会从 game/bgm/ 读取鉴赏音乐'}
+            </p>
           </div>
           <div>
             <label className={`${labelClass} font-mono-family`}>显示名称</label>
@@ -689,6 +708,7 @@ function renderTypeFields(
           </div>
         </>
       );
+    }
 
     case 'comment':
       return (
