@@ -115,6 +115,27 @@ fn serialize_config(config: &HashMap<String, String>) -> String {
     lines.join("\n")
 }
 
+fn default_project_config(name: &str) -> HashMap<String, String> {
+    let mut config = HashMap::new();
+    config.insert("Game_name".to_string(), name.to_string());
+    config.insert("Game_key".to_string(), format!("{:x}", rand_u64()));
+    config.insert(
+        "Title_img".to_string(),
+        "WebGAL_New_Enter_Image.webp".to_string(),
+    );
+    config.insert("Title_bgm".to_string(), String::new());
+    config.insert("Enable_Appreciation".to_string(), "true".to_string());
+    config
+}
+
+fn ensure_appreciation_enabled(config: &mut HashMap<String, String>) -> bool {
+    if config.contains_key("Enable_Appreciation") {
+        return false;
+    }
+    config.insert("Enable_Appreciation".to_string(), "true".to_string());
+    true
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -133,14 +154,7 @@ pub fn init_project(app: AppHandle, base_dir: String, name: String) -> Result<Pr
     }
 
     // Write default config.txt
-    let mut config = HashMap::new();
-    config.insert("Game_name".to_string(), name.clone());
-    config.insert("Game_key".to_string(), format!("{:x}", rand_u64()));
-    config.insert(
-        "Title_img".to_string(),
-        "WebGAL_New_Enter_Image.webp".to_string(),
-    );
-    config.insert("Title_bgm".to_string(), String::new());
+    let config = default_project_config(&name);
 
     let config_path = game.join("config.txt");
     fs::write(&config_path, serialize_config(&config))
@@ -181,7 +195,12 @@ pub fn open_project(app: AppHandle, path: String) -> Result<ProjectInfo, String>
     let config = if config_path.exists() {
         let text = fs::read_to_string(&config_path)
             .map_err(|e| format!("Failed to read config.txt: {}", e))?;
-        parse_config(&text)
+        let mut config = parse_config(&text);
+        if ensure_appreciation_enabled(&mut config) {
+            fs::write(&config_path, serialize_config(&config))
+                .map_err(|e| format!("Failed to update config.txt: {}", e))?;
+        }
+        config
     } else {
         HashMap::new()
     };
@@ -1401,6 +1420,30 @@ fn add_dir_to_zip<W: Write + std::io::Seek>(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn default_config_enables_appreciation_gallery() {
+        let config = default_project_config("Gallery Test");
+        assert_eq!(config.get("Game_name").map(String::as_str), Some("Gallery Test"));
+        assert_eq!(
+            config.get("Enable_Appreciation").map(String::as_str),
+            Some("true")
+        );
+
+        let serialized = serialize_config(&config);
+        assert!(serialized.contains("Enable_Appreciation:true;"));
+    }
+
+    #[test]
+    fn existing_config_gets_appreciation_default_once() {
+        let mut config = parse_config("Game_name:Old Project;\nTitle_bgm:;\n");
+        assert!(ensure_appreciation_enabled(&mut config));
+        assert_eq!(
+            config.get("Enable_Appreciation").map(String::as_str),
+            Some("true")
+        );
+        assert!(!ensure_appreciation_enabled(&mut config));
+    }
 
     #[test]
     fn export_copies_game_directory() {
